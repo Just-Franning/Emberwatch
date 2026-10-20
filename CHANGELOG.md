@@ -1,15 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Changed
-- Image tag `latest` now follows releases only; the `main` branch is published as `edge`. New tag `3` for the major version line.
-- `compose.yml` uses the prebuilt image by default (`docker compose pull && docker compose up -d`); building from source with `EMBERWATCH_IMAGE=emberwatch:local`.
-- CI builds and starts the image (smoke test with the hardening of the compose files) for every change, including pull requests, before anything is published.
-
-### Added
-- Image tags and update instructions in the README.
-
 ## 3.0.0 – 2026-10-20
 
 First public release under the name Emberwatch (previously a private project called ThreatMap 2.x).
@@ -24,12 +14,14 @@ First public release under the name Emberwatch (previously a private project cal
 - Search for domains, ThreatFox IOCs, KEV vendors and recent NVD CVEs
 - Movable and resizable windows with adjustable opacity, settings panel, start animation
 - Layer switches in the legend, measured header height
-- CI with tests and multi-arch image on GitHub Container Registry
+- CI with tests, a smoke test of the hardened container and a multi-arch image on GitHub Container Registry
+- Image tags: `latest` and `3`/`3.0`/`3.0.0` for releases, `edge` for the `main` branch; update instructions in the README
 
 ### Changed
 - Data directory file renamed to `emberwatch.sqlite`; an existing `threatmap.sqlite` in the same volume is taken over automatically
 - Watchlist hits became alerts; old hits are migrated
 - `FORWARDED_ALLOW_IPS` is configurable (default `*`)
+- `compose.yml` uses the prebuilt image by default; build from source with `EMBERWATCH_IMAGE=emberwatch:local`
 
 ### Upgrading from ThreatMap 2.x
 Mount the existing data volume at `/data`. If the old volume is called `threatmap-data`, declare it in the stack as an external volume
