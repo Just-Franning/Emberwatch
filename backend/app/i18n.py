@@ -700,3 +700,16 @@ def render_status(row: dict[str, Any], lang: str) -> str:
     msg = t(lang, f"status.{code}", **params)
     extra = row.get("message") or ""
     return f"{msg}; {extra}" if extra else msg
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Texts of other modules (tool box, own IPs) are kept next to their code and merged here.
+
+def _merge(extra: dict[str, dict[str, str]]) -> None:
+    for lang in LANGS:
+        T[lang].update(extra.get(lang, {}))
+
+
+from .toolbox.texts import TT as _TB  # noqa: E402
+
+_merge(_TB)

@@ -41,7 +41,11 @@ from .products import Products
 from .reputation import Reputation
 from .sources import abusech, epss, infra, kev, radar, ransomware
 from .surface import Surface
-from .tools import ToolKit, parse_ports
+from .tools import ToolKit
+from .toolbox import registry as tbreg
+from .toolbox import runner as tbrun
+from .toolbox.common import Ctx, cache_prune
+from .toolbox.detect import detect as tb_detect
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -305,6 +309,8 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         alerts.prune(db, S.alert_retention_days)
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
+        tbrun.prune(db)
+        cache_prune(db)
 
     return {
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
@@ -1171,88 +1177,91 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     return {"id": tid, "question": body.question.strip(), **ans}
 
 
-# --- network tools -------------------------------------------------------------------------------------------------------
-def _tools_on() -> None:
-    if not S.tools_enabled:
-        raise AppError("err.tools_disabled", 403)
+# --- tool box ------------------------------------------------------------------------------------------------------------
+def tb_ctx(request: Request) -> Ctx:
+    return Ctx(S, db, geo, reputation, toolkit, matcher, domains, surface, request.app.state.client, _lang(request))
 
 
-def _sse(request: Request, gen: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
-    lang = _lang(request)
-
-    def enc(ev: dict[str, Any]) -> bytes:
-        if "key" in ev and ev.get("type") == "info":
-            ev = {**ev, "text": t(lang, ev["key"], **(ev.get("params") or {}))}
-        return f"event: {ev.get('type', 'message')}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n".encode()
-
+def _ndjson(request: Request, gen: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
     async def body() -> AsyncIterator[bytes]:
         try:
             async for ev in gen:
+                yield tbrun.ndjson(ev)
                 if await request.is_disconnected():
                     break
-                yield enc(ev)
-        except AppError as exc:
-            yield enc({"type": "error", "text": exc.render(lang)})
-        except Exception as exc:  # unexpected: report briefly, do not crash
-            log.exception("tool stream failed")
-            yield enc({"type": "error", "text": t(lang, "err.internal", detail=exc.__class__.__name__)})
         finally:
             await gen.aclose()
-        yield b"event: end\ndata: {}\n\n"
 
-    return StreamingResponse(body(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-async def _tool(coro: Awaitable[dict[str, Any]]) -> dict[str, Any]:
-    try:
-        return await asyncio.wait_for(coro, timeout=60)
-    except asyncio.TimeoutError as exc:
-        raise AppError("err.timeout", 504) from exc
+    return StreamingResponse(body(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.get("/api/tools/ping")
-async def api_ping(request: Request, target: str = Query(..., min_length=1, max_length=253), count: int = Query(5, ge=1, le=20)):
-    _tools_on()
-    return _sse(request, toolkit.ping(target, count))
+@app.get("/api/tb/registry")
+def api_tb_registry(request: Request) -> dict[str, Any]:
+    lang = _lang(request)
+    return {"tools": [tbreg.describe(t, S, lang) for t in tbreg.TOOLS],
+            "recipes": [tbreg.recipe_info(r, lang) for r in tbreg.RECIPES],
+            "groups": list(tbreg.GROUPS), "cyberchef_url": S.cyberchef_url, "enabled": S.tools_enabled}
 
 
-@app.get("/api/tools/traceroute")
-async def api_traceroute(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                         max_hops: int = Query(30, ge=1, le=40)):
-    _tools_on()
-    return _sse(request, toolkit.traceroute(request.app.state.client, target, max_hops))
+@app.get("/api/tb/detect")
+def api_tb_detect(q: str = Query("", max_length=4096)) -> dict[str, Any]:
+    d = tb_detect(q)
+    if d["type"] == "empty":
+        return {**d, "tools": [], "recipes": []}
+    return {**d, "tools": tbreg.applicable(d), "recipes": tbreg.recipes_for(d)}
 
 
-@app.get("/api/tools/dns")
-async def api_dns(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                  resolver: str = Query("cloudflare", pattern="^(system|cloudflare|google|quad9)$")) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.dns_lookup(target, resolver, _lang(request)))
+class RunIn(BaseModel):
+    tool: str = Field(..., min_length=1, max_length=40)
+    target: str = Field("", max_length=4096)
+    params: dict[str, Any] = Field(default_factory=dict)
+    consent: bool = False
 
 
-@app.get("/api/tools/rdap")
-async def api_rdap(request: Request, target: str = Query(..., min_length=1, max_length=253)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.rdap(request.app.state.client, target))
+@app.post("/api/tb/run")
+async def api_tb_run(request: Request, body: RunIn) -> StreamingResponse:
+    spec = tbreg.BY_ID.get(body.tool)
+    if spec is None:
+        raise AppError("err.not_found", 404)
+    ctx = tb_ctx(request)
+    tbrun.check_available(spec, ctx)
+    target, kind, params = tbrun.prepare(spec, body.target, body.params, body.consent)
+    return _ndjson(request, tbrun.run_tool(ctx, spec, target, kind, params))
 
 
-@app.get("/api/tools/ipinfo")
-async def api_ipinfo(request: Request, target: str = Query(..., min_length=1, max_length=253)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.ipinfo(request.app.state.client, target, _lang(request)))
+class RecipeIn(BaseModel):
+    recipe: str = Field(..., min_length=1, max_length=20)
+    target: str = Field(..., min_length=1, max_length=15 * 1024 * 1024)
 
 
-@app.get("/api/tools/ports")
-async def api_ports(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                    ports: str = Query(..., max_length=80)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.portcheck(target, parse_ports(ports), _lang(request)))
+@app.post("/api/tb/recipe")
+async def api_tb_recipe(request: Request, body: RecipeIn) -> StreamingResponse:
+    if not S.tools_enabled:
+        raise AppError("err.tools_disabled", 403)
+    target, kind = tbrun.prepare_recipe(body.recipe, body.target)
+    return _ndjson(request, tbrun.run_recipe(tb_ctx(request), body.recipe, target, kind))
 
 
-@app.get("/api/tools/http")
-async def api_http(request: Request, target: str = Query(..., min_length=1, max_length=500)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.http_tls(target, _lang(request)))
+@app.get("/api/tb/history")
+def api_tb_history(type: str | None = Query(None, max_length=20), value: str | None = Query(None, max_length=300),
+                   limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    return {"runs": tbrun.history(db, type, value, limit)}
+
+
+@app.get("/api/tb/history/{rid}")
+def api_tb_history_get(rid: int) -> dict[str, Any]:
+    r = tbrun.get_run(db, rid)
+    if r is None:
+        raise AppError("err.not_found", 404)
+    return r
+
+
+@app.delete("/api/tb/history/{rid}")
+def api_tb_history_delete(rid: int) -> dict[str, Any]:
+    if not db.execute("DELETE FROM tool_runs WHERE id=?", (rid,)):
+        raise AppError("err.not_found", 404)
+    return {"deleted": rid}
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")
