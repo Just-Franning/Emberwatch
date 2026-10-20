@@ -26,6 +26,7 @@ export class Assets {
     this.onChange = onChange;
     this.panel = document.getElementById("panel-assets");
     this.body = document.getElementById("assets-body");
+    this.scroller = this.body.closest(".panel-body") || this.body; // the element that actually scrolls
     this.tab = "assets";
     this.detail = null; // asset id
     this.product = null; // product id
@@ -69,7 +70,10 @@ export class Assets {
 
   async render() {
     if (this.panel.hidden) return;
-    this.body.scrollTop = 0;
+    // keep the scroll position when the same view is re-rendered (e.g. scan progress), reset it on navigation
+    const view = `${this.tab}:${this.detail ?? ""}:${this.product ?? ""}`;
+    if (view !== this.view) this.scroller.scrollTop = 0;
+    this.view = view;
     try {
       if (this.tab === "assets") await (this.detail ? this.renderAsset(this.detail) : this.renderAssets());
       else if (this.tab === "products") await (this.product ? this.renderProduct(this.product) : this.renderProducts());
@@ -149,6 +153,15 @@ export class Assets {
       throw e;
     }
     if (this.detail !== id || this.tab !== "assets") return;
+    clearTimeout(this.poll);
+    const sd = d.scan_detail;
+    const running = Boolean(sd?.progress) || sd?.run?.status === "running";
+    if (this.scanWait?.id === id) {
+      // a manually started scan resolves its targets before its run appears: wait for it (max. 30 s)
+      const appeared = (sd?.run?.id ?? 0) > this.scanWait.after;
+      if (Date.now() > this.scanWait.until || (appeared && !running)) this.scanWait = null;
+    }
+    const scrollTop = this.scroller.scrollTop;
     const feedback = msg();
     const lblInput = el("input", { type: "text", maxlength: 80, value: d.label || "", "aria-label": t("as.d.label") });
     const head = el("div", { class: "detail-head" },
@@ -167,12 +180,14 @@ export class Assets {
       d.alerts.length ? el("ol", { class: "patterns" }, d.alerts.slice(0, 50).map((a) => alertItem(a))) : el("p", { class: "empty" }, t("al.none")));
     if (d.surface_rows !== undefined) parts.push(...this.exposure(d));
     if (d.kind === "ip" || d.kind === "cidr") parts.push(...this.reputationBlock(d));
-    if (d.scan_detail !== undefined) parts.push(...this.scanBlock(d, feedback));
+    if (d.scan_detail !== undefined) parts.push(...this.scanBlock(d));
     if (d.domain_detail) parts.push(...this.domainBlock(d.domain_detail));
     if (d.bgp_detail) parts.push(...this.bgpBlock(d.bgp_detail));
     this.body.replaceChildren(...parts);
-    const running = d.scan_detail?.progress || d.scan_detail?.run?.status === "running";
-    if (running) this.poll = setTimeout(() => { if (this.detail === id && this.isOpen) this.renderAsset(id); }, 3000);
+    this.scroller.scrollTop = scrollTop;
+    if (running || this.scanWait?.id === id) {
+      this.poll = setTimeout(() => { if (this.detail === id && this.isOpen) this.renderAsset(id).catch(() => {}); }, running ? 2000 : 1000);
+    }
   }
 
   exposure(d) {
@@ -207,36 +222,55 @@ export class Assets {
       d.kind === "ip" ? el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => this.tools.open("ipinfo", d.value, true) }, t("tool.ipinfo"))) : null];
   }
 
-  scanBlock(d, feedback) {
+  scanBlock(d) {
     const id = d.id;
     const st = this.status?.scan || {};
     const out = [el("h4", {}, t("as.d.scan"))];
     if (!st.enabled) return [...out, el("p", { class: "note" }, t("as.d.scan_global_off"))];
+    const scanMsg = msg(); // feedback directly at the buttons, not at the top of the (scrolled) detail view
     if (!d.scan) {
       const consent = el("input", { type: "checkbox" });
-      const btn = el("button", { type: "button", class: "primary", disabled: true, onclick: async () => {
-        try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: true, scan_ack: consent.checked } }); this.render(); } catch (e) { setMsg(feedback, e.message, true); }
+      const btn = el("button", { type: "button", class: "primary", onclick: async () => {
+        if (!consent.checked) { setMsg(scanMsg, t("as.d.consent_needed"), true); return; }
+        btn.disabled = true;
+        try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: true, scan_ack: true } }); await this.render(); } catch (e) { btn.disabled = false; setMsg(scanMsg, e.message, true); }
       } }, t("as.d.scan_enable"));
-      consent.addEventListener("change", () => { btn.disabled = !consent.checked; });
-      return [...out, el("p", { class: "note" }, t("as.d.scan_off")), el("label", { class: "consent" }, consent, t("as.consent")), el("div", { class: "btnrow" }, btn)];
+      return [...out, el("p", { class: "note" }, t("as.d.scan_off")), el("label", { class: "consent" }, consent, t("as.consent")),
+        el("div", { class: "btnrow" }, btn), scanMsg];
     }
     const sd = d.scan_detail || {};
     const run = sd.run;
     const progress = sd.progress;
-    const btnScan = el("button", { type: "button", class: "primary", disabled: Boolean(progress), onclick: async () => {
-      try { await api(`api/assets/${id}/scan`, { method: "POST" }); setMsg(feedback, t("as.d.scan_started")); setTimeout(() => this.render(), 800); } catch (e) { setMsg(feedback, e.message, true); }
+    const waiting = this.scanWait?.id === id;
+    const btnScan = el("button", { type: "button", class: "primary", disabled: Boolean(progress) || waiting, onclick: async () => {
+      btnScan.disabled = true;
+      setMsg(scanMsg, t("as.d.scan_starting"));
+      try {
+        const r = await api(`api/assets/${id}/scan`, { method: "POST" });
+        this.scanWait = { id, after: run?.id ?? 0, until: Date.now() + 30000, targets: r.targets, ports: r.ports };
+        await this.renderAsset(id);
+      } catch (e) {
+        btnScan.disabled = false;
+        setMsg(scanMsg, e.message, true);
+      }
     } }, t("as.d.scan_now"));
     const btnOff = el("button", { type: "button", onclick: async () => {
-      try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: false } }); this.render(); } catch (e) { setMsg(feedback, e.message, true); }
+      try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: false } }); await this.render(); } catch (e) { setMsg(scanMsg, e.message, true); }
     } }, t("as.d.scan_disable"));
-    out.push(el("p", { class: "note" }, t("as.d.scan_note", { ports: num(st.ports), h: num(st.interval_h) })), el("div", { class: "btnrow" }, btnScan, btnOff));
+    out.push(el("p", { class: "note" }, t("as.d.scan_note", { ports: num(st.ports), h: num(st.interval_h) })),
+      el("p", { class: "note" }, t("as.d.scan_inside")), el("div", { class: "btnrow" }, btnScan, btnOff), scanMsg);
     if (progress) {
       out.push(el("p", { class: "state" }, t("as.d.scan_running", { done: num(progress.done), total: num(progress.total) })),
         el("progress", { max: progress.total || 1, value: progress.done }));
+    } else if (waiting && (run?.id ?? 0) <= this.scanWait.after) {
+      setMsg(scanMsg, t("as.d.scan_wait", { targets: num(this.scanWait.targets), ports: num(this.scanWait.ports) }));
     }
     const res = sd.result_run;
-    if (res) out.push(el("p", { class: "note" }, t("as.d.scan_last", { t: dateTime(res.finished_at || res.started_at), n: num(sd.ports.length), status: res.status })));
-    else if (!progress && !run) out.push(el("p", { class: "note" }, t("as.d.scan_never")));
+    if (res) {
+      out.push(el("p", { class: "note" }, t("as.d.scan_last", { t: dateTime(res.finished_at || res.started_at), n: num(sd.ports.length),
+        status: t(`as.d.st.${res.status}`) })));
+      if (!sd.ports.length) out.push(el("p", { class: "note" }, t("as.d.scan_none_open", { targets: num(res.targets) })));
+    } else if (!progress && !run) out.push(el("p", { class: "note" }, t("as.d.scan_never")));
     if (run && run.status === "error") out.push(el("p", { class: "state err" }, t("common.error", { msg: run.error || "?" })));
     if (sd.ports?.length) {
       out.push(table([t("as.d.ip"), t("tool.port"), t("as.d.service"), t("as.d.detail")], sd.ports.map((p) => {

@@ -127,7 +127,19 @@ def _spawn(coro: Awaitable[Any]) -> asyncio.Task:
     task = asyncio.ensure_future(coro)
     _bg.add(task)
     task.add_done_callback(_bg.discard)
+    task.add_done_callback(_report)
     return task
+
+
+def _report(task: asyncio.Task) -> None:
+    """Background tasks must not fail silently."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if isinstance(exc, AppError):
+        log.info("background task: %s", exc.key)
+    elif exc is not None:
+        log.error("background task failed: %s", exc.__class__.__name__, exc_info=exc)
 
 
 def kick(name: str, fn: Callable[[], Awaitable[Any]]) -> None:
@@ -950,6 +962,8 @@ async def api_asset_scan(wid: int) -> dict[str, Any]:
     if surface.scan_lock.locked():
         raise AppError("err.busy", 409)
     ips = await surface.targets(w, S.scan_max_hosts, active=True)  # validates size before starting
+    if not ips:
+        raise AppError("err.scan_no_targets")
     _spawn(surface.scan_asset(wid, "manual"))
     return {"started": True, "targets": len(ips), "ports": len(S.scan_ports)}
 

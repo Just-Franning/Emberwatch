@@ -454,6 +454,18 @@ def test_surface_passive_and_active_scan(tmp_path, monkeypatch):
             big = m.db.query("SELECT id FROM watchlist WHERE value='10.0.0.0/16'")[0]["id"]
             r = tc.post(f"/api/assets/{big}/scan")
             assert r.status_code == 400 and r.json()["key"] == "err.scan_too_big"
+            # no scannable address (private without TOOLS_ALLOW_PRIVATE): clear error instead of an empty run
+            m.S.__dict__["tools_allow_private"] = False
+            priv = tc.post("/api/watchlist", json={"value": "192.168.77.10", "scan": True, "scan_ack": True}).json()["id"]
+            r = tc.post(f"/api/assets/{priv}/scan", headers={"Accept-Language": "de"})
+            assert r.status_code == 400 and r.json()["key"] == "err.scan_no_targets" and "TOOLS_ALLOW_PRIVATE" in r.json()["detail"] and r.json()["detail"].startswith("Keine scanbaren")
+            try:
+                asyncio.run(m.surface.scan_asset(priv))
+                raise AssertionError("scan_asset must refuse an asset without targets")
+            except m.AppError as exc:
+                assert exc.key == "err.scan_no_targets"
+            assert m.db.query("SELECT COUNT(*) AS n FROM scan_runs WHERE asset_id=?", (priv,))[0]["n"] == 0
+            m.S.__dict__["tools_allow_private"] = True
             assert tc.delete(f"/api/watchlist/{lid}").status_code == 200
             assert m.db.query("SELECT COUNT(*) AS n FROM scan_runs WHERE asset_id=?", (lid,))[0]["n"] == 0
     finally:

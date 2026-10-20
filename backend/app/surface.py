@@ -310,6 +310,8 @@ class Surface:
             raise AppError("err.busy", 409)
         async with self.scan_lock:
             ips = await self.targets(w, self.s.scan_max_hosts, active=True)
+            if not ips:
+                raise AppError("err.scan_no_targets")
             run_id = self.db.insert(
                 "INSERT INTO scan_runs(asset_id, started_at, status, trigger, targets) VALUES(?,?,?,?,?)",
                 (asset_id, utcnow(), "running", trigger, len(ips)))

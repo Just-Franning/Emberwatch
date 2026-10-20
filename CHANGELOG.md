@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.1 – 2026-10-20
+
+### Fixed
+- Active scan: feedback and errors now appear directly at the scan buttons instead of at the top of the asset view, which was often scrolled out of sight
+- Active scan: the view keeps polling until a manually started scan shows up and keeps its scroll position while updating
+- Active scan: an asset without scannable addresses (domain does not resolve, only private or reserved addresses) is refused with a clear message instead of an empty run
+- Active scan: "Enable" without the authorisation checkbox explains what is missing instead of being a disabled button
+- Scan status is translated; a run without open ports says so explicitly
+- Errors in background tasks are logged instead of being lost
+
+### Added
+- Note that a scan from the same network or server shows the inside view without upstream firewalls
+
 ## 3.0.0 – 2026-10-20
 
 First public release under the name Emberwatch (previously a private project called ThreatMap 2.x).
