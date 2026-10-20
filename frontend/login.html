@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>Emberwatch</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/login.js"></script>
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>Emberwatch</h1></div>
+    <p class="login-sub" data-i18n="app.tagline"></p>
+    <form id="login-form" autocomplete="on">
+      <label for="password" data-i18n="login.password"></label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
+      <button type="submit" class="primary" data-i18n="login.submit"></button>
+      <p class="state err" id="login-error" role="alert" hidden></p>
+    </form>
+    <p class="note" data-i18n="login.hint"></p>
+    <div class="login-lang">
+      <button type="button" data-lang="de">Deutsch</button>
+      <button type="button" data-lang="en">English</button>
+    </div>
+  </main>
+</body>
+</html>

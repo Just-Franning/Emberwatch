@@ -1,0 +1,96 @@
+# Emberwatch – build and run locally:  cp .env.example .env  (edit)  &&  docker compose up -d --build
+# The web UI listens on 127.0.0.1:8000. For access from other machines put a reverse proxy with TLS in front
+# (see README) or change the port binding.
+services:
+  emberwatch:
+    build: .
+    image: emberwatch:latest
+    container_name: emberwatch
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+      # syslog receiver (SYSLOG_ENABLED=1):
+      # - "5514:5514/udp"
+      # - "5514:5514/tcp"
+    environment:
+      # General
+      LANGUAGE: ${LANGUAGE:-en}
+      TZ: ${TZ:-Europe/Berlin}
+      CONTACT: ${CONTACT:-}
+      # Login
+      AUTH_MODE: ${AUTH_MODE:-password}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+      # Data sources (keys)
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      ABUSECH_AUTH_KEY: ${ABUSECH_AUTH_KEY:-}
+      RANSOMWARE_LIVE_API_KEY: ${RANSOMWARE_LIVE_API_KEY:-}
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      CERTSPOTTER_API_KEY: ${CERTSPOTTER_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      AI_MIN_INTERVAL_S: ${AI_MIN_INTERVAL_S:-15}
+      # Notifications (Matrix)
+      MATRIX_HOMESERVER: ${MATRIX_HOMESERVER:-}
+      MATRIX_ACCESS_TOKEN: ${MATRIX_ACCESS_TOKEN:-}
+      MATRIX_ROOM_ID: ${MATRIX_ROOM_ID:-}
+      MATRIX_MIN_SEVERITY: ${MATRIX_MIN_SEVERITY:-high}
+      DAILY_REPORT_TIME: ${DAILY_REPORT_TIME:-07:00}
+      HOME_REGION: ${HOME_REGION:-}
+      HOME_REGION_NAME: ${HOME_REGION_NAME:-}
+      # Network tools and active scans
+      TOOLS_ENABLED: ${TOOLS_ENABLED:-1}
+      TOOLS_ALLOW_PRIVATE: ${TOOLS_ALLOW_PRIVATE:-0}
+      SCAN_ENABLED: ${SCAN_ENABLED:-1}
+      SCAN_INTERVAL_H: ${SCAN_INTERVAL_H:-168}
+      SCAN_PORTS: ${SCAN_PORTS:-}
+      SCAN_MAX_HOSTS: ${SCAN_MAX_HOSTS:-256}
+      SCAN_CONCURRENCY: ${SCAN_CONCURRENCY:-64}
+      SCAN_TIMEOUT_S: ${SCAN_TIMEOUT_S:-1.5}
+      # Monitoring of your assets
+      SURFACE_INTERVAL_H: ${SURFACE_INTERVAL_H:-24}
+      SURFACE_MAX_IPS: ${SURFACE_MAX_IPS:-256}
+      PRODUCT_INTERVAL_H: ${PRODUCT_INTERVAL_H:-12}
+      PRODUCT_MIN_CVSS: ${PRODUCT_MIN_CVSS:-9.0}
+      CT_INTERVAL_H: ${CT_INTERVAL_H:-12}
+      TYPO_INTERVAL_H: ${TYPO_INTERVAL_H:-24}
+      TYPO_MAX: ${TYPO_MAX:-400}
+      BGP_LIVE: ${BGP_LIVE:-1}
+      ABUSEIPDB_MIN_SCORE: ${ABUSEIPDB_MIN_SCORE:-25}
+      # Log analysis
+      LOG_MAX_MB: ${LOG_MAX_MB:-25}
+      SYSLOG_ENABLED: ${SYSLOG_ENABLED:-0}
+      SYSLOG_PORT: ${SYSLOG_PORT:-5514}
+      SYSLOG_ALLOW: ${SYSLOG_ALLOW:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7}
+      SYSLOG_MAX_RATE: ${SYSLOG_MAX_RATE:-2000}
+      # Intervals and retention
+      RADAR_INTERVAL_MIN: ${RADAR_INTERVAL_MIN:-30}
+      INFRA_INTERVAL_MIN: ${INFRA_INTERVAL_MIN:-30}
+      C2_INTERVAL_MIN: ${C2_INTERVAL_MIN:-30}
+      RANSOMWARE_INTERVAL_MIN: ${RANSOMWARE_INTERVAL_MIN:-60}
+      KEV_INTERVAL_MIN: ${KEV_INTERVAL_MIN:-360}
+      EPSS_INTERVAL_MIN: ${EPSS_INTERVAL_MIN:-720}
+      BACKFILL_DAYS: ${BACKFILL_DAYS:-30}
+      C2_RETENTION_DAYS: ${C2_RETENTION_DAYS:-30}
+      IOC_RETENTION_DAYS: ${IOC_RETENTION_DAYS:-30}
+      ALERT_RETENTION_DAYS: ${ALERT_RETENTION_DAYS:-180}
+    volumes:
+      - emberwatch-data:/data
+    # unprivileged ICMP echo sockets for ping (namespaced sysctl, applies to this container only)
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1g
+
+volumes:
+  emberwatch-data:

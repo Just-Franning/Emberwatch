@@ -1,0 +1,16 @@
+# data and secrets
+/data/
+.env
+*.sqlite
+*.sqlite-*
+*.mmdb
+initial-password.txt
+session.key
+auth.json
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+# build output
+*.tar

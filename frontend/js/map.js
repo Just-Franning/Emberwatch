@@ -1,0 +1,619 @@
+// World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth),
+// country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
+import { t } from "./i18n.js";
+import { COLORS, RAMP, countryName, dateTime, el, geo, num, pct, reduceMotion } from "./util.js";
+
+const EMPTY = { type: "FeatureCollection", features: [] };
+const FONT = ["Noto Sans Regular"];
+const PREF_KEY = "emberwatch.basemap";
+
+export const METRICS = Object.fromEntries(
+  [["l7_target", pct], ["l3_target", pct], ["l7_origin", pct], ["l3_origin", pct], ["ransomware_7d", num], ["c2", num], ["outages_7d", num]]
+    .map(([k, fmt]) => [k, { label: t(`metricl.${k}`), fmt }]),
+);
+
+function pref() {
+  try { return localStorage.getItem(PREF_KEY) || "online"; } catch { return "online"; }
+}
+export function setBasemapPref(v) {
+  try { localStorage.setItem(PREF_KEY, v); } catch { /* ignore */ }
+}
+export const basemapPref = pref;
+
+// --- geometry ----------------------------------------------------------------
+const rad = (d) => (d * Math.PI) / 180;
+const deg = (r) => (r * 180) / Math.PI;
+export function greatCircle([lon1, lat1], [lon2, lat2], n = 64) {
+  const p1 = [Math.cos(rad(lat1)) * Math.cos(rad(lon1)), Math.cos(rad(lat1)) * Math.sin(rad(lon1)), Math.sin(rad(lat1))];
+  const p2 = [Math.cos(rad(lat2)) * Math.cos(rad(lon2)), Math.cos(rad(lat2)) * Math.sin(rad(lon2)), Math.sin(rad(lat2))];
+  const dot = Math.min(1, Math.max(-1, p1[0] * p2[0] + p1[1] * p2[1] + p1[2] * p2[2]));
+  const omega = Math.acos(dot);
+  if (omega < 1e-6) return [[lon1, lat1], [lon2, lat2]];
+  const pts = [];
+  let prev = null;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const a = Math.sin((1 - t) * omega) / Math.sin(omega);
+    const b = Math.sin(t * omega) / Math.sin(omega);
+    const x = a * p1[0] + b * p2[0], y = a * p1[1] + b * p2[1], z = a * p1[2] + b * p2[2];
+    let lon = deg(Math.atan2(y, x));
+    const lat = deg(Math.atan2(z, Math.sqrt(x * x + y * y)));
+    if (prev !== null) {
+      while (lon - prev > 180) lon -= 360;
+      while (lon - prev < -180) lon += 360;
+    }
+    prev = lon;
+    pts.push([lon, lat]);
+  }
+  return pts;
+}
+
+// Flat map: curved arc without antimeridian jump
+export function bezierArc([lon1, lat1], [lon2, lat2], n = 48) {
+  const dx = lon2 - lon1, dy = lat2 - lat1;
+  const dist = Math.hypot(dx, dy);
+  let nx = -dy / (dist || 1), ny = dx / (dist || 1);
+  if (ny < 0) { nx = -nx; ny = -ny; }
+  const k = Math.min(0.28 * dist, 28);
+  const cx = (lon1 + lon2) / 2 + nx * k, cy = Math.min((lat1 + lat2) / 2 + ny * k, 80);
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t;
+    pts.push([u * u * lon1 + 2 * u * t * cx + t * t * lon2, u * u * lat1 + 2 * u * t * cy + t * t * lat2]);
+  }
+  return pts;
+}
+
+function pointAt(line, t) {
+  const f = t * (line.length - 1);
+  const i = Math.min(Math.floor(f), line.length - 2);
+  const r = f - i;
+  return [line[i][0] + (line[i + 1][0] - line[i][0]) * r, line[i][1] + (line[i + 1][1] - line[i][1]) * r];
+}
+
+// --- symbols (canvas, no sprite dependency) -----------------------------------
+function icon(draw, size = 22) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size * 2;
+  const g = c.getContext("2d");
+  g.scale(2, 2);
+  draw(g, size);
+  return { width: c.width, height: c.height, data: g.getImageData(0, 0, c.width, c.height).data };
+}
+const ICONS = {
+  "ico-outage": (g, s) => { // triangle
+    g.beginPath(); g.moveTo(s / 2, 3); g.lineTo(s - 3, s - 4); g.lineTo(3, s - 4); g.closePath();
+    g.fillStyle = COLORS.infra; g.fill(); g.lineWidth = 2; g.strokeStyle = "#060607"; g.stroke();
+  },
+  "ico-bgp": (g, s) => { // diamond
+    g.beginPath(); g.moveTo(s / 2, 2); g.lineTo(s - 3, s / 2); g.lineTo(s / 2, s - 2); g.lineTo(3, s / 2); g.closePath();
+    g.fillStyle = COLORS.infra; g.fill(); g.lineWidth = 2; g.strokeStyle = "#060607"; g.stroke();
+  },
+  "ico-anomaly": (g, s) => { // hollow square
+    g.lineWidth = 2.5; g.strokeStyle = COLORS.infra; g.strokeRect(5, 5, s - 10, s - 10);
+  },
+};
+
+// --- map ----------------------------------------------------------------------
+export class Emberwatch {
+  constructor(container, { onCountry, onIp }) {
+    this.onCountry = onCountry;
+    this.onIp = onIp;
+    this.metric = "l7_target";
+    this.countries = {};
+    this.arcRows = [];
+    this.arcs = [];
+    this.arcsVisible = true;
+    this.c2All = EMPTY;
+    this.c2Filter = {};
+    this.projection = "mercator";
+    this.offline = pref() === "offline";
+    this.basemapFailed = false;
+    this.tip = document.getElementById("map-tip");
+    this.ready = this._init(container);
+  }
+
+  async _init(container) {
+    let base = null;
+    if (!this.offline) {
+      try {
+        const r = await fetch("data/basemap-style.json");
+        if (r.ok) base = await r.json();
+      } catch { /* offline */ }
+    }
+    if (!base) this.offline = true;
+    window.maplibregl.setWorkerUrl("vendor/maplibre-gl-csp-worker.js");
+    this.map = new window.maplibregl.Map({
+      container,
+      style: this._style(base),
+      bounds: [[-168, -52], [178, 76]],
+      fitBoundsOptions: { padding: 20 },
+      minZoom: 0.6,
+      maxZoom: 12,
+      attributionControl: { compact: true },
+      renderWorldCopies: false,
+      dragRotate: false,
+      pitchWithRotate: false,
+    });
+    this.map.addControl(new window.maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    if (!this.offline) this._watchBasemap(); // register before "load": TileJSON/sprite errors arrive early
+    await new Promise((res) => this.map.on("load", res));
+    for (const [id, draw] of Object.entries(ICONS)) this.map.addImage(id, icon(draw), { pixelRatio: 2 });
+    this._bind();
+  }
+
+  _style(base) {
+    const withText = !this.offline;
+    const sources = {
+      countries: { type: "geojson", data: "data/countries.geojson", promoteId: "iso" },
+      cables: { type: "geojson", data: "data/cables.geojson" },
+      landing: { type: "geojson", data: "data/landing-points.geojson" },
+      arcs: { type: "geojson", data: EMPTY },
+      heads: { type: "geojson", data: EMPTY },
+      ransom: { type: "geojson", data: EMPTY },
+      infra: { type: "geojson", data: EMPTY },
+      c2: { type: "geojson", data: EMPTY, cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },
+      tool: { type: "geojson", data: EMPTY },
+    };
+    const vis = (on) => ({ visibility: on ? "visible" : "none" });
+    const under = [ // below the basemap's boundaries and labels
+      { id: "ne-land", type: "fill", source: "countries", layout: vis(this.offline), paint: { "fill-color": COLORS.land } },
+      {
+        id: "choro", type: "fill", source: "countries",
+        paint: {
+          "fill-color": ["interpolate", ["linear"], ["to-number", ["coalesce", ["feature-state", "v"], 0]],
+            0, RAMP[0], 0.25, RAMP[1], 0.5, RAMP[2], 0.75, RAMP[3], 1, RAMP[4]],
+          "fill-opacity": ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7],
+        },
+      },
+      { id: "ne-borders", type: "line", source: "countries", layout: vis(this.offline), paint: { "line-color": "rgba(170, 38, 38, 0.6)", "line-width": 0.6 } },
+      {
+        id: "cables", type: "line", source: "cables", layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": COLORS.cable, "line-opacity": 0.55, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 0.6, 6, 1.4] },
+      },
+    ];
+    const over = [
+      { id: "hover", type: "line", source: "countries", paint: { "line-color": "#d4d4d8", "line-width": ["case", ["boolean", ["feature-state", "hover"], false], 1.1, 0] } },
+      { id: "selected", type: "line", source: "countries", filter: ["==", ["get", "iso"], ""], paint: { "line-color": "#fee2e2", "line-width": 1.8 } },
+      {
+        id: "cables-hl", type: "line", source: "cables", filter: ["in", "", ["get", "countries"]], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": "#e5e7eb", "line-opacity": 0.9, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.2, 6, 2.4] },
+      },
+      {
+        id: "landing", type: "circle", source: "landing", minzoom: 1.5, layout: vis(false),
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 1.4, 6, 3.5], "circle-color": "#9ca3af", "circle-stroke-color": COLORS.water, "circle-stroke-width": 0.6 },
+      },
+      {
+        id: "arcs", type: "line", source: "arcs", layout: { "line-cap": "round" },
+        paint: {
+          "line-color": COLORS.attack,
+          "line-width": ["interpolate", ["linear"], ["get", "w"], 0, 1, 1, 3.2],
+          "line-opacity": ["interpolate", ["linear"], ["get", "w"], 0, 0.35, 1, 0.9],
+        },
+      },
+      {
+        id: "ransom", type: "circle", source: "ransom",
+        paint: {
+          "circle-radius": ["+", 5, ["*", 3.2, ["sqrt", ["get", "n"]]]],
+          "circle-color": "rgba(145, 121, 242, 0.12)", "circle-stroke-color": COLORS.ransom, "circle-stroke-width": 2,
+        },
+      },
+      {
+        id: "infra", type: "symbol", source: "infra",
+        layout: {
+          "icon-image": ["match", ["get", "group"], "outage", "ico-outage", "bgp", "ico-bgp", "ico-anomaly"],
+          "icon-size": ["interpolate", ["linear"], ["get", "count"], 1, 0.8, 10, 1.25],
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+          "icon-offset": ["match", ["get", "group"], "outage", ["literal", [0, -16]], "bgp", ["literal", [16, -6]], ["literal", [-16, -6]]],
+          ...(withText ? {
+            "text-field": ["case", [">", ["get", "count"], 1], ["to-string", ["get", "count"]], ""],
+            "text-font": FONT, "text-size": 10,
+            "text-offset": ["match", ["get", "group"], "outage", ["literal", [0, -2.2]], "bgp", ["literal", [2.2, -0.9]], ["literal", [-2.2, -0.9]]],
+            "text-allow-overlap": true, "text-ignore-placement": true,
+          } : {}),
+        },
+        paint: withText ? { "text-color": "#fee2e2", "text-halo-color": "#060607", "text-halo-width": 1.2, "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] }
+          : { "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] },
+      },
+      {
+        id: "c2-cluster", type: "circle", source: "c2", filter: ["has", "point_count"],
+        paint: {
+          "circle-color": COLORS.c2, "circle-opacity": 0.88,
+          "circle-radius": ["step", ["get", "point_count"], 9, 10, 13, 50, 18, 200, 24],
+          "circle-stroke-color": COLORS.water, "circle-stroke-width": 2,
+        },
+      },
+      ...(withText ? [{
+        id: "c2-count", type: "symbol", source: "c2", filter: ["has", "point_count"],
+        layout: { "text-field": ["get", "point_count_abbreviated"], "text-font": FONT, "text-size": 10.5, "text-allow-overlap": true },
+        paint: { "text-color": "#041314" },
+      }] : []),
+      {
+        id: "c2-point", type: "circle", source: "c2", filter: ["!", ["has", "point_count"]],
+        paint: {
+          "circle-color": COLORS.c2, "circle-radius": 4.5,
+          "circle-opacity": ["match", ["get", "geo_precision"], "country", 0.45, 0.95],
+          "circle-stroke-color": COLORS.water, "circle-stroke-width": 1.5,
+        },
+      },
+      {
+        id: "heads", type: "circle", source: "heads",
+        paint: {
+          "circle-color": COLORS.attackLight, "circle-radius": ["interpolate", ["linear"], ["get", "w"], 0, 2.2, 1, 4.2],
+          "circle-stroke-color": COLORS.attack, "circle-stroke-width": 1,
+        },
+      },
+      {
+        id: "tool-path", type: "line", source: "tool", filter: ["==", ["get", "kind"], "path"], layout: { "line-cap": "round" },
+        paint: { "line-color": COLORS.tool, "line-width": 1.6, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+      },
+      {
+        id: "tool-points", type: "circle", source: "tool", filter: ["!=", ["get", "kind"], "path"],
+        paint: {
+          "circle-color": ["match", ["get", "kind"], "origin", "#060607", "target", COLORS.tool, COLORS.tool],
+          "circle-radius": ["match", ["get", "kind"], "target", 6.5, "origin", 6, 4.5],
+          "circle-stroke-color": ["match", ["get", "kind"], "origin", COLORS.tool, "#060607"],
+          "circle-stroke-width": ["match", ["get", "kind"], "origin", 2, 1.5],
+        },
+      },
+      ...(withText ? [{
+        id: "tool-labels", type: "symbol", source: "tool", filter: ["has", "label"],
+        layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 10.5, "text-offset": [0, -1.3], "text-allow-overlap": false },
+        paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.4 },
+      }] : []),
+    ];
+    if (!base) {
+      return {
+        version: 8,
+        sources,
+        layers: [{ id: "bg", type: "background", paint: { "background-color": COLORS.water } }, ...under, ...over],
+      };
+    }
+    const layers = [...base.layers];
+    const idx = Math.max(0, layers.findIndex((l) => l.id === "boundary_state"));
+    layers.splice(idx, 0, ...under);
+    return { ...base, sources: { ...base.sources, ...sources }, layers: [...layers, ...over] };
+  }
+
+  _watchBasemap() {
+    let errors = 0;
+    this.map.on("error", (e) => {
+      const txt = `${e?.error?.message || ""} ${e?.error?.url || ""}`;
+      if (e?.sourceId === "openmaptiles" || /openfreemap/.test(txt)) errors++;
+    });
+    const check = () => {
+      // isSourceLoaded() also reports "loaded" on source errors; what matters is whether tiles have content
+      let features = 0;
+      try { features = this.map.querySourceFeatures("openmaptiles", { sourceLayer: "water" }).length; } catch { features = 0; }
+      if (errors > 0 && features === 0) this._fallback();
+    };
+    setTimeout(check, 8000);
+    setTimeout(check, 20000);
+  }
+
+  _fallback() {
+    if (this.basemapFailed) return;
+    this.basemapFailed = true;
+    const m = this.map;
+    for (const id of ["ne-land", "ne-borders"]) m.setLayoutProperty(id, "visibility", "visible");
+    if (m.getLayer("background")) m.setPaintProperty("background", "background-color", COLORS.water);
+    if (m.getLayer("water")) m.setLayoutProperty("water", "visibility", "none");
+    this.onFallback?.();
+  }
+
+  _tipShow(e, title, sub) {
+    this.tip.replaceChildren(el("strong", {}, title), ...(sub ? [el("small", {}, sub)] : []));
+    this.tip.hidden = false;
+    const x = e.originalEvent.clientX, y = e.originalEvent.clientY;
+    this.tip.style.left = `${Math.min(x + 14, window.innerWidth - 290)}px`;
+    this.tip.style.top = `${y + 14}px`;
+  }
+
+  _tipHide() { this.tip.hidden = true; }
+
+  _bind() {
+    const m = this.map;
+    let hovered = null;
+    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "tool-points", "landing"];
+    m.on("mousemove", "choro", (e) => {
+      const f = e.features?.[0];
+      if (!f) return;
+      if (hovered !== null && hovered !== f.id) m.setFeatureState({ source: "countries", id: hovered }, { hover: false });
+      hovered = f.id;
+      m.setFeatureState({ source: "countries", id: hovered }, { hover: true });
+      if (m.queryRenderedFeatures(e.point, { layers: pointLayers.filter((l) => m.getLayer(l)) }).length) return;
+      const v = this.countries[f.id]?.[this.metric];
+      const meta = METRICS[this.metric];
+      this._tipShow(e, countryName(f.id) || f.properties.name, meta ? `${meta.label}: ${v === undefined ? t("map.no_data") : meta.fmt(v)}` : null);
+      m.getCanvas().style.cursor = "pointer";
+    });
+    m.on("mouseleave", "choro", () => {
+      if (hovered !== null) m.setFeatureState({ source: "countries", id: hovered }, { hover: false });
+      hovered = null;
+      this._tipHide();
+      m.getCanvas().style.cursor = "";
+    });
+    m.on("click", (e) => {
+      const hits = m.queryRenderedFeatures(e.point, { layers: pointLayers.filter((l) => m.getLayer(l)) });
+      if (hits.length) return;
+      const land = m.queryRenderedFeatures(e.point, { layers: ["choro"] })[0];
+      if (land && /^[A-Z]{2}$/.test(String(land.id))) this.onCountry(String(land.id));
+    });
+    m.on("click", "c2-cluster", async (e) => {
+      const f = e.features[0];
+      const z = await m.getSource("c2").getClusterExpansionZoom(f.properties.cluster_id);
+      m.easeTo({ center: f.geometry.coordinates, zoom: Math.min(z, 10), duration: reduceMotion ? 0 : 500 });
+    });
+    m.on("click", "c2-point", (e) => this.c2Popup(e.features[0].properties, e.lngLat));
+    m.on("click", "ransom", (e) => {
+      const p = e.features[0].properties;
+      this.popup(e.lngLat, el("div", { class: "pop" }, el("h4", {}, countryName(p.cc)), t("map.ransom_pop", { n: num(p.n) })));
+      this.onCountry(p.cc);
+    });
+    m.on("click", "infra", (e) => {
+      const p = e.features[0].properties;
+      let evs = [];
+      try { evs = JSON.parse(p.events); } catch { /* ignore */ }
+      this.popup(e.lngLat, el("div", { class: "pop" },
+        el("h4", {}, `${t(`map.group.${p.group}`)}: ${countryName(p.cc)}`),
+        el("ul", {}, evs.slice(0, 8).map((x) => el("li", {}, `${x.title}${x.ongoing ? t("map.ongoing") : ""}, ${x.start ? dateTime(x.start) : "?"}`))),
+        evs.length > 8 ? el("div", { class: "note" }, t("common.more", { n: evs.length - 8 })) : null,
+        el("div", { class: "row" }, el("button", { type: "button", onclick: () => this.onCountry(p.cc) }, t("map.open_country")))));
+    });
+    m.on("click", "landing", (e) => {
+      const p = e.features[0].properties;
+      let cab = Array.isArray(p.cables) ? p.cables : [];
+      if (!cab.length) { try { cab = JSON.parse(p.cables); } catch { /* ignore */ } }
+      this.popup(e.lngLat, el("div", { class: "pop" }, el("h4", {}, p.name), el("div", { class: "note" }, t("map.landing")),
+        el("ul", {}, cab.slice(0, 12).map((c) => el("li", {}, c))), cab.length > 12 ? el("div", { class: "note" }, t("common.more", { n: cab.length - 12 })) : null));
+    });
+    m.on("mousemove", "cables", (e) => {
+      const p = e.features[0].properties;
+      this._tipShow(e, p.name, [p.rfs ? `RFS ${p.rfs}` : null, p.length, p.owners].filter(Boolean).join(", ").slice(0, 160));
+    });
+    m.on("mouseleave", "cables", () => this._tipHide());
+    m.on("click", "tool-points", (e) => {
+      const p = e.features[0].properties;
+      if (p.ip) this.onIp?.(p.ip);
+    });
+    for (const id of pointLayers) {
+      m.on("mouseenter", id, () => { m.getCanvas().style.cursor = "pointer"; });
+      m.on("mouseleave", id, () => { m.getCanvas().style.cursor = ""; });
+    }
+  }
+
+  popup(lngLat, node) {
+    if (this._popup) this._popup.remove();
+    this._popup = new window.maplibregl.Popup({ maxWidth: "340px" }).setLngLat(lngLat).setDOMContent(node).addTo(this.map);
+    return this._popup;
+  }
+
+  c2Popup(p, lngLat) {
+    const rows = [
+      [t("c2.malware"), p.malware], [t("c2.ioc"), p.ioc], [t("c2.source"), p.source === "feodo" ? "Feodo Tracker" : "ThreatFox"],
+      [t("c2.status"), p.status], [t("c2.country"), `${countryName(p.country)}${p.city ? ", " + p.city : ""}`],
+      [t("c2.location"), p.geo_precision === "country" ? t("c2.loc_country") : t("c2.loc_city")],
+      [t("c2.as"), p.asn ? `AS${p.asn} ${p.as_name || ""}` : "–"], [t("c2.first"), p.first_seen ? dateTime(p.first_seen) : "–"],
+      [t("c2.last"), p.last_seen ? dateTime(p.last_seen) : "–"], [t("c2.conf"), p.confidence ? `${p.confidence} %` : "–"],
+    ];
+    this.popup(lngLat, el("div", { class: "pop" },
+      el("h4", {}, `C2: ${p.malware}`),
+      el("dl", {}, rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v ?? "–")])),
+      el("div", { class: "row" },
+        p.ip ? el("button", { type: "button", onclick: () => this.onIp?.(p.ip) }, t("c2.ipinfo")) : null,
+        p.reference && /^https:\/\/(threatfox|feodotracker)\.abuse\.ch\//.test(p.reference)
+          ? el("a", { class: "btn", href: p.reference, target: "_blank", rel: "noopener noreferrer" }, "abuse.ch") : null)));
+  }
+
+  // --- data ---------------------------------------------------------------------
+  setCountries(countries) {
+    this.countries = countries || {};
+    this.paintChoropleth();
+    const feats = [];
+    for (const [cc, mm] of Object.entries(this.countries)) {
+      const c = geo.centroids[cc];
+      if (c && mm.ransomware_7d) feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { cc, n: mm.ransomware_7d } });
+    }
+    this.map.getSource("ransom").setData({ type: "FeatureCollection", features: feats });
+  }
+
+  setMetric(metric) {
+    this.metric = metric;
+    this.paintChoropleth();
+  }
+
+  paintChoropleth() {
+    const m = this.map;
+    m.removeFeatureState({ source: "countries" });
+    this.max = 0;
+    if (this.metric === "none") return;
+    const vals = Object.entries(this.countries).map(([cc, x]) => [cc, x[this.metric]]).filter(([, v]) => typeof v === "number" && v > 0);
+    this.max = vals.reduce((a, [, v]) => Math.max(a, v), 0);
+    for (const [cc, v] of vals) m.setFeatureState({ source: "countries", id: cc }, { v: this.max ? v / this.max : 0 });
+  }
+
+  legendInfo() { return { metric: this.metric, meta: METRICS[this.metric], max: this.max || 0 }; }
+
+  setC2(fc) {
+    this.c2All = fc || EMPTY;
+    this._applyC2();
+  }
+
+  setC2Filter(f) {
+    this.c2Filter = { ...this.c2Filter, ...f };
+    this._applyC2();
+  }
+
+  _applyC2() {
+    const f = this.c2Filter;
+    const now = Date.now();
+    const feats = this.c2All.features.filter((x) => {
+      const p = x.properties;
+      if (f.family && p.malware !== f.family) return false;
+      if (f.source && f.source !== "all" && p.source !== f.source) return false;
+      if (f.minConf && p.confidence !== null && p.confidence !== undefined && p.confidence < f.minConf) return false;
+      const seen = Date.parse(p.last_seen || p.first_seen || "") || 0;
+      if (f.window) { // timeline: [start, end)
+        const first = Date.parse(p.first_seen || "") || 0;
+        if (first && first >= f.window[1]) return false;
+        if (seen && seen < f.window[0]) return false;
+      } else if (f.days && seen && now - seen > f.days * 86400000) {
+        return false;
+      }
+      return true;
+    });
+    this.c2Count = feats.length;
+    this.map.getSource("c2").setData({ type: "FeatureCollection", features: feats });
+  }
+
+  setArcs(rows) {
+    this.arcRows = rows || [];
+    const valid = this.arcRows.filter((r) => geo.centroids[r.origin] && geo.centroids[r.target] && r.origin !== r.target);
+    const maxV = valid.reduce((a, r) => Math.max(a, r.value), 0) || 1;
+    this.arcs = valid.map((r, i) => {
+      const o = geo.centroids[r.origin], t = geo.centroids[r.target];
+      const path = this.projection === "globe" ? greatCircle : bezierArc;
+      return { line: path([o.lon, o.lat], [t.lon, t.lat]), w: r.value / maxV, offset: (i * 0.137) % 1 };
+    });
+    this.map.getSource("arcs").setData({
+      type: "FeatureCollection",
+      features: this.arcs.map((a) => ({ type: "Feature", geometry: { type: "LineString", coordinates: a.line }, properties: { w: a.w } })),
+    });
+    this.animate();
+  }
+
+  animate() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    const src = this.map.getSource("heads");
+    let last = -1e9;
+    const frame = (ts) => {
+      if (!this.arcsVisible) { src.setData(EMPTY); return; }
+      if (ts - last >= 33 || reduceMotion) { // about 30 fps
+        last = ts;
+        const phase = (ts / 4200) % 1;
+        const visible = this._hemisphere();
+        src.setData({
+          type: "FeatureCollection",
+          features: this.arcs.map((a) => ({
+            type: "Feature",
+            geometry: { type: "Point", coordinates: pointAt(a.line, reduceMotion ? 1 : (phase + a.offset) % 1) },
+            properties: { w: a.w },
+          })).filter((f) => visible(f.geometry.coordinates)),
+        });
+      }
+      if (!reduceMotion) this._raf = requestAnimationFrame(frame);
+    };
+    this._raf = requestAnimationFrame(frame);
+  }
+
+  // Globe: hide points on the far side (circles would otherwise be drawn over the rim)
+  _hemisphere() {
+    if (this.projection !== "globe") return () => true;
+    const c = this.map.getCenter();
+    const cv = [Math.cos(rad(c.lat)) * Math.cos(rad(c.lng)), Math.cos(rad(c.lat)) * Math.sin(rad(c.lng)), Math.sin(rad(c.lat))];
+    return ([lon, lat]) => {
+      const v = [Math.cos(rad(lat)) * Math.cos(rad(lon)), Math.cos(rad(lat)) * Math.sin(rad(lon)), Math.sin(rad(lat))];
+      return cv[0] * v[0] + cv[1] * v[1] + cv[2] * v[2] > 0.25; // the camera sees less than a hemisphere
+    };
+  }
+
+  setInfra(events) {
+    const groups = new Map();
+    for (const e of events || []) {
+      const group = e.kind === "outage" ? "outage" : (e.kind === "hijack" || e.kind === "leak") ? "bgp" : "anomaly";
+      for (const cc of e.countries || []) {
+        if (!geo.centroids[cc]) continue;
+        const key = `${cc}|${group}`;
+        if (!groups.has(key)) groups.set(key, { cc, group, events: [], ongoing: false });
+        const g = groups.get(key);
+        g.events.push({ title: e.title, start: e.start_ts, ongoing: e.ongoing });
+        g.ongoing = g.ongoing || e.ongoing;
+      }
+    }
+    const feats = [...groups.values()].map((g) => {
+      const c = geo.centroids[g.cc];
+      return {
+        type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] },
+        properties: { cc: g.cc, group: g.group, count: g.events.length, ongoing: g.ongoing, events: JSON.stringify(g.events) },
+      };
+    });
+    this.map.getSource("infra").setData({ type: "FeatureCollection", features: feats });
+  }
+
+  setVisible(layer, on) {
+    const ids = {
+      arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"],
+      infra: ["infra"], cables: ["cables", "cables-hl", "landing"],
+    }[layer];
+    for (const id of ids) if (this.map.getLayer(id)) this.map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+    if (layer === "arcs") { this.arcsVisible = on; this.animate(); }
+  }
+
+  select(cc) {
+    this.map.setFilter("selected", ["==", ["get", "iso"], cc || ""]);
+    this.map.setFilter("cables-hl", ["in", cc || "", ["get", "countries"]]);
+  }
+
+  focus(cc) {
+    const c = geo.centroids[cc];
+    if (c) this.map.easeTo({ center: [c.lon, c.lat], zoom: Math.max(this.map.getZoom(), 2.4), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
+  }
+
+  // Visible map area without docked panels (for centring and fitBounds)
+  viewPadding() {
+    const b = document.body.classList;
+    const small = window.innerWidth <= 900;
+    const tools = document.getElementById("panel-tools");
+    const toolsH = tools && !tools.hidden && !tools.classList.contains("floating") ? tools.getBoundingClientRect().height + 10 : 0;
+    const docked = (id) => !document.getElementById(id)?.classList.contains("floating");
+    const left = document.getElementById("panel-left"), right = document.getElementById("panel-right");
+    return {
+      top: (small ? 100 : 60) + 10,
+      bottom: Math.max(68, toolsH + 68),
+      left: small || b.contains("left-collapsed") || !docked("panel-left") ? 20 : Math.round(left.getBoundingClientRect().right + 20),
+      right: small || b.contains("right-collapsed") || !docked("panel-right") ? 20 : Math.round(window.innerWidth - right.getBoundingClientRect().left + 20),
+    };
+  }
+
+  flyTo(lon, lat, zoom = 4) {
+    this.map.easeTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), zoom), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
+  }
+
+  fitTo(points, maxZoom = 5) {
+    if (!points.length) return;
+    const lons = points.map((x) => x[0]), lats = points.map((x) => x[1]);
+    try {
+      this.map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+        { padding: this.viewPadding(), maxZoom, duration: reduceMotion ? 0 : 900 });
+    } catch { /* panels larger than the map: ignore */ }
+  }
+
+  toggleProjection() {
+    this.projection = this.projection === "globe" ? "mercator" : "globe";
+    this.map.setProjection({ type: this.projection });
+    const opts = { duration: reduceMotion ? 0 : 700 };
+    if (this.projection === "globe") this.map.easeTo({ center: [15, 28], zoom: 1.8, ...opts });
+    else this.map.fitBounds([[-168, -52], [178, 76]], { padding: 20, ...opts });
+    this.setArcs(this.arcRows);
+    this.onProjection?.();
+    return this.projection;
+  }
+
+  // --- tool results -----------------------------------------------------------------
+  setTool(features) {
+    this.map.getSource("tool").setData({ type: "FeatureCollection", features: features || [] });
+  }
+
+  clearTool() { this.setTool([]); }
+
+  toolPath(points) {
+    const feats = [];
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      if (Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6) continue;
+      const line = this.projection === "globe" ? greatCircle(a, b, 24) : bezierArc(a, b, 24);
+      feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: line }, properties: { kind: "path" } });
+    }
+    return feats;
+  }
+}

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>Emberwatch</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="js/boot.js"></script>
+  <script src="vendor/maplibre-gl-csp.js" defer></script>
+  <script src="vendor/chart.umd.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <!-- start animation (js/boot.js) -->
+  <div class="boot" id="boot" aria-hidden="true">
+    <canvas id="boot-canvas"></canvas>
+    <div class="boot-core">
+      <div class="boot-ring"></div>
+      <div class="boot-logo" data-text="EMBERWATCH">EMBERWATCH</div>
+      <div class="boot-sub" id="boot-sub"></div>
+      <ol class="boot-log" id="boot-log"></ol>
+      <div class="boot-bar"><i id="boot-bar"></i></div>
+    </div>
+    <div class="boot-skip" id="boot-skip"></div>
+  </div>
+
+  <div id="map" data-i18n-aria="map.aria"></div>
+  <div class="map-tip" id="map-tip" hidden></div>
+
+  <!-- header -->
+  <header class="hud hud-top">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>Emberwatch</h1></div>
+
+    <form class="search" id="search" role="search" autocomplete="off">
+      <label for="search-q" class="sr-only" data-i18n="search.label"></label>
+      <input id="search-q" type="search" data-i18n-placeholder="search.placeholder" maxlength="100">
+      <div class="search-results" id="search-results" hidden></div>
+    </form>
+
+    <div class="actions">
+      <button type="button" id="btn-assets" data-i18n="btn.assets" data-i18n-title="btn.assets_title"></button>
+      <button type="button" id="btn-tools" data-i18n="btn.tools" data-i18n-title="btn.tools_title"></button>
+      <button type="button" id="btn-projection" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
+      <button type="button" id="btn-status" class="status-btn" data-i18n-title="btn.status_title"><span class="dots" id="status-dots"></span><span data-i18n="btn.status"></span></button>
+      <button type="button" id="btn-settings" class="icon-btn" data-i18n-title="btn.settings_title"><span aria-hidden="true">⚙</span><span class="sr-only" data-i18n="btn.settings"></span></button>
+      <span class="stamp" id="stamp"></span>
+    </div>
+  </header>
+
+  <!-- popovers -->
+  <section class="panel popover" id="status-panel" hidden data-i18n-aria="btn.status"></section>
+  <section class="panel popover" id="settings-panel" hidden data-i18n-aria="set.title"></section>
+
+  <!-- left: situation -->
+  <aside class="panel panel-left" id="panel-left" data-i18n-aria="panel.left">
+    <div class="panel-head">
+      <h2 data-i18n="panel.left"></h2>
+      <button type="button" class="collapse" data-collapse="panel-left" aria-expanded="true"><span aria-hidden="true">–</span><span class="sr-only"></span></button>
+    </div>
+    <div class="panel-body">
+      <section class="kpis" id="kpis"></section>
+      <nav class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="targets" data-i18n="tab.targets"></button>
+        <button role="tab" aria-selected="false" data-tab="origins" data-i18n="tab.origins"></button>
+        <button role="tab" aria-selected="false" data-tab="vectors" data-i18n="tab.vectors"></button>
+        <button role="tab" aria-selected="false" data-tab="c2" data-i18n="tab.c2"></button>
+        <button role="tab" aria-selected="false" data-tab="ransom" data-i18n="tab.ransom"></button>
+        <button role="tab" aria-selected="false" data-tab="infra" data-i18n="tab.infra"></button>
+        <button role="tab" aria-selected="false" data-tab="kev" data-i18n="tab.kev"></button>
+      </nav>
+      <div class="tabpanel" id="tabpanel" role="tabpanel"></div>
+    </div>
+  </aside>
+
+  <!-- right: country, Gemini, patterns, alerts -->
+  <aside class="panel panel-right" id="panel-right" data-i18n-aria="panel.right">
+    <div class="panel-head">
+      <h2 data-i18n="panel.right"></h2>
+      <button type="button" class="collapse" data-collapse="panel-right" aria-expanded="true"><span aria-hidden="true">–</span><span class="sr-only"></span></button>
+    </div>
+    <div class="panel-body" id="right-body">
+      <section class="country" id="country" hidden></section>
+
+      <details class="sect" id="sect-alerts" open>
+        <summary><h3 data-i18n="sect.alerts"></h3><span class="count" id="alert-count"></span></summary>
+        <div class="sect-body"><ol class="patterns" id="alerts-feed"></ol></div>
+      </details>
+
+      <details class="sect" id="sect-ai" open>
+        <summary><h3 data-i18n="sect.ai"></h3><select id="ai-history" data-i18n-aria="ai.history"><option value="" data-i18n="ai.history"></option></select></summary>
+        <div class="sect-body">
+          <div class="ai-actions">
+            <button type="button" data-scope="global" data-i18n="ai.global"></button>
+            <button type="button" data-scope="region" id="ai-region" hidden></button>
+            <button type="button" data-scope="country" id="ai-country" disabled data-i18n="ai.country"></button>
+          </div>
+          <form class="ai-ask" id="ai-ask">
+            <label for="ai-question" class="sr-only" data-i18n="ai.question_label"></label>
+            <textarea id="ai-question" rows="2" maxlength="600" data-i18n-placeholder="ai.question_ph"></textarea>
+            <button type="submit" data-i18n="ai.ask"></button>
+          </form>
+          <div class="ai-out" id="ai-out" aria-live="polite"></div>
+        </div>
+      </details>
+
+      <details class="sect" id="sect-patterns" open>
+        <summary><h3 data-i18n="sect.patterns"></h3><span class="count" id="pattern-count"></span></summary>
+        <div class="sect-body"><ol class="patterns" id="patterns"></ol></div>
+      </details>
+    </div>
+  </aside>
+
+  <!-- network tools -->
+  <section class="panel panel-tools" id="panel-tools" hidden data-i18n-aria="panel.tools">
+    <div class="panel-head">
+      <h2 data-i18n="panel.tools"></h2>
+      <button type="button" class="collapse" id="tools-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
+    </div>
+    <div class="panel-body">
+      <nav class="tabs tool-tabs" role="tablist" data-i18n-aria="tool.tabs">
+        <button role="tab" aria-selected="true" data-tool="ping" data-i18n="tool.ping"></button>
+        <button role="tab" aria-selected="false" data-tool="traceroute" data-i18n="tool.traceroute"></button>
+        <button role="tab" aria-selected="false" data-tool="dns" data-i18n="tool.dns"></button>
+        <button role="tab" aria-selected="false" data-tool="rdap" data-i18n="tool.rdap"></button>
+        <button role="tab" aria-selected="false" data-tool="ipinfo" data-i18n="tool.ipinfo"></button>
+        <button role="tab" aria-selected="false" data-tool="ports" data-i18n="tool.ports"></button>
+        <button role="tab" aria-selected="false" data-tool="http" data-i18n="tool.http"></button>
+      </nav>
+      <form class="tool-form" id="tool-form" autocomplete="off"></form>
+      <div class="tool-out" id="tool-out" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- assets, products, logs, alerts -->
+  <section class="panel panel-assets" id="panel-assets" hidden data-i18n-aria="panel.assets">
+    <div class="panel-head">
+      <h2 data-i18n="panel.assets"></h2>
+      <button type="button" class="collapse" id="assets-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
+    </div>
+    <div class="panel-body">
+      <nav class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-atab="assets" data-i18n="as.tab.assets"></button>
+        <button role="tab" aria-selected="false" data-atab="products" data-i18n="as.tab.products"></button>
+        <button role="tab" aria-selected="false" data-atab="logs" data-i18n="as.tab.logs"></button>
+        <button role="tab" aria-selected="false" data-atab="alerts" data-i18n="as.tab.alerts"></button>
+      </nav>
+      <div class="assets-body" id="assets-body"></div>
+    </div>
+  </section>
+
+  <!-- legend with layer switches -->
+  <section class="hud legend" id="legend" data-i18n-aria="legend.title">
+    <div class="legend-head">
+      <label class="select"><span data-i18n="choro.label"></span>
+        <select id="choro-metric">
+          <option value="l7_target" data-i18n="metric.l7_target"></option>
+          <option value="l3_target" data-i18n="metric.l3_target"></option>
+          <option value="l7_origin" data-i18n="metric.l7_origin"></option>
+          <option value="l3_origin" data-i18n="metric.l3_origin"></option>
+          <option value="ransomware_7d" data-i18n="metric.ransomware_7d"></option>
+          <option value="c2" data-i18n="metric.c2"></option>
+          <option value="outages_7d" data-i18n="metric.outages_7d"></option>
+          <option value="none" data-i18n="metric.none"></option>
+        </select>
+      </label>
+      <button type="button" class="collapse" id="legend-toggle" aria-expanded="true"><span aria-hidden="true">–</span><span class="sr-only" data-i18n="legend.title"></span></button>
+    </div>
+    <div class="legend-body">
+      <div id="legend-scale"></div>
+      <div class="layers" role="group" data-i18n-aria="layer.group">
+        <label class="chip"><input type="checkbox" id="lyr-arcs" checked><i class="sw sw-attack" aria-hidden="true"></i><span data-i18n="legend.arcs"></span></label>
+        <label class="chip"><input type="checkbox" id="lyr-c2" checked><i class="sw sw-c2" aria-hidden="true"></i><span data-i18n="legend.c2"></span></label>
+        <label class="chip"><input type="checkbox" id="lyr-ransom" checked><i class="sw sw-ransom" aria-hidden="true"></i><span data-i18n="legend.ransom"></span></label>
+        <label class="chip"><input type="checkbox" id="lyr-infra" checked><i class="sw sw-infra" aria-hidden="true"></i><span data-i18n="legend.infra"></span></label>
+        <label class="chip"><input type="checkbox" id="lyr-cables"><i class="sw sw-cable" aria-hidden="true"></i><span data-i18n="legend.cables"></span></label>
+      </div>
+      <div class="legend-hint"><i class="sw sw-infra" aria-hidden="true"></i><span data-i18n="legend.outage"></span> <i class="sw sw-diamond" aria-hidden="true"></i><span data-i18n="legend.bgp"></span> <i class="sw sw-square" aria-hidden="true"></i><span data-i18n="legend.anomaly"></span></div>
+    </div>
+  </section>
+
+  <!-- timeline -->
+  <footer class="hud hud-bottom">
+    <div class="timeline" id="timeline">
+      <button type="button" id="tl-live" class="live on" aria-pressed="true" data-i18n="tl.live"></button>
+      <button type="button" id="tl-play" data-i18n="tl.play"></button>
+      <label for="tl-range" class="sr-only" data-i18n="tl.pick"></label>
+      <input type="range" id="tl-range" min="0" max="0" value="0" disabled>
+      <span class="tl-day" id="tl-day" data-i18n="tl.no_history"></span>
+    </div>
+    <p class="credits">
+      <a href="https://radar.cloudflare.com" rel="noopener noreferrer" target="_blank">Cloudflare Radar</a> (CC BY-NC 4.0) ·
+      <a href="https://abuse.ch" rel="noopener noreferrer" target="_blank">abuse.ch</a> ·
+      <a href="https://www.ransomware.live" rel="noopener noreferrer" target="_blank">Ransomware.live</a> ·
+      <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" rel="noopener noreferrer" target="_blank">CISA KEV</a> ·
+      <a href="https://www.first.org/epss/" rel="noopener noreferrer" target="_blank">FIRST EPSS</a> ·
+      <a href="https://nvd.nist.gov" rel="noopener noreferrer" target="_blank">NVD</a> ·
+      <a href="https://internetdb.shodan.io" rel="noopener noreferrer" target="_blank">Shodan InternetDB</a> ·
+      <a href="https://www.spamhaus.org/drop/" rel="noopener noreferrer" target="_blank">The Spamhaus Project</a> ·
+      <a href="https://ris-live.ripe.net" rel="noopener noreferrer" target="_blank">RIPE NCC RIS</a> ·
+      <a href="https://sslmate.com/certspotter/" rel="noopener noreferrer" target="_blank">Cert Spotter</a> ·
+      <a href="https://db-ip.com" rel="noopener noreferrer" target="_blank">IP Geolocation by DB-IP</a> ·
+      <a href="https://www.submarinecablemap.com" rel="noopener noreferrer" target="_blank">TeleGeography</a> (CC BY-NC-SA 3.0, 2021) ·
+      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
+      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth
+    </p>
+  </footer>
+
+  <div class="print-area" id="print-area" aria-hidden="true"></div>
+</body>
+</html>
