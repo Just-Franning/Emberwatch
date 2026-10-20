@@ -1,10 +1,13 @@
-# Emberwatch – build and run locally:  cp .env.example .env  (edit)  &&  docker compose up -d --build
+# Emberwatch:  cp .env.example .env  (edit)
+#   prebuilt image:     docker compose pull && docker compose up -d
+#   build from source:  EMBERWATCH_IMAGE=emberwatch:local in .env, then docker compose up -d --build
+#   update:             docker compose pull && docker compose up -d
 # The web UI listens on 127.0.0.1:8000. For access from other machines put a reverse proxy with TLS in front
 # (see README) or change the port binding.
 services:
   emberwatch:
+    image: ${EMBERWATCH_IMAGE:-ghcr.io/saturdaynetlab/emberwatch:latest}
     build: .
-    image: emberwatch:latest
     container_name: emberwatch
     restart: unless-stopped
     ports:

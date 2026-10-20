@@ -2,7 +2,7 @@
 # Uses the prebuilt image from GitHub Container Registry. Set at least PROXY_NETWORK (the Docker network of your
 # reverse proxy, e.g. the network of Traefik, Nginx Proxy Manager or Pangolin/Newt) and your keys in the
 # "Environment variables" section. The proxy then forwards to http://emberwatch:8000.
-# Own image (built from the repository tar): set EMBERWATCH_IMAGE, e.g. emberwatch:latest.
+# Own image (built from the repository tar): set EMBERWATCH_IMAGE, e.g. emberwatch:local.
 services:
   emberwatch:
     image: ${EMBERWATCH_IMAGE:-ghcr.io/saturdaynetlab/emberwatch:latest}

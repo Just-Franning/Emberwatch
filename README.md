@@ -55,28 +55,50 @@ Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware
    - optionally `LANGUAGE=de`, `AUTH_PASSWORD`, further keys (all variables: [`.env.example`](.env.example))
 3. Deploy, then point your reverse proxy to `http://emberwatch:8000`.
 
-The image is published as `ghcr.io/saturdaynetlab/emberwatch` for `linux/amd64` and `linux/arm64`.
-
-### Option B: Docker Compose (build from source)
+### Option B: Docker Compose with the prebuilt image
 
 ```bash
 git clone https://github.com/SaturdayNetLab/emberwatch.git
 cd emberwatch
 cp .env.example .env    # add your keys
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 The interface is then available at `http://127.0.0.1:8000`. For access from other machines use a reverse proxy with TLS (see [Reverse proxy](#reverse-proxy-and-login)).
 
-### Option C: Portainer, build the image yourself
+### Option C: build from source
+
+With Docker Compose: set `EMBERWATCH_IMAGE=emberwatch:local` in `.env`, then
 
 ```bash
-git clone https://github.com/SaturdayNetLab/emberwatch.git
-cd emberwatch
-git archive -o emberwatch.tar HEAD
+docker compose up -d --build
 ```
 
-In Portainer: *Images → Build a new image → Upload*, select `emberwatch.tar`, image name `emberwatch:latest`. Then deploy the stack as in option A with `EMBERWATCH_IMAGE=emberwatch:latest`.
+With Portainer: run `git archive -o emberwatch.tar HEAD` in the cloned repository, then *Images → Build a new image → Upload*, select `emberwatch.tar`, image name `emberwatch:local`. Deploy the stack as in option A with `EMBERWATCH_IMAGE=emberwatch:local`.
+
+### Image tags
+
+The image `ghcr.io/saturdaynetlab/emberwatch` is built for `linux/amd64` and `linux/arm64`.
+
+| Tag | Content |
+|---|---|
+| `latest` | newest release |
+| `3`, `3.0` | newest release within this major / minor version |
+| `3.0.0` | exactly this release |
+| `edge` | current `main` branch, changes between releases |
+| `sha-<commit>` | a single build |
+
+## Updating
+
+Your data stays in the `/data` volume. Database changes are applied automatically on start; read the [changelog](CHANGELOG.md) before a new major version.
+
+- **Docker Compose:** `docker compose pull && docker compose up -d`. Run `git pull` beforehand if you want changes to `compose.yml` and `.env.example`.
+- **Portainer:** *Stacks → emberwatch → Editor → Update the stack* with the option to re-pull the image enabled.
+- **Automatic:** a tool such as Watchtower can pull new images. Pin a version line (for example `3`) if you only want updates without breaking changes.
+- **Built from source:** `git pull`, then build again.
+
+New releases are listed on the [releases page](https://github.com/SaturdayNetLab/emberwatch/releases); *Watch → Custom → Releases* on GitHub notifies you.
 
 ## Quickstart
 
