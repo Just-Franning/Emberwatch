@@ -325,6 +325,9 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
         cache_prune(db)
+        # Gemini analyses (one per object page analysis since 3.1): same retention as alerts, at most 2000
+        db.execute("DELETE FROM ai_reports WHERE created_at < ?", (_cutoff(S.alert_retention_days),))
+        db.execute("DELETE FROM ai_reports WHERE id NOT IN (SELECT id FROM ai_reports ORDER BY id DESC LIMIT 2000)")
 
     return {
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
@@ -380,6 +383,8 @@ PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/au
                 "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
+MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
+MAX_BODY_PUBLIC = 64 * 1024  # requests without a session (login, reporter)
 
 
 def _hostport(v: str) -> str:
@@ -418,13 +423,23 @@ async def guard(request: Request, call_next):
     request.state.lang = lang
     path = request.url.path
     resp: Response
-    if path.startswith("/api/") and (
+    public = ".." not in path and (path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES))
+    too_large = False
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and path != "/api/logs/analyze":  # the upload checks itself
+        limit = MAX_BODY_PUBLIC if public else MAX_BODY
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            too_large = not declared.isdigit() or int(declared) > limit
+        elif public:  # without a session only bodies of declared length (no unbounded chunked uploads)
+            too_large = "chunked" in request.headers.get("transfer-encoding", "").lower()
+    if too_large:
+        resp = JSONResponse({"detail": t(lang, "err.body_too_large"), "key": "err.body_too_large"}, 413)
+    elif path.startswith("/api/") and (
         request.headers.get("sec-fetch-site") not in (None, "same-origin", "none")
         or (request.method not in ("GET", "HEAD", "OPTIONS") and not origin_ok(request))
     ):
         resp = JSONResponse({"detail": t(lang, "err.csrf"), "key": "err.csrf"}, 403)
-    elif auth.enabled and not (".." not in path and (path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES))) \
-            and not auth.valid(request.cookies.get(COOKIE)):
+    elif auth.enabled and not public and not auth.valid(request.cookies.get(COOKIE)):
         if path.startswith("/api/"):
             resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
         elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
@@ -1268,7 +1283,7 @@ async def api_tb_recipe(request: Request, body: RecipeIn) -> StreamingResponse:
 
 
 @app.get("/api/tb/history")
-def api_tb_history(type: str | None = Query(None, max_length=20), value: str | None = Query(None, max_length=300),
+def api_tb_history(type: str | None = Query(None, max_length=20), value: str | None = Query(None, max_length=2048),
                    limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
     return {"runs": tbrun.history(db, type, value, limit)}
 
@@ -1303,20 +1318,20 @@ async def object_page(request: Request, otype: str, value: str) -> dict[str, Any
 
 def obj_ai_context(page: dict[str, Any], lang: str) -> dict[str, Any]:
     ctx = object_context(page)
-    ctx["as_of_utc"] = utcnow()
+    ctx["as_of_utc"] = utcnow()[:15] + "0:00Z"  # 10-minute steps: repeated questions hit the answer cache (ai.py, 600 s)
     ctx["available_tools"] = [i18n.t(lang, f"tb.tool.{tid}") for tid in page.get("tools") or [] if tid != "cyberchef"]
     return ctx
 
 
 @app.get("/api/obj")
 async def api_obj(request: Request, type: str = Query(..., max_length=10),
-                  value: str = Query(..., min_length=1, max_length=300)) -> dict[str, Any]:
-    return await object_page(request, type, value)
+                  value: str = Query(..., min_length=1, max_length=2048)) -> dict[str, Any]:
+    return await object_page(request, type, value)  # URLs up to 2048 characters, other types up to 300 (objects.normalize)
 
 
 class ObjAiIn(BaseModel):
     type: str = Field(..., max_length=10)
-    value: str = Field(..., min_length=1, max_length=300)
+    value: str = Field(..., min_length=1, max_length=2048)
     question: str | None = Field(None, max_length=600)
 
 

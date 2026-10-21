@@ -131,7 +131,7 @@ Tastenkürzel: `Strg+K` Befehlspalette, `1` `2` `3` Bereiche wechseln, `/` Suche
 
 Die Heim-IP kommt auf einem von drei Wegen (kombinierbar):
 
-1. **Beim Aufruf von Emberwatch**: *Meine IP* zeigt die Adresse, von der du verbunden bist, und übernimmt sie auf Wunsch. Optional wird sie künftig automatisch übernommen, wenn du wieder aus demselben Netz (AS) kommst; Mobilfunk oder Hotels werden so ignoriert. Dafür braucht es einen Reverse Proxy, der `X-Forwarded-For` setzt.
+1. **Beim Aufruf von Emberwatch**: *Meine IP* zeigt die Adresse, von der du verbunden bist, und übernimmt sie auf Wunsch. Optional wird sie künftig automatisch übernommen, wenn du wieder aus demselben Netz (AS) kommst; Mobilfunk oder Hotels werden so ignoriert (nur IPv4: über IPv6 sieht der Browser die eigene, oft wechselnde Adresse des Geräts; Geräte aus dem Heim-/64 gelten als Zuhause). Dafür braucht es einen Reverse Proxy, der `X-Forwarded-For` setzt.
 2. **DynDNS-Hostname**: zeigt ein Hostname auf deinen Anschluss, löst Emberwatch ihn alle 10 Minuten auf.
 3. **Melder mit Token** (unter *Meine IP* erzeugt, nur einmal angezeigt, gespeichert wird nur der Hash):
    ```bash
@@ -140,7 +140,7 @@ Die Heim-IP kommt auf einem von drei Wegen (kombinierbar):
    ```
    dyndns2-Clients (Router, ddclient, inadyn) nutzen `https://emberwatch.example.org/nic/update?myip=<ipaddr>` mit HTTP-Basic-Auth (Benutzername beliebig, Passwort = Token).
 
-Beide Pfade melden sich mit dem Token an und sind ohne Sitzung erreichbar. Schützt ein Login oder SSO vor Emberwatch (z. B. Pangolin, Authelia) jeden Pfad, für `/api/myip/report` und `/nic/update` eine Ausnahme anlegen.
+Beide Pfade melden sich mit dem Token an und sind ohne Sitzung erreichbar. Ein gültiger Token wird nie gesperrt; nach 10 Fehlversuchen in 10 Minuten werden weitere Fehlversuche abgewiesen (HTTP 429 beim curl-Melder). Adresswechsel werden höchstens alle 20 Sekunden je Adressfamilie übernommen. Schützt ein Login oder SSO vor Emberwatch (z. B. Pangolin, Authelia) jeden Pfad, für `/api/myip/report` und `/nic/update` eine Ausnahme anlegen.
 
 ## Konfiguration
 
@@ -193,12 +193,13 @@ Woher die Keys kommen:
 
 - Anmeldung für einen Benutzer: Passwort als scrypt-Hash, HMAC-signiertes Sitzungs-Cookie (`HttpOnly`, `SameSite=Strict`, `Secure` bei HTTPS), Schutz gegen Durchprobieren, Same-Origin-Prüfung aller API-Anfragen, strikte Content Security Policy.
 - Der Container läuft als unprivilegierter Benutzer mit schreibgeschütztem Root-Dateisystem, ohne Capabilities und mit `no-new-privileges`.
-- Netzwerk-Tools und Scans erreichen nur öffentliche Adressen, solange `TOOLS_ALLOW_PRIVATE=1` nicht gesetzt ist; Hostnamen werden einmal aufgelöst und jede Adresse geprüft (kein DNS-Rebinding), es ist keine Shell beteiligt. Private Adressen gehen nie an Globalping.
+- Netzwerk-Tools und Scans erreichen nur öffentliche Adressen, solange `TOOLS_ALLOW_PRIVATE=1` nicht gesetzt ist; Hostnamen werden einmal aufgelöst und jede Adresse geprüft (kein DNS-Rebinding), es ist keine Shell beteiligt. Private Adressen und interne Namen (Namen ohne Punkt, `.local`, `.lan`, `.internal`, `.home.arpa`, `fritz.box` und ähnliche) gehen nie an Dritte; Globalping löst einen Namen zusätzlich vorher lokal auf und lehnt ihn ab, wenn er auf eine private Adresse zeigt. Das DNS-Werkzeug fragt interne Namen nur beim System-Resolver an.
 - Jedes Werkzeug zeigt, ob es passiv, aktiv oder ein Eingriff ist, ob das Ziel die Anfrage sieht und welcher Dritte die Eingabe erhält. Der Zonentransfer-Test braucht pro Lauf eine Bestätigung. Links von außen (Lesezeichen, andere Seiten) öffnen den Werkzeugkasten, starten aber nie selbst einen Lauf.
 - **Aktive Scans:** nur Systeme scannen, die dir gehören oder für die du eine Freigabe hast. Emberwatch scannt ein Asset erst nach ausdrücklicher Bestätigung und begrenzt Hosts, Ports und Parallelität. Das Scannen fremder Systeme kann strafbar sein.
 - Hochgeladene Logs werden in einer temporären Datei verarbeitet und sofort gelöscht; nur das Ergebnis geht an den Browser. Syslog-Zeilen werden nur als Alarm zu bekannten Indikatoren gespeichert.
 - Gemini-Lageberichte erhalten nur aggregierte Kennzahlen und erkannte Muster: keine Opfernamen, keine Roh-IOCs, keine Assets, keine Log-Inhalte. Die Gemini-Bewertung eines Objekts (nur auf Anforderung) sendet das Objekt und die Daten seiner Seite; eigene Assets, IPs und Produkte gehen nur als Hinweis mit, Opfernamen von Leak-Sites gar nicht.
-- *Meine IP* speichert die Adressen, von denen die Oberfläche aufgerufen wird (90 Tage), den Verlauf von Heim- und Server-IP und den Hash des Melder-Tokens. Werkzeug-Läufe werden 90 Tage gespeichert und lassen sich im Verlauf löschen.
+- *Meine IP* speichert die Adressen, von denen die Oberfläche aufgerufen wird (90 Tage), den Verlauf von Heim- und Server-IP und den Hash des Melder-Tokens. Werkzeug-Läufe werden 90 Tage gespeichert (höchstens 3.000) und lassen sich im Verlauf löschen; Gemini-Analysen so lange wie Alarme (`ALERT_RETENTION_DAYS`, höchstens 2.000).
+- Anfragen sind in der Größe begrenzt: 20 MB mit Sitzung (Mail-Analyse bis 15 MB), 64 KB ohne (Login, Melder).
 - Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), DB-IP-Downloads, die Ziele, die du in Werkzeugen oder Scans wählst, und die Dritten der Werkzeuge, die du ausführst (in der Oberfläche gekennzeichnet). CyberChef öffnet sich im Browser; die Eingabe steht im URL-Fragment und geht an keinen Server.
 - Sicherung: alles liegt im Volume `/data` (`emberwatch.sqlite`, Anmeldedateien, Geodatenbanken).
 

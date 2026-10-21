@@ -3,6 +3,7 @@ mail security of a domain (SPF, DMARC, DKIM, MTA-STS, TLS-RPT, DNSSEC, optional 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import ssl
 import warnings
@@ -20,10 +21,10 @@ import dns.xfr
 
 from ..domains import registrable
 from ..surface import RISKY_PORTS, SERVICES
-from ..tools import RESOLVERS, ToolError, cert_info, check_ip, parse_host, parse_ports, resolve, tls_details
+from ..tools import RESOLVERS, ToolError, cert_info, check_ip, is_public, parse_host, parse_ports, resolve, tls_details
 from . import net
 from .common import Ctx, asn_cell, geo_of, ip_cell, is_global, loc_text, obj_for, relate_ip
-from .detect import norm_host, url_host
+from .detect import internal_name, norm_host, url_host
 from .registry import ToolSpec
 from .result import Result, cell
 
@@ -500,10 +501,22 @@ def _axfr_sync(ip: str, zone: str) -> dict[str, Any]:
     return {"ok": count > 0, "count": count, "sample": sample, "why": None if count else "empty"}
 
 
+DNS_PARTY = {"cloudflare": "Cloudflare DNS (1.1.1.1)", "google": "Google Public DNS (8.8.8.8)", "quad9": "Quad9 DNS (9.9.9.9)"}
+
+
 async def dnsdeep(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any], kind: str) -> dict[str, Any]:
+    party = DNS_PARTY.get(params["resolver"])
+    if party:  # internal names and private addresses only go to the system resolver
+        try:
+            private = kind == "ip" and not is_public(ipaddress.ip_address(target))
+        except ValueError:
+            private = False
+        if private or (kind == "domain" and internal_name(target)):
+            raise ToolError("err.tb.third_private_dns", addr=target, party=party)
     d = await ctx.tk.dns_lookup(target, params["resolver"], ctx.lang)
     host = d["target"]
     res = Result("dns", ctx.lang, host, ("ip" if kind == "ip" else "domain", host))
+    res.third_party = party or ""  # system resolver: your own infrastructure
     rows = []
     for rtype, recs in d["records"].items():
         for x in recs:

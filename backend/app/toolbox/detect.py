@@ -46,6 +46,17 @@ def norm_host(raw: str) -> str | None:
     return host if HOST_RE.match(host) else None
 
 
+# Names that only exist inside a network (RFC 6762, RFC 8375, common router and company defaults).
+INTERNAL_SUFFIXES = ("local", "localhost", "localdomain", "lan", "internal", "intranet", "corp", "home", "home.arpa",
+                     "private", "fritz.box")
+
+
+def internal_name(host: str) -> bool:
+    """True for single-label names and names under an internal suffix (nas, nas.fritz.box, srv.corp)."""
+    h = host.lower().rstrip(".")
+    return "." not in h or any(h == s or h.endswith("." + s) for s in INTERNAL_SUFFIXES)
+
+
 def is_domain(host: str | None) -> bool:
     """A hostname with at least one dot and a plausible top-level label (letters or an IDNA label)."""
     if not host or "." not in host:
@@ -100,10 +111,11 @@ def detect(q: str | None) -> dict[str, Any]:
         return {"type": "text", "value": raw[:MAX_LINE], "display": raw[:80]}
     s, refanged = refang(raw)
     base: dict[str, Any] = {"refanged": refanged}
-    # IP address (also [v6] and IPv6 zone-less)
+    # IP address (also [v6]); IPv6 zone IDs (fe80::1%eth0) are not accepted: only meaningful on the local host
     try:
         ip = ipaddress.ip_address(s.strip("[]"))
-        return {**base, "type": "ip", "value": str(ip), "display": str(ip), "sub": f"v{ip.version}"}
+        if getattr(ip, "scope_id", None) is None:
+            return {**base, "type": "ip", "value": str(ip), "display": str(ip), "sub": f"v{ip.version}"}
     except ValueError:
         pass
     if "/" in s and "://" not in s:

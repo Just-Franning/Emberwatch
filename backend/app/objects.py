@@ -22,7 +22,7 @@ from .i18n import AppError
 from .logs import _norm_url
 from .toolbox import registry as tbreg
 from .toolbox.common import cache_get
-from .toolbox.detect import detect, norm_host
+from .toolbox.detect import detect
 from .toolbox.result import Result, cell, max_sev
 
 TYPES = ("ip", "cidr", "asn", "domain", "url", "hash", "cve", "country", "malware", "group", "vendor")
@@ -36,10 +36,30 @@ def _d(v: Any) -> str:
     return str(v)[:16].replace("T", " ") if v else "–"
 
 
+def _needle_re(needle: str, kind: str) -> re.Pattern[str]:
+    """The object value as a whole token inside the JSON of alert parameters (see Objects._alerts_with)."""
+    n = re.escape(needle)
+    if kind == "domain":  # subdomains, mail addresses and URLs count: www.example.de, a@example.de, https://example.de/x
+        return re.compile(r"(?<![A-Za-z0-9_-])" + n + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])", re.I)
+    if kind == "ip" and ":" in needle:
+        return re.compile(r"(?<![A-Za-z0-9_.:-])" + n + r"(?![A-Za-z0-9_:-]|\.[0-9])", re.I)
+    if kind == "ip":  # 1.2.3.4:443 counts
+        return re.compile(r"(?<![A-Za-z0-9_.:-])" + n + r"(?![A-Za-z0-9_-]|\.[0-9])", re.I)
+    return re.compile(r"(?<![A-Za-z0-9_.-])" + n + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])", re.I)
+
+
+def _asn_field(v: Any, asn: int, key: str = "") -> bool:
+    if isinstance(v, dict):
+        return any(_asn_field(x, asn, str(k)) for k, x in v.items())
+    if isinstance(v, list):
+        return any(_asn_field(x, asn, key) for x in v)
+    return isinstance(v, int) and not isinstance(v, bool) and v == asn and any(s in key for s in ("asn", "origin", "expected"))
+
+
 def normalize(otype: str, value: str) -> str:
     """Validated, canonical object value. Raises AppError for invalid input."""
     v = (value or "").strip()
-    if otype not in TYPES or not v or len(v) > 300:
+    if otype not in TYPES or not v or len(v) > (2048 if otype == "url" else 300):
         raise AppError("err.obj.invalid")
     if otype in ("ip", "cidr", "asn", "domain", "url", "hash", "cve"):
         det = detect(v if otype != "asn" or v.upper().startswith("AS") else f"AS{v}")
@@ -69,16 +89,22 @@ class Objects:
         self.myip = myip
 
     # --- shared ------------------------------------------------------------------------------------------------
-    def _alerts_with(self, needle: str, lang: str, limit: int = 30) -> list[dict[str, Any]]:
-        like = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        rows = self.db.query("SELECT * FROM alerts WHERE params LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?", (like, limit * 3))
+    def _alerts_with(self, needle: str, lang: str, kind: str = "other", limit: int = 30) -> list[dict[str, Any]]:
+        """Alerts whose parameters name the object as a whole value: 1.2.3.4 does not match 1.2.3.45, AS1 not AS13335.
+        Domains also match their subdomains; an ASN also matches numeric origin/asn fields (BGP alerts)."""
+        rx = _needle_re(needle, kind)
+        asn = int(needle[2:]) if kind == "asn" else None
+        likes = [needle] + ([str(asn)] if asn is not None else [])
+        where = " OR ".join("params LIKE ? ESCAPE '\\'" for _ in likes)
+        args = ["%" + x.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for x in likes]
+        rows = self.db.query(f"SELECT * FROM alerts WHERE {where} ORDER BY id DESC LIMIT ?", (*args, limit * 10))
         out = []
         for r in rows:
             try:
                 params = json.loads(r["params"] or "{}")
             except ValueError:
                 continue
-            if needle in json.dumps(params, ensure_ascii=False):
+            if rx.search(json.dumps(params, ensure_ascii=False)) or (asn is not None and _asn_field(params, asn)):
                 out.append(alerts.render(r, lang))
             if len(out) >= limit:
                 break
@@ -106,7 +132,8 @@ class Objects:
         return out
 
     def _history(self, otype: str, value: str) -> list[dict[str, Any]]:
-        return self.db.query("SELECT id, created_at, tool, recipe, sev FROM tool_runs WHERE obj_type=? AND obj_value=? "
+        return self.db.query("SELECT id, created_at, tool, recipe, obj_type, obj_value, target, sev FROM tool_runs "
+                             "WHERE obj_type=? AND obj_value=? "
                              "ORDER BY id DESC LIMIT 30", (otype, value))
 
     def _page(self, r: Result, otype: str, value: str, title: str, subtitle: str | None, mine: dict[str, Any],
@@ -204,7 +231,7 @@ class Objects:
             r.find("info", "ob.f.own", value=", ".join(w["value"] for w in own[:3]))
         if myip:
             r.find("info", "ob.f.myip", kind=r.t(f"ob.myip.{myip}"))
-        al = self._alerts_with(ip, lang)
+        al = self._alerts_with(ip, lang, "ip")
         return self._page(r, "ip", ip, ip, " · ".join(x for x in (asn, place) if x) or None,
                           {"assets": self._mine_assets(own), "myip": myip}, al)
 
@@ -240,7 +267,7 @@ class Objects:
                 continue
         if own:
             r.find("info", "ob.f.own", value=", ".join(w["value"] for w in own[:3]))
-        return self._page(r, "cidr", net_s, net_s, None, {"assets": self._mine_assets(own), "myip": None}, self._alerts_with(net_s, lang))
+        return self._page(r, "cidr", net_s, net_s, None, {"assets": self._mine_assets(own), "myip": None}, self._alerts_with(net_s, lang, "cidr"))
 
     # --- AS --------------------------------------------------------------------------------------------------------------
     def _asn(self, asn_s: str, lang: str) -> dict[str, Any]:
@@ -294,7 +321,7 @@ class Objects:
         for k in list(ccs)[:5]:
             r.rel("country", k)
         return self._page(r, "asn", asn_s, f"AS{asn}", name, {"assets": self._mine_assets(own), "myip": None},
-                          self._alerts_with(f"AS{asn}", lang))
+                          self._alerts_with(f"AS{asn}", lang, "asn"))
 
     # --- domain ------------------------------------------------------------------------------------------------------------
     def _domain(self, dom: str, lang: str) -> dict[str, Any]:
@@ -340,7 +367,7 @@ class Objects:
                 r.rel("ip", ip)
         if base != dom:
             r.rel("domain", base)
-        al = self._alerts_with(dom, lang)
+        al = self._alerts_with(dom, lang, "domain")
         return self._page(r, "domain", dom, dom, None, {"assets": self._mine_assets(own), "myip": None}, al)
 
     # --- URL -------------------------------------------------------------------------------------------------------------------
@@ -348,17 +375,22 @@ class Objects:
         r = Result("obj", lang, url, ("url", url))
         det = detect(url)
         host = det.get("host") or ""
+        try:
+            ipaddress.ip_address(host)
+            hkind = "ip"
+        except ValueError:
+            hkind = "domain"
         n = _norm_url(url)
-        hits = (self.matcher.match("url", n) if n else []) + (self.matcher.match("domain", host) if norm_host(host) else [])
-        r.kv(r.t("ob.sec.facts"), [("URL", cell(url, mono=True)), (r.t("ob.k.host"), cell(host, obj=("domain", host) if norm_host(host) else ("ip", host))),
+        hits = (self.matcher.match("url", n) if n else []) + (self.matcher.match(hkind, host) if host else [])
+        r.kv(r.t("ob.sec.facts"), [("URL", cell(url, mono=True)), (r.t("ob.k.host"), cell(host, obj=(hkind, host)) if host else None),
                                    (r.t("ob.k.matches"), len(hits))])
         r.table(r.t("ob.sec.matches"), [r.t("ob.c.source"), r.t("ob.c.malware"), r.t("ob.c.threat")],
                 [[h.get("kind"), h.get("malware") or "", h.get("threat") or ""] for h in hits])
         if hits:
             r.find("high", "ob.f.url_ioc", n=len(hits))
         if host:
-            r.rel("domain" if norm_host(host) else "ip", host)
-        return self._page(r, "url", url, url, host, {"assets": [], "myip": None}, self._alerts_with(host, lang) if host else [])
+            r.rel(hkind, host)
+        return self._page(r, "url", url, url, host, {"assets": [], "myip": None}, self._alerts_with(host, lang, hkind) if host else [])
 
     # --- hash -------------------------------------------------------------------------------------------------------------------
     def _hash(self, h: str, lang: str) -> dict[str, Any]:
@@ -569,7 +601,10 @@ class Objects:
         d30 = [k for k in kev if (k["date_added"] or "") >= _cutoff(30)[:10]]
         prods = self.db.query("SELECT id, vendor, product FROM products WHERE vendor = ? COLLATE NOCASE", (vendor,))
         r.kv(r.t("ob.sec.facts"), [(r.t("ob.k.vendor"), vendor), (r.t("ob.k.kev_total"), len(kev)), (r.t("ob.k.kev_30d"), len(d30)),
-                                   (r.t("ob.k.watched"), ", ".join(f"{p['vendor']} {p['product']}".strip() for p in prods) or r.t("ob.v.no"))])
+                                   (r.t("ob.k.watched"), r.t("ob.v.yes") if prods else r.t("ob.v.no"))])
+        if prods:
+            r.items(r.t("ob.k.watched"), [f"{p['vendor']} {p['product']}".strip() for p in prods])
+            r.sections[-1]["no_ai"] = True  # the user's own products: Gemini only gets the yes/no above
         r.table(r.t("ob.sec.kev"), ["CVE", r.t("ob.c.product"), r.t("ob.c.date"), "EPSS", r.t("ob.c.ransomware")],
                 [[cell(k["cve"], obj=("cve", k["cve"])), k["product"], k["date_added"], f"{k['epss']:.3f}" if k["epss"] is not None else "–",
                   r.t("ob.v.yes") if (k["ransomware"] or "").lower() == "known" else ""] for k in kev[:80]])

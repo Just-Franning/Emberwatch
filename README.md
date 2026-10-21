@@ -131,7 +131,7 @@ Keyboard shortcuts: `Ctrl+K` command palette, `1` `2` `3` switch areas, `/` sear
 
 The home IP is learned in one of three ways (they can be combined):
 
-1. **When you open Emberwatch**: *My IP* shows the address you are connected from and takes it over on request. Optionally it is taken over automatically whenever you connect from the same network (AS) again, so mobile networks or hotels are ignored. This needs a reverse proxy that sets `X-Forwarded-For`.
+1. **When you open Emberwatch**: *My IP* shows the address you are connected from and takes it over on request. Optionally it is taken over automatically whenever you connect from the same network (AS) again, so mobile networks or hotels are ignored (IPv4 only: over IPv6 the browser shows the device's own, often temporary address; devices from the home /64 count as home). This needs a reverse proxy that sets `X-Forwarded-For`.
 2. **DynDNS host name**: if a host name points to your connection, Emberwatch resolves it every 10 minutes.
 3. **Reporter with a token** (created under *My IP*, shown once, only its hash is stored):
    ```bash
@@ -140,7 +140,7 @@ The home IP is learned in one of three ways (they can be combined):
    ```
    dyndns2 clients (routers, ddclient, inadyn) use `https://emberwatch.example.org/nic/update?myip=<ipaddr>` with HTTP basic auth (any user name, password = token).
 
-Both paths authenticate with the token and are reachable without a session. If a login or SSO in front of Emberwatch (e.g. Pangolin, Authelia) protects every path, add an exception for `/api/myip/report` and `/nic/update`.
+Both paths authenticate with the token and are reachable without a session. A valid token is never locked out; failed attempts are answered more slowly after 10 failures within 10 minutes (HTTP 429 for the curl reporter). Address changes are accepted at most every 20 seconds per address family. If a login or SSO in front of Emberwatch (e.g. Pangolin, Authelia) protects every path, add an exception for `/api/myip/report` and `/nic/update`.
 
 ## Configuration
 
@@ -193,12 +193,13 @@ Where to get the keys:
 
 - Single-user login: scrypt-hashed password, HMAC-signed session cookie (`HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS), brute-force limit, same-origin checks for all API requests, strict Content Security Policy.
 - The container runs as an unprivileged user with a read-only root filesystem, all capabilities dropped and `no-new-privileges`.
-- Network tools and scans only reach public addresses unless `TOOLS_ALLOW_PRIVATE=1`; host names are resolved once and every address is checked (no DNS rebinding); no shell is involved. Private addresses are never sent to Globalping.
+- Network tools and scans only reach public addresses unless `TOOLS_ALLOW_PRIVATE=1`; host names are resolved once and every address is checked (no DNS rebinding); no shell is involved. Private addresses and internal names (single-label names, `.local`, `.lan`, `.internal`, `.home.arpa`, `fritz.box` and similar) are never sent to a third party; Globalping additionally resolves a name locally first and refuses it if it points to a private address. The DNS tool sends internal names only to the system resolver.
 - Every tool shows whether it is passive, active or intrusive, whether the target sees the request and which third party receives the input. The zone transfer test needs a confirmation per run. Links from outside (bookmarks, other sites) open the tool box but never start a run by themselves.
 - **Active scans:** only scan systems you own or are authorised to test. Emberwatch scans an asset only after explicit confirmation and limits hosts, ports and parallelism. Scanning third-party systems can be illegal.
 - Uploaded logs are processed in a temporary file and deleted immediately; only the result goes back to the browser. Syslog lines are only kept as alerts for known indicators.
 - Gemini situation reports only receive aggregated figures and detected patterns: no victim names, no raw IOCs, no assets, no log contents. The Gemini assessment of an object (only on request) sends the object and the data of its page; your own assets, IPs and products are reduced to a flag and leak site victim names are left out.
-- *My IP* stores the addresses the interface is opened from (90 days), the history of your home and server IPs and the hash of the reporter token. Tool runs are stored for 90 days and can be deleted in the history.
+- *My IP* stores the addresses the interface is opened from (90 days), the history of your home and server IPs and the hash of the reporter token. Tool runs are stored for 90 days (at most 3,000) and can be deleted in the history; Gemini analyses are kept as long as alerts (`ALERT_RETENTION_DAYS`, at most 2,000).
+- Request bodies are limited: 20 MB with a session (mail analysis up to 15 MB), 64 KB without one (login, reporter).
 - Outbound connections: the data sources listed below, the basemap tiles (OpenFreeMap, loaded by the browser), DB-IP downloads, the targets you choose in the tools or scans, and the third parties of the tools you run (labelled in the interface). CyberChef opens in the browser; the input stays in the URL fragment and is not sent to a server.
 - Backups: everything lives in the `/data` volume (`emberwatch.sqlite`, login files, geolocation databases).
 

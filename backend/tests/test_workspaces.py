@@ -238,12 +238,12 @@ def handler(request: httpx.Request) -> httpx.Response:
             "delivery_method": "email_attachment", "vendor_intel": {"ReversingLabs": {}, "ANY.RUN": []}}]})
     if h == "stat.ripe.net":
         if path.startswith("/data/rpki-validation/"):
-            status = {("64500", "198.51.100.0/24"): "invalid_asn", ("45.67.0.0/22", "3320"): "valid"}.get(
+            status = {("64500", "185.199.108.0/24"): "invalid_asn", ("45.67.0.0/22", "3320"): "valid"}.get(
                 (params["resource"], params["prefix"]), "valid" if params["prefix"] != "10.0.0.0/8" else "unknown")
             return httpx.Response(200, json={"status": "ok", "data": {"resource": params["resource"], "prefix": params["prefix"],
                                                                       "status": status, "validating_roas": []}})
-        if path.startswith("/data/prefix-overview/") and params["resource"].startswith("198.51.100."):
-            return httpx.Response(200, json={"data": {"resource": "198.51.100.0/24", "announced": True, "is_less_specific": False,
+        if path.startswith("/data/prefix-overview/") and params["resource"].startswith("185.199.108."):
+            return httpx.Response(200, json={"data": {"resource": "185.199.108.0/24", "announced": True, "is_less_specific": False,
                                                       "asns": [{"asn": 3320, "holder": "DTAG"}, {"asn": 64500, "holder": "Evil"}]}})
     if h == "rdap.org":
         assert request.headers["accept"].startswith("application/rdap+json")
@@ -360,6 +360,15 @@ def test_registry_and_texts(m):
     assert det("Received: from a by b\nSubject: x\n")["type"] == "mailhdr"
 
 
+def test_plural_forms():
+    from app import i18n
+    assert i18n.t("en", "tb.s.trace_ok", n=1) == "Target reached after 1 hop"
+    assert i18n.t("en", "tb.s.trace_ok", n=12) == "Target reached after 12 hops"
+    assert i18n.t("de", "tb.f.cert_expiring", days=1) == "Zertifikat läuft in 1 Tag ab"
+    assert i18n.t("de", "tb.s.mail", hops=1, spf="pass", dkim="pass", dmarc="pass", links=0, atts=1).endswith("0 Links · 1 Anhang")
+    assert i18n.t("de", "ob.f.asn_c2", n=1).startswith("1 aktiver C2-Server")
+
+
 def test_input_errors_are_translated(m):
     from fastapi.testclient import TestClient
     with TestClient(m.app) as tc:
@@ -379,20 +388,43 @@ def test_input_errors_are_translated(m):
 # ------------------------------------------------------------------------------------------------------------------------
 # Tools against mocked third parties
 
-def test_globalping(m):
-    res = result(run(m, "globalping", "example.com", {"mode": "ping", "limit": 2, "location": "Europe"}))
-    assert GP["body"] == {"type": "ping", "target": "example.com", "limit": 2, "measurementOptions": {"packets": 3},
+def test_globalping(m, fdns):
+    res = result(run(m, "globalping", "rdap.org", {"mode": "ping", "limit": 2, "location": "Europe"}))
+    assert GP["body"] == {"type": "ping", "target": "rdap.org", "limit": 2, "measurementOptions": {"packets": 3},
                           "locations": [{"magic": "Europe"}]}
     assert res["third_party"] and res["target_sees"] is True
     assert keys(res) == {"tb.f.gp_failed": "medium"}  # 1 of 2 probes failed
     probes = section(res, "probe")["rows"]
     assert probes[0][0] == "Frankfurt, Germany" and probes[0][2]["sev"] == "ok"
     assert len([p for p in res["map"]["points"] if p["kind"] == "probe"]) == 2
-    ev = run(m, "globalping", "10.1.2.3", {"mode": "ping"})
-    assert ev[-1]["type"] == "error" and ev[-1]["key"] == "err.tool.private"  # private targets never go to Globalping
+    result(run(m, "globalping", "https://rdap.org:8443/x", {"mode": "traceroute"}))
+    assert GP["body"]["target"] == "rdap.org"  # host taken from a URL with port
+    # private addresses, internal names and names that resolve to private addresses never go to Globalping
+    for target in ("10.1.2.3", "nas.fritz.box", "example.test", "https://[fd00::1]:443/"):
+        GP["body"] = None
+        ev = run(m, "globalping", target, {"mode": "ping"})
+        assert ev[-1]["type"] == "error" and ev[-1]["key"] == "err.tb.third_private", (target, ev[-1])
+        assert GP["body"] is None
     GP["status"] = 429
-    assert run(m, "globalping", "example.com", {"mode": "http"})[-1]["key"] == "err.tb.gp_limit"
+    assert run(m, "globalping", "rdap.org", {"mode": "http"})[-1]["key"] == "err.tb.gp_limit"
     assert GP["body"]["measurementOptions"] == {"request": {"method": "HEAD", "path": "/"}, "protocol": "HTTPS"}
+
+
+def test_third_party_privacy(m):
+    for tool, target in (("greynoise", "192.168.1.10"), ("pdns", "nas.fritz.box"), ("rdap", "10.0.0.0/8"),
+                         ("bgp", "172.16.0.1"), ("pdns", "srv01.corp"), ("mailsec", "it@mail.intern.lan")):
+        with pytest.raises(m.AppError) as exc:
+            m.tbrun.prepare(m.tbreg.BY_ID[tool], target, {}, False)
+        assert exc.value.key == "err.tb.third_private", (tool, target)
+    c = client()
+
+    async def go():  # in a recipe the third-party steps report the reason instead of sending
+        val, kind = m.tbrun.prepare_recipe("ip", "10.20.30.40")
+        return [e async for e in m.tbrun.run_recipe(ctx(m, c), "ip", val, kind)]
+    final = asyncio.run(go())[-1]["result"]
+    errs = {s["tool"]: s["error"] for s in final["steps"] if s.get("error")}
+    assert set(errs) == {"greynoise", "pdns", "bgp"} and all("not sent to" in e for e in errs.values())
+    assert not final["third_party"] or "GreyNoise" not in final["third_party"]
 
 
 def test_pdns_greynoise_hash(m):
@@ -417,7 +449,7 @@ def test_pdns_greynoise_hash(m):
 
 
 def test_bgp_rdap_ct_lookalike(m, fdns):
-    pre = result(run(m, "bgp", "198.51.100.0/24"))
+    pre = result(run(m, "bgp", "185.199.108.0/24"))
     assert keys(pre) == {"tb.f.moas": "medium", "tb.f.rpki_invalid": "high"}
     asn = result(run(m, "bgp", "AS3320"))
     assert keys(asn) == {"tb.f.rpki_unknown_n": "low"}
@@ -482,7 +514,7 @@ Authentication-Results: inbox.recv.example; spf=pass smtp.mailfrom=bank.example;
 From: "Bank" <service@bank.example>
 Reply-To: help@collector.example
 To: you@recv.example
-Subject: Konto gesperrt
+Subject: Konto gesperrt – Grüße
 Date: Tue, 20 Oct 2026 10:00:00 +0000
 Message-ID: <1@bank.example>
 MIME-Version: 1.0
@@ -499,6 +531,17 @@ Content-Disposition: attachment; filename="rechnung.pdf.exe"
 Content-Transfer-Encoding: base64
 
 TVqQAAMAAAAEAAAA
+--b1
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="Rechnung_März.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQK
+--b1
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Grüße, Ihre Bank: https://bänk-login.example/ö
 --b1--
 """
 
@@ -513,8 +556,10 @@ def test_mailhdr(m):
     assert [r[2]["t"] if isinstance(r[2], dict) else r[2] for r in path] == ["198.51.100.7", "192.0.2.10"]  # oldest hop first
     links = {r[0]["t"]: r for r in section(res, "links")["rows"]}
     assert "https://login.evil.example/x?a=1&b=2" in links and "http://203.0.113.9/p" in links
-    att = section(res, "attachments")["rows"][0]
-    assert att[0]["t"] == "rechnung.pdf.exe" and att[3]["obj"]["type"] == "hash"
+    att = section(res, "attachments")["rows"]
+    assert att[0][0]["t"] == "rechnung.pdf.exe" and att[0][3]["obj"]["type"] == "hash"
+    assert att[1][0] == "Rechnung_März.pdf"  # raw UTF-8 in MIME headers (common) is read correctly
+    assert res["target"] == "Konto gesperrt – Grüße" and any("bänk-login.example" in u or "xn--" in u for u in links)
     assert res["target_sees"] is False and res["third_party"] is None  # lookup off: nothing leaves the server
 
 
@@ -610,6 +655,44 @@ def test_gemini_object_context(m):
         assert [x["scope"] for x in tc.get("/api/ai/reports", params={"scope": "obj:ip:8.8.8.8"}).json()] == ["obj:ip:8.8.8.8"]
 
 
+def test_object_alerts_whole_values_and_own_products(m):
+    from app import alerts
+    from app.objects import object_context
+    for i, params in enumerate(({"indicator": "1.2.3.45"}, {"indicator": "11.2.3.4"}, {"indicator": "1.2.3.4", "line": "x"},
+                                {"asset": "AS13335 (Cloudflare)"}, {"asset": "AS1 (Level3)"}, {"origin": 1, "prefix": "4.0.0.0/9"},
+                                {"names": ["www.example.de"]}, {"names": ["www.example.de.evil.example"]})):
+        alerts.add(m.db, "syslog", "medium", "syslog.hit", params, f"r{i}")
+
+    def page(t, v):
+        return asyncio.run(m.objects.build(t, v, "en", client()))
+    assert len(page("ip", "1.2.3.4")["alerts"]) == 1  # not 1.2.3.45 or 11.2.3.4
+    assert len(page("asn", "AS1")["alerts"]) == 2  # asset label and numeric BGP origin, not AS13335
+    assert len(page("domain", "example.de")["alerts"]) == 1  # subdomain yes, look-alike suffix no
+    m.db.insert("INSERT INTO products(vendor, product, created_at) VALUES(?,?,?)", ("Sophos", "Firewall XG", m.utcnow()))
+    ven = page("vendor", "Sophos")
+    assert any("Sophos Firewall XG" in json.dumps(s) for s in ven["sections"])  # shown in the UI ...
+    ctx = json.dumps(object_context(ven))
+    assert "Firewall XG" not in ctx and json.loads(ctx)["relates_to_own_assets"] is True  # ... but only a flag goes to Gemini
+
+
+def test_request_body_limits(m):
+    from fastapi.testclient import TestClient
+    with TestClient(m.app) as tc:
+        big = tc.post("/api/tb/run", content=b"{}", headers={"Content-Type": "application/json", "Content-Length": str(21 * 1024 * 1024)})
+        assert big.status_code == 413 and big.json()["key"] == "err.body_too_large"
+        pub = tc.post("/api/myip/report", content=b"x" * (65 * 1024), headers={"Authorization": "Bearer x"})
+        assert pub.status_code == 413
+        assert tc.post("/api/myip/report", headers={"Authorization": "Bearer x"}).status_code in (400, 401)
+
+
+def test_dns_resolver_privacy(m, fdns):
+    ev = run(m, "dns", "nas.fritz.box")  # default resolver: Cloudflare
+    assert ev[-1]["key"] == "err.tb.third_private_dns"
+    res = result(run(m, "dns", "example.test"))
+    assert res["third_party"] == "Cloudflare DNS (1.1.1.1)"
+    assert result(run(m, "dns", "example.test", {"resolver": "system"}))["third_party"] is None
+
+
 # ------------------------------------------------------------------------------------------------------------------------
 # Own IP, reporter, dyndns2, "my network"
 
@@ -651,15 +734,23 @@ def test_myip_flow(m):
 
         basic = {"Authorization": "Basic " + base64.b64encode(f"router:{tok}".encode()).decode(), "X-Forwarded-For": "84.150.9.10"}
         assert tc.get("/nic/update", params={"myip": "84.150.9.10"}).text == "badauth"
-        m.myip._last_report = 0.0  # the 20 s spacing between changes is tested above
+        m.myip._last_report.clear()  # the 20 s spacing between changes is tested above
         r = tc.get("/nic/update", params={"hostname": "x", "myip": "84.150.9.10,2003:e1:1234::1"}, headers=basic)
         assert r.status_code == 200 and r.text == "good 84.150.9.10 2003:e1:1234::1"
         assert tc.get("/nic/update", params={"myip": "84.150.9.10"}, headers=basic).text == "nochg 84.150.9.10"
+        # someone sends bad requests in the name of the home address: failures are slowed down ...
         for _ in range(10):
             tc.get("/nic/update", headers={"Authorization": "Basic " + base64.b64encode(b"x:nope").decode(),
-                                           "X-Forwarded-For": "93.184.216.34"})
-        locked = tc.post("/api/myip/report", headers={**bearer, "X-Forwarded-For": "93.184.216.34"})
+                                           "X-Forwarded-For": "84.150.9.10"})
+        locked = tc.post("/api/myip/report", headers={"Authorization": "Bearer nope", "X-Forwarded-For": "84.150.9.10"})
         assert locked.status_code == 429 and locked.json()["status"] == "locked"
+        # ... but the router with the valid token is never locked out
+        assert tc.get("/nic/update", params={"myip": "84.150.9.10"}, headers=basic).text == "nochg 84.150.9.10"
+        assert tc.post("/api/myip/report", headers=bearer).json()["status"] == "nochg"
+        # IPv6 zone IDs are no addresses to store; devices from the home /64 count as home
+        assert tc.post("/api/myip/report", params={"ip": "2003:e1:1234::1%<img src=x>"}, headers=bearer).status_code == 400
+        v6 = tc.post("/api/myip/visit", headers={"X-Forwarded-For": "2003:e1:1234::abcd"}).json()
+        assert v6["is_home"] is True and v6["suggest"] is False and v6["auto_applied"] is False
 
         asyncio.run(m.myip.check(client(), "home"))
         st = tc.get("/api/myip").json()
@@ -684,13 +775,15 @@ def test_myip_flow(m):
 
 def test_myip_auto_asn_and_jobs(m, monkeypatch):
     seed(m)
-    monkeypatch.setattr(m.geo, "lookup", lambda ip: {"asn": 3320, "as_name": "DTAG", "country": "DE"} if ip.startswith("84.") else
-                        {"asn": 12345, "as_name": "Mobile", "country": "DE"})
+    monkeypatch.setattr(m.geo, "lookup", lambda ip: {"asn": 3320, "as_name": "DTAG", "country": "DE"} if ip.startswith(("84.", "2003:"))
+                        else {"asn": 12345, "as_name": "Mobile", "country": "DE"})
     m.myip.set_ip("home", "84.150.1.2", "confirmed")
     assert m.myip.configure(None, True)["auto_asn"] == 3320
     assert m.myip.visit("80.187.1.1")["auto_applied"] is False  # mobile network: only a sighting
     assert m.myip.visit("84.150.3.3")["auto_applied"] is True
     assert m.myip.current()["home"] == ["84.150.3.3"]
+    v6 = m.myip.visit("2003:e1:9999::42")  # same AS over IPv6: the device address is not taken over automatically
+    assert v6["auto_applied"] is False and v6["suggest"] is True and m.myip.current()["home"] == ["84.150.3.3"]
     assert m.myip.needs_check("home") is True and m.myip.needs_check("server") is False
 
     async def origin(c, max_age=0):

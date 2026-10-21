@@ -11,8 +11,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ..tools import ToolError, parse_host, resolve
+from ..tools import ToolError, is_public, parse_host, resolve
 from .common import Ctx, as_text, asn_cell, geo_of, ip_cell, is_global, loc_text, obj_for, relate_ip
+from .detect import internal_name
 from .registry import ToolSpec
 from .result import Result, cell
 
@@ -266,16 +267,43 @@ async def pathq(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any]) -
 
 
 # --- Globalping -----------------------------------------------------------------------------------------------------
+def _gp_host(target: str) -> str:
+    """Host part of a Globalping target: URL, host:port, [v6]:port or a bare host/IP."""
+    t = target.strip()
+    if "://" in t:
+        try:
+            host = urlsplit(t).hostname
+        except ValueError as exc:
+            raise ToolError("err.tool.target") from exc
+        if not host:
+            raise ToolError("err.tool.target")
+        return host
+    if t.startswith("[") and "]" in t:
+        return t[1:t.index("]")]
+    if t.count(":") == 1:  # host:port (IPv6 literals have several colons)
+        return t.split(":", 1)[0]
+    return t
+
+
+def _gp_private(host: str, is_ip: bool) -> None:
+    """Private addresses and internal names are never sent to Globalping (checked again after resolution)."""
+    if (is_ip and not is_public(ipaddress.ip_address(host))) or (not is_ip and internal_name(host)):
+        raise ToolError("err.tb.third_private", addr=host, party="Globalping")
+
+
 def _gp_target(mode: str, target: str) -> tuple[str, dict[str, Any]]:
     """Validated target and measurement options for Globalping. Private targets are never sent to a third party."""
     if mode == "http":
         raw = target if "://" in target else f"https://{target}"
-        p = urlsplit(raw)
-        if p.scheme not in ("http", "https") or not p.hostname:
+        try:
+            p = urlsplit(raw)
+            hostname = p.hostname
+        except ValueError as exc:
+            raise ToolError("err.tool.target") from exc
+        if p.scheme not in ("http", "https") or not hostname:
             raise ToolError("err.tool.scheme")
-        host, is_ip = parse_host(p.hostname)
-        if is_ip and not ipaddress.ip_address(host).is_global:
-            raise ToolError("err.tool.private", addr=host)
+        host, is_ip = parse_host(hostname)
+        _gp_private(host, is_ip)
         req: dict[str, Any] = {"method": "HEAD", "path": p.path or "/"}
         if p.query:
             req["query"] = p.query
@@ -286,9 +314,8 @@ def _gp_target(mode: str, target: str) -> tuple[str, dict[str, Any]]:
         except ValueError as exc:
             raise ToolError("err.tool.port", port="?") from exc
         return host, opts
-    host, is_ip = parse_host(target.split("://", 1)[-1].split("/", 1)[0] if "://" in target else target)
-    if is_ip and not ipaddress.ip_address(host).is_global:
-        raise ToolError("err.tool.private", addr=host)
+    host, is_ip = parse_host(_gp_host(target))
+    _gp_private(host, is_ip)
     if mode == "dns":
         if is_ip:
             raise ToolError("err.tool.hostname")
@@ -314,6 +341,17 @@ async def globalping(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, An
         raise ToolError("err.tb.param", name="location")
     res = Result("globalping", ctx.lang, target)
     host, opts = _gp_target(mode, target)
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        # a name is resolved locally first: names that point to private addresses (split horizon, internal zones)
+        # or do not resolve here stay on the server
+        try:
+            await resolve(host, False)
+        except ToolError as exc:
+            if exc.key == "err.tool.private":
+                raise ToolError("err.tb.third_private", addr=host, party="Globalping") from exc
+            raise
     res.obj = ("ip", host) if is_global(host) else ("domain", host)
     body: dict[str, Any] = {"type": mode, "target": host, "limit": limit, "measurementOptions": opts}
     if loc.lower() != "world":

@@ -84,11 +84,11 @@ TOOLS: tuple[ToolSpec, ...] = (
     ToolSpec("http", "hardening", ("url", "domain", "ip"), "active", True, None, aliases=("http", "headers")),
     ToolSpec("ssh", "hardening", ("ip", "domain"), "active", True, None,
              params=(Param("port", "int", 22, 1, 65535),), aliases=("ssh",)),
-    ToolSpec("dns", "hardening", ("domain", "ip"), "active", False, None, map=True,
+    ToolSpec("dns", "hardening", ("domain", "ip"), "active", False, "Cloudflare/Google/Quad9 DNS", map=True,
              params=(Param("resolver", "choice", "cloudflare", choices=("cloudflare", "google", "quad9", "system")),
                      Param("axfr", "bool", False)),
              consent="axfr", aliases=("dns", "dig")),
-    ToolSpec("mailsec", "hardening", ("domain", "email"), "active", True, None,
+    ToolSpec("mailsec", "hardening", ("domain", "email"), "active", True, "Cloudflare DNS (1.1.1.1)",
              params=(Param("starttls", "bool", False),), aliases=("mail", "spf", "dmarc")),
     # --- mail ----------------------------------------------------------------------------------------------------
     ToolSpec("mailhdr", "mail", ("mailhdr",), "passive", False, None, map=True, bar="more",

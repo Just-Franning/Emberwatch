@@ -80,7 +80,7 @@ export class MapTools {
     const isMail = tool.id === "mailhdr";
     const field = isMail
       ? el("textarea", { rows: 6, maxlength: MAX_MAIL, spellcheck: "false", placeholder: t("mt.mail_ph"), class: "mail-in" })
-      : el("input", { type: "text", maxlength: 500, spellcheck: "false", value: target, placeholder: t("mt.target_ph"), required: true });
+      : el("input", { type: "text", maxlength: 2048, spellcheck: "false", value: target, placeholder: t("mt.target_ph"), required: true });
     const pf = paramForm(tool, { compact: true });
     const runBtn = el("button", { type: "submit", class: "primary" }, t("common.run"));
     const stopBtn = el("button", { type: "button", hidden: true, onclick: () => this.stop() }, t("common.stop"));

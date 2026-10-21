@@ -41,11 +41,35 @@ SIGHTINGS_DAYS = 90
 
 
 def _public(ip: str | None) -> bool:
+    if not ip or "%" in ip:  # IPv6 zone IDs (fe80::1%eth0) are local by definition and would be stored as free text
+        return False
     try:
-        a = ipaddress.ip_address(ip or "")
+        a = ipaddress.ip_address(ip)
     except ValueError:
         return False
     return a.is_global and not a.is_multicast
+
+
+def _same(ip: str, known: list[str]) -> bool:
+    """True if ip is one of the known addresses. IPv6 compares the /64: devices behind one connection use changing
+    (privacy) addresses from the same prefix."""
+    if ip in known:
+        return True
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if a.version != 6:
+        return False
+    net = ipaddress.ip_network(f"{a}/64", strict=False)
+    for k in known:
+        try:
+            b = ipaddress.ip_address(k)
+        except ValueError:
+            continue
+        if b.version == 6 and b in net:
+            return True
+    return False
 
 
 def _family(ip: str) -> int:
@@ -62,7 +86,7 @@ class MyIP:
         self.surface = surface
         self.toolkit = toolkit
         self._fails: dict[str, deque[float]] = {}
-        self._last_report = 0.0
+        self._last_report: dict[int, float] = {}
         for k in KINDS:
             self.db.execute("INSERT OR IGNORE INTO myip(kind, config) VALUES(?, '{}')", (k,))
 
@@ -89,7 +113,7 @@ class MyIP:
 
     def match(self, ip: str) -> str | None:
         for k, ips in self.current().items():
-            if ip in ips:
+            if _same(ip, ips):
                 return k
         return None
 
@@ -161,13 +185,13 @@ class MyIP:
                         "ON CONFLICT(ip) DO UPDATE SET last_seen=excluded.last_seen, count=count+1", (ip, now, now, g.get("asn"),
                                                                                                       g.get("as_name"), g.get("country")))
         cfg = self._config()
-        cur = self.current()["home"]
         changed = False
-        if cfg.get("auto_asn") and g.get("asn") == cfg["auto_asn"] and ip not in cur:
+        # automatic take-over only for IPv4: over IPv6 the browser shows the device's own (often temporary) address
+        if cfg.get("auto_asn") and g.get("asn") == cfg["auto_asn"] and _family(ip) == 4 and not _same(ip, self.current()["home"]):
             changed = self.set_ip("home", ip, "visit")
-        cur = self.current()["home"]
-        return {"ip": ip, "public": True, "geo": g, "is_home": ip in cur, "auto_applied": changed,
-                "home_asn": cfg.get("auto_asn"), "suggest": ip not in cur}
+        home = _same(ip, self.current()["home"])
+        return {"ip": ip, "public": True, "geo": g, "is_home": home, "auto_applied": changed,
+                "home_asn": cfg.get("auto_asn"), "suggest": not home}
 
     def peek(self, client_ip: str | None) -> dict[str, Any]:
         """The address the current request comes from, without recording anything."""
@@ -175,7 +199,7 @@ class MyIP:
             return {"ip": client_ip, "public": False}
         ip = str(ipaddress.ip_address(client_ip))
         cfg = self._config()
-        return {"ip": ip, "public": True, "geo": self._geo(ip), "is_home": ip in self.current()["home"],
+        return {"ip": ip, "public": True, "geo": self._geo(ip), "is_home": _same(ip, self.current()["home"]),
                 "home_asn": cfg.get("auto_asn")}
 
     def needs_check(self, kind: str, max_age_h: float = 6) -> bool:
@@ -267,13 +291,16 @@ class MyIP:
     def report(self, token: str | None, client_ip: str | None, claimed: list[str] | None = None) -> tuple[str, list[str]]:
         """Token-authenticated update. claimed: addresses sent by the client (at most one per family); without them the
         connecting address is used. Returns (status, ips) with status ok|nochg|badauth|locked|noip|wait.
-        A change is accepted at most every 20 seconds, so a leaked token cannot flood the history and the alerts."""
+        The token is checked first: a valid token is never rejected, so nobody can lock out the router by sending bad
+        requests in its name. Failures only change the answer (locked after 10 within 10 minutes per client); the token
+        has 256 bits, guessing is not a practical attack. A change is accepted at most every 20 seconds per address family,
+        so a leaked token cannot flood the history and the alerts."""
         client = client_ip or "?"
-        if self._locked(client):
-            return "locked", []
         want = self._config().get("token_hash")
         got = hashlib.sha256((token or "").encode()).hexdigest()
         if not want or not token or not hmac.compare_digest(want, got):
+            if self._locked(client):
+                return "locked", []
             self._fails.setdefault(client, deque()).append(time.time())
             return "badauth", []
         ips: dict[int, str] = {}
@@ -285,10 +312,11 @@ class MyIP:
             return "noip", []
         cur = self.current()["home"]
         new = [ip for ip in ips.values() if ip not in cur]
-        if new and time.time() - self._last_report < 20:
+        now = time.time()
+        if any(now - self._last_report.get(_family(ip), 0.0) < 20 for ip in new):
             return "wait", list(ips.values())
-        if new:
-            self._last_report = time.time()
+        for ip in new:
+            self._last_report[_family(ip)] = now
         changed = False
         for ip in ips.values():
             changed = self.set_ip("home", ip, "report") or changed

@@ -10,6 +10,7 @@ import { RunStack } from "./runstack.js";
 import { api, countryName, dateOnly, dateTime, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
 const VIEWS = ["kev", "infra", "c2", "ransom"];
+const MAX_INPUT = 2048; // same limit as the input detection on the server (longer input counts as free text)
 let handoff = null; // long input (mail header) passed from the start page to the tool box
 
 const debounce = (fn, ms) => {
@@ -118,7 +119,7 @@ export class Analyse {
     const o = objectOf(det);
     if (o) parts.push(el("a", { class: "btn", href: href(routes.obj(o.type, o.value)) }, t("an.open_object")));
     for (const r of det.recipes || []) parts.push(el("button", { type: "button", onclick: () => this.recipeFromStart(r, q) }, t(`tb.recipe.${r}`)));
-    if (det.type !== "mailhdr") parts.push(el("a", { class: "btn plain", href: href(routes.tools(q.slice(0, 500))) }, t("an.to_tools")));
+    if (det.type !== "mailhdr") parts.push(el("a", { class: "btn plain", href: href(routes.tools(q.slice(0, MAX_INPUT))) }, t("an.to_tools")));
     return parts;
   }
 
@@ -135,7 +136,7 @@ export class Analyse {
     const box = this.main.querySelector(".detect-line");
     if (box) kids(box, el("span", { class: "muted" }, t("an.text_as")),
       ...["malware", "group", "vendor"].map((ty) => el("a", { class: "btn", href: href(routes.obj(ty, q.slice(0, 200))) }, t(`obj.type.${ty}`))),
-      el("a", { class: "btn plain", href: href(routes.tools(q.slice(0, 500))) }, t("an.to_tools")));
+      el("a", { class: "btn plain", href: href(routes.tools(q.slice(0, MAX_INPUT))) }, t("an.to_tools")));
   }
 
   // --- object page --------------------------------------------------------------------------------------------------
@@ -283,10 +284,11 @@ export class Analyse {
         err.hidden = true;
         const raw = input.value.trim();
         if (!raw) { input.focus(); return; }
+        if (tool.id !== "mailhdr" && raw.length > MAX_INPUT) { err.textContent = t("tb.too_long", { n: MAX_INPUT }); err.hidden = false; return; }
         if (pf.consentMissing()) { err.textContent = t("tb.consent_missing"); err.hidden = false; return; }
         if (tool.client_only) { window.open(cyberChefUrl(reg.cyberchef_url, input.value), "_blank", "noopener,noreferrer"); return; }
         if (tool.id === "mailhdr") this.stack.tool(tool.id, "", { ...pf.values(), text: input.value }, false);
-        else this.stack.tool(tool.id, raw.length > 500 ? raw.slice(0, 500) : raw, pf.values(), pf.consent());
+        else this.stack.tool(tool.id, raw, pf.values(), pf.consent());
       });
       kids(panel, form);
       return form;

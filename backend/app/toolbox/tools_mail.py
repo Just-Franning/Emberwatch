@@ -141,7 +141,7 @@ def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], lis
         if part.is_multipart():
             continue
         fname = _dec(part.get_filename()) if part.get_filename() else None
-        disp = (part.get("Content-Disposition") or "").lower()
+        disp = part.get_content_disposition() or ""
         ctype = part.get_content_type()
         try:
             payload = part.get_payload(decode=True) or b""
@@ -156,10 +156,15 @@ def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], lis
                          "sha256": hashlib.sha256(payload).hexdigest(), "md5": hashlib.md5(payload, usedforsecurity=False).hexdigest()})
             continue
         if ctype in ("text/plain", "text/html"):
-            try:
-                body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-            except LookupError:  # unknown charset name in the mail
-                body = payload.decode("utf-8", errors="replace")
+            raw = part.get_payload()
+            cte = str(part.get("Content-Transfer-Encoding") or "").strip().lower()
+            if isinstance(raw, str) and cte not in ("base64", "quoted-printable", "x-uuencode", "uuencode", "x-uue"):
+                body = raw[:MAX_PART]  # 7bit/8bit text arrives already decoded (the mail is parsed from text)
+            else:
+                try:
+                    body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                except LookupError:  # unknown charset name in the mail
+                    body = payload.decode("utf-8", errors="replace")
             for u in URL_RE.findall(body):
                 n = _norm_url(u.replace("&amp;", "&"))
                 if n and len(urls) < MAX_URLS:
@@ -178,8 +183,11 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
     text = params.get("text") or ""
     if not text.strip():
         raise ToolError("err.tb.mail_empty")
-    # parsing up to 15 MB is CPU work: off the event loop, so other requests and the collectors keep running
-    msg: Message = await asyncio.to_thread(email.message_from_bytes, text.encode("utf-8", errors="replace"))
+    # The browser hands over the mail as text (UTF-8 decoded). Parsing it as text keeps raw UTF-8 in headers readable
+    # (filename="Rechnung_März.pdf"); as bytes, Python returns such headers as Header objects with replacement characters.
+    # Lone surrogates from the JSON input are replaced first. Parsing up to 15 MB is CPU work: off the event loop.
+    text = text.encode("utf-8", errors="replace").decode("utf-8")
+    msg: Message = await asyncio.to_thread(email.message_from_string, text)
     res = Result("mailhdr", ctx.lang, _dec(msg.get("Subject"))[:120] or "E-Mail")
     ctx.matcher.ensure()
     own_typos = {r["candidate"]: r["domain"] for r in ctx.db.query("SELECT candidate, domain FROM typo WHERE registered=1")}

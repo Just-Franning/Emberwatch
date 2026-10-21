@@ -16,10 +16,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from .. import i18n
 from ..db import DB, utcnow
 from ..i18n import AppError
-from ..tools import parse_ports
+from ..tools import is_public, parse_ports
 from . import tools_harden, tools_ident, tools_mail, tools_net, tools_threat
 from .common import Ctx
-from .detect import detect, norm_host
+from .detect import detect, internal_name, norm_host
 from .registry import BY_ID, RECIPES, ToolSpec, available, coerce_params
 from .result import SEV_ORDER, max_sev
 
@@ -31,6 +31,37 @@ HISTORY_MAX = 3000
 
 Gen = AsyncIterator[dict[str, Any]]
 HOST_TOOLS = {"ping", "traceroute", "pathq", "ports", "tls", "http", "ssh", "dns"}
+# Third-party tools that resolve or handle private targets themselves (ipinfo: local data only, Globalping: resolves
+# first, dns: only with a public resolver) or that never send the input to a server (CyberChef: URL fragment in the browser).
+THIRD_PARTY_SELF = {"ipinfo", "globalping", "cyberchef", "dns"}  # dns: depends on the chosen resolver
+
+
+def third_party_block(spec: ToolSpec, value: str, kind: str) -> str | None:
+    """The reason (error text key) why a target must not go to the tool's third party, or None. Private addresses,
+    private networks and internal names stay on the server."""
+    if not spec.third_party or spec.id in THIRD_PARTY_SELF:
+        return None
+    if kind == "email":
+        value, kind = value.rsplit("@", 1)[-1], "domain"
+    try:
+        if kind == "ip" and not is_public(ipaddress.ip_address(value)):
+            return "err.tb.third_private"
+        if kind == "cidr":
+            net = ipaddress.ip_network(value, strict=False)
+            if not is_public(net.network_address) or not is_public(net.broadcast_address):
+                return "err.tb.third_private"
+    except ValueError:
+        return "err.tb.third_private"
+    if kind == "domain" and internal_name(value):
+        return "err.tb.third_private"
+    return None
+
+
+def _guard(spec: ToolSpec, value: str, kind: str) -> str:
+    key = third_party_block(spec, value, kind)
+    if key:
+        raise AppError(key, addr=value, party=spec.third_party)
+    return value
 
 
 def _single(fn: Callable[..., Awaitable[dict[str, Any]]], with_kind: bool) -> Callable[..., Gen]:
@@ -93,7 +124,7 @@ def prepare(spec: ToolSpec, raw: str, params: dict[str, Any] | None, consent: bo
     det = detect(raw)
     t = det["type"]
     if t in spec.inputs:
-        return det["value"], t, p
+        return _guard(spec, det["value"], t), t, p
     if t == "url" and ("domain" in spec.inputs or "ip" in spec.inputs) and det.get("host"):
         host = det["host"]
         try:
@@ -102,9 +133,9 @@ def prepare(spec: ToolSpec, raw: str, params: dict[str, Any] | None, consent: bo
         except ValueError:
             kind = "domain"
         if kind in spec.inputs:
-            return host, kind, p
+            return _guard(spec, host, kind), kind, p
     if t == "email" and "domain" in spec.inputs:
-        return det["domain"], "domain", p
+        return _guard(spec, det["domain"], "domain"), "domain", p
     if t == "text" and spec.id in HOST_TOOLS:
         host = norm_host(raw.strip())
         if host:  # single-label names (e.g. "nas") for tools that connect to a host
@@ -119,7 +150,14 @@ def check_available(spec: ToolSpec, ctx: Ctx) -> None:
 
 
 # --- history -------------------------------------------------------------------------------------------------------
+_saves = 0
+
+
 def save(db: DB, result: dict[str, Any], recipe: str | None = None) -> int:
+    global _saves
+    _saves += 1
+    if _saves % 100 == 0:  # also without the daily maintenance job (COLLECTORS=0) the history stays bounded
+        prune(db)
     obj = result.get("object") or {}
     payload = json.dumps(result, ensure_ascii=False, default=str)
     if len(payload) > MAX_PAYLOAD:
@@ -204,6 +242,9 @@ async def _collect(ctx: Ctx, tool: str, target: str, kind: str, params: dict[str
         p = coerce_params(spec, params)
     except ValueError:
         return {"tool": tool, "error": i18n.t(ctx.lang, "err.tb.param", name=tool)}
+    blocked = third_party_block(spec, target, kind)
+    if blocked:
+        return {"tool": tool, "error": i18n.t(ctx.lang, blocked, addr=target, party=spec.third_party)}
     out: dict[str, Any] = {"tool": tool}
     gen = HANDLERS[tool](ctx, spec, target, p, kind)
     try:
@@ -256,12 +297,14 @@ async def run_recipe(ctx: Ctx, rid: str, target: str, kind: str) -> Gen:
     t0 = time.perf_counter()
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     steps: list[dict[str, Any]] = []
+    tasks: list[asyncio.Future[dict[str, Any]]] = []
 
     async def batch(items: list[tuple[str, dict[str, Any] | None]], tgt: str, knd: str) -> AsyncIterator[dict[str, Any]]:
         for tool, _ in items:
             yield {"type": "step", "tool": tool, "status": "running", "title": i18n.t(ctx.lang, f"tb.tool.{tool}")}
-        tasks = [asyncio.ensure_future(_collect(ctx, tool, tgt, knd, p)) for tool, p in items]
-        for fut in asyncio.as_completed(tasks):
+        new = [asyncio.ensure_future(_collect(ctx, tool, tgt, knd, p)) for tool, p in items]
+        tasks.extend(new)
+        for fut in asyncio.as_completed(new):
             st = await fut
             steps.append(st)
             yield {"type": "step_result", "tool": st["tool"], "result": st.get("result"), "error": st.get("error")}
@@ -299,6 +342,14 @@ async def run_recipe(ctx: Ctx, rid: str, target: str, kind: str) -> Gen:
                             yield ev
         except TimeoutError:
             yield {"type": "info", "text": i18n.t(ctx.lang, "err.timeout")}
+        finally:
+            # Stop, disconnect or timeout: steps still running are cancelled before the run slot is released,
+            # so "Stop" really stops probing and the concurrency limit holds.
+            pending = [t for t in tasks if not t.done()]
+            for t in pending:
+                t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
     result = recipe_result(ctx, rid, target if rid != "mail" else "", steps, started, t0)
     try:
         result["run_id"] = save(ctx.db, result, recipe=rid)

@@ -23,11 +23,15 @@ The interface is split into three areas: **Situation** (world map), **Analysis**
 - Assets, products, alerts and logs moved from the floating window into *My network*; the keys `A` (assets) and the tools window were replaced by the areas and the map tool bar
 - Network tools stream newline-delimited JSON instead of server-sent events (`/api/tb/*` replaces `/api/tools/*`)
 - CVE links open the CVE's object page (with KEV, EPSS, NVD and your exposure) instead of the NVD website
+- Private addresses and internal names are never sent to third parties (GreyNoise, passive DNS, RDAP, RIPEstat, Certificate Transparency, public DNS resolvers); the IP info no longer queries RIPEstat for private addresses
+- Request bodies are limited (20 MB with a session, 64 KB without one)
+- Gemini analyses are kept as long as alerts (`ALERT_RETENTION_DAYS`, at most 2,000)
 
 ### Fixed
 - Error messages with an upstream HTTP status (Gemini, RDAP and others) no longer turn into an internal error
 - Lists in the interface no longer show the word "null" where an optional block is missing
 - The login page loads all its scripts without a session
+- Counts in texts use the singular where needed ("1 hop" instead of "1 hops")
 
 ## 3.0.1 – 2026-10-20
 

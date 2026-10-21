@@ -151,7 +151,7 @@ class Result:
             "started_at": self.started_at, "ms": round((time.perf_counter() - self.t0) * 1000),
             "level": self.level or spec.level,
             "target_sees": spec.target_sees if self.target_sees is None else self.target_sees,
-            "third_party": self.third_party if self.third_party is not None else spec.third_party,
+            "third_party": (self.third_party if self.third_party is not None else spec.third_party) or None,  # "" = none
             "verdict": {"sev": sev, "text": summary or self.t(f"tb.verdict.{sev}")},
             "findings": order, "sections": self.sections,
             "map": {"points": self.points, "paths": self.paths} if (self.points or self.paths) else None,
