@@ -37,6 +37,7 @@ MAX_PAGE_BYTES = 400 * 1024
 MAX_ITEMS_PER_FEED = 120
 KEEP_DAYS_ON_FETCH = 30
 OG_PER_RUN = 24
+MAX_ROWS = 20_000  # stored reports at most; also the most an overview reads (90 days stay complete)
 ROW_COLS = ("id, source, url, title, summary, image, published, lang, tier, origin, origin_by, countries, actors, cves, malware, "
             "kinds, mine, cluster")  # everything but the stored text
 ANALYSE_CHARS = 1500  # characters of the feed text (after the headline) the recognition looks at
@@ -614,11 +615,11 @@ class News:
     def _prune(self) -> None:
         days = getattr(self.s, "news_retention_days", 90)
         self.db.execute("DELETE FROM news WHERE published < ?", (_cutoff(days),))
-        self.db.execute("DELETE FROM news WHERE id NOT IN (SELECT id FROM news ORDER BY id DESC LIMIT 20000)")
+        self.db.execute("DELETE FROM news WHERE id NOT IN (SELECT id FROM news ORDER BY id DESC LIMIT ?)", (MAX_ROWS,))
 
     # --- queries ---------------------------------------------------------------------------------------------------------
     def _rows(self, days: float, *, tier: str | None = None, source: str | None = None, q: str | None = None,
-              limit: int = 5000) -> list[dict[str, Any]]:
+              limit: int = MAX_ROWS) -> list[dict[str, Any]]:
         sql = f"SELECT {ROW_COLS} FROM news WHERE published >= ?"
         args: list[Any] = [_cutoff(days)]
         if tier in TIERS:
