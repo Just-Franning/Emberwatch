@@ -1,75 +1,59 @@
-// Assets window: own assets (watchlist with attack surface, active scan, CT, lookalike domains, live BGP, reputation),
-// watched products (KEV/NVD), log analysis and the alert list.
+// "My network" views: own assets (watchlist with attack surface, active scan, CT, lookalike domains, live BGP,
+// reputation), watched products (KEV/NVD), log analysis and the alert list. Rendered into the page of the area.
 import { t } from "./i18n.js";
 import { alertItem } from "./panels.js";
-import { ago, api, bytes, dateOnly, dateTime, dec1, dec2, el, num, safeLink, sevTag } from "./util.js";
+import { go, objLink, routes } from "./router.js";
+import { ago, api, bytes, dateOnly, dateTime, dec1, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep"];
+const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip"];
 const label = (w) => (w.kind === "asn" ? `AS${w.value}` : w.value);
 const kindTag = (k) => el("span", { class: "kind" }, t(`as.kind.${k}`));
 const msg = (cls = "note") => el("p", { class: cls });
-const table = (head, rows) => el("table", {}, el("thead", {}, el("tr", {}, head.map((h) => el("th", {}, h)))), el("tbody", {}, rows));
+const table = (head, rows) => el("div", { class: "tbl-wrap" }, el("table", { class: "res" }, el("thead", {}, el("tr", {}, head.map((h) => el("th", {}, h)))), el("tbody", {}, rows)));
 
 function setMsg(node, text, err = false) {
   node.className = err ? "state err" : "note";
   node.textContent = text;
 }
 
-function point(lon, lat, props) {
-  return { type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: props };
-}
+const alertTarget = (a) => (a.asset_id ? routes.asset(a.asset_id) : a.product_id ? routes.product(a.product_id) : null);
 
 export class Assets {
-  constructor({ map, tools, onChange }) {
-    this.map = map;
-    this.tools = tools;
+  constructor({ body, scroller, onChange, onMap }) {
+    this.body = body;
+    this.scroller = scroller || body; // the element that actually scrolls
     this.onChange = onChange;
-    this.panel = document.getElementById("panel-assets");
-    this.body = document.getElementById("assets-body");
-    this.scroller = this.body.closest(".panel-body") || this.body; // the element that actually scrolls
+    this.onMap = onMap;
     this.tab = "assets";
     this.detail = null; // asset id
     this.product = null; // product id
     this.status = null;
+    this.visible = false;
     this.alertFilter = { source: "", sev: "low" };
     this.poll = null;
-    this.panel.querySelectorAll(".tabs button[data-atab]").forEach((b) => b.addEventListener("click", () => {
-      this.detail = null;
-      this.product = null;
-      this.select(b.dataset.atab);
-    }));
-    document.getElementById("assets-close").addEventListener("click", () => this.close());
   }
 
   setStatus(status) { this.status = status; }
 
-  get isOpen() { return !this.panel.hidden; }
+  get isOpen() { return this.visible; }
 
-  open(tab = this.tab) {
-    this.panel.hidden = false;
-    this.select(tab);
+  /** view: assets | products | logs | alerts; id: asset or product id for the detail view */
+  show(view, id = null) {
+    this.visible = true;
+    this.tab = view;
+    this.detail = view === "assets" && id ? Number(id) : null;
+    this.product = view === "products" && id ? Number(id) : null;
+    clearTimeout(this.poll);
+    return this.render();
   }
 
-  close() {
+  hide() {
+    this.visible = false;
     clearTimeout(this.poll);
-    this.panel.hidden = true;
-  }
-
-  toggle() { if (this.panel.hidden) this.open(); else this.close(); }
-
-  openAsset(id) { this.detail = id; this.open("assets"); }
-
-  openProduct(id) { this.product = id; this.open("products"); }
-
-  select(tab) {
-    this.tab = tab;
-    clearTimeout(this.poll);
-    this.panel.querySelectorAll(".tabs button[data-atab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.atab === tab)));
-    this.render();
   }
 
   async render() {
-    if (this.panel.hidden) return;
+    if (!this.visible) return;
     // keep the scroll position when the same view is re-rendered (e.g. scan progress), reset it on navigation
     const view = `${this.tab}:${this.detail ?? ""}:${this.product ?? ""}`;
     if (view !== this.view) this.scroller.scrollTop = 0;
@@ -80,7 +64,7 @@ export class Assets {
       else if (this.tab === "logs") await this.renderLogs();
       else await this.renderAlerts();
     } catch (e) {
-      this.body.replaceChildren(el("p", { class: "state err" }, t("common.error", { msg: e.message })));
+      kids(this.body, el("p", { class: "state err" }, t("common.error", { msg: e.message })));
     }
   }
 
@@ -88,7 +72,8 @@ export class Assets {
 
   // --- assets list ---------------------------------------------------------------------------
   addForm(feedback) {
-    const value = el("input", { type: "text", maxlength: 260, placeholder: t("as.value_ph"), "aria-label": t("as.value_ph"), required: true });
+    const value = el("input", { type: "text", maxlength: 260, placeholder: t("as.value_ph"), "aria-label": t("as.value_ph"), required: true, value: this.prefill || "" });
+    this.prefill = null;
     const lbl = el("input", { type: "text", maxlength: 80, placeholder: t("as.label_ph"), "aria-label": t("as.label_ph") });
     const scan = el("input", { type: "checkbox" });
     const consent = el("input", { type: "checkbox" });
@@ -129,13 +114,14 @@ export class Assets {
       if (w.bgp?.watches) badges.push(el("span", { class: "tag" }, t("as.bgp", { n: w.bgp.watches })));
       if (w.domain?.ct_total) badges.push(el("span", { class: "tag" }, t("as.ct", { n: num(w.domain.ct_total) })));
       if (w.domain?.typos) badges.push(el("span", { class: "tag warn" }, t("as.typos", { n: num(w.domain.typos) })));
-      return el("li", { class: "clickable", onclick: () => { this.detail = w.id; this.render(); } },
+      return el("li", { class: "clickable", onclick: () => go(routes.asset(w.id)) },
         el("span", { class: "lbl" }, kindTag(w.kind), label(w), w.label ? el("span", { class: "muted" }, ` ${w.label}`) : null),
         el("span", { class: "val" }, w.alerts_total ? num(w.alerts_total) : ""),
         badges.length ? el("span", { class: "sub badges" }, badges) : null);
     });
-    this.body.replaceChildren(
-      el("p", { class: "note" }, t("as.intro")),
+    kids(this.body,
+      el("h2", { class: "page-title" }, t("nz.nav.assets")),
+      el("p", { class: "lead" }, t("as.intro")),
       this.addForm(feedback), feedback,
       el("div", { class: "btnrow" }, refresh, el("span", { class: "note" }, t("as.limit", { n: num(data.entries.length), max: num(data.max) }))),
       rows.length ? el("ol", { class: "rank assets" }, rows) : el("p", { class: "empty" }, t("as.none")),
@@ -148,8 +134,7 @@ export class Assets {
     try {
       d = await api(`api/assets/${id}`);
     } catch (e) {
-      this.detail = null;
-      if (e.status === 404) return this.renderAssets();
+      if (e.status === 404) { go("netz/assets"); return undefined; }
       throw e;
     }
     if (this.detail !== id || this.tab !== "assets") return;
@@ -165,15 +150,15 @@ export class Assets {
     const feedback = msg();
     const lblInput = el("input", { type: "text", maxlength: 80, value: d.label || "", "aria-label": t("as.d.label") });
     const head = el("div", { class: "detail-head" },
-      el("button", { type: "button", onclick: () => { this.detail = null; this.render(); } }, `← ${t("common.back")}`),
-      el("h3", {}, kindTag(d.kind), label(d)),
+      el("a", { class: "btn", href: "#/netz/assets" }, `← ${t("nz.nav.assets")}`),
+      el("h3", {}, kindTag(d.kind), objLink(d.kind === "asn" ? "asn" : d.kind, d.value, label(d))),
       el("form", { class: "inline", onsubmit: async (e) => {
         e.preventDefault();
         try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { label: lblInput.value } }); setMsg(feedback, "✓"); this.changed(); } catch (err) { setMsg(feedback, err.message, true); }
       } }, lblInput, el("button", { type: "submit" }, t("as.d.save"))),
       el("button", { type: "button", class: "danger", onclick: async () => {
         if (!window.confirm(t("as.delete_q", { value: label(d) }))) return;
-        try { await api(`api/watchlist/${id}`, { method: "DELETE" }); this.detail = null; this.changed(); this.render(); } catch (err) { setMsg(feedback, err.message, true); }
+        try { await api(`api/watchlist/${id}`, { method: "DELETE" }); this.changed(); go("netz/assets"); } catch (err) { setMsg(feedback, err.message, true); }
       } }, t("common.delete")));
     const parts = [head, feedback];
     parts.push(el("h4", {}, t("as.d.alerts")),
@@ -183,7 +168,7 @@ export class Assets {
     if (d.scan_detail !== undefined) parts.push(...this.scanBlock(d));
     if (d.domain_detail) parts.push(...this.domainBlock(d.domain_detail));
     if (d.bgp_detail) parts.push(...this.bgpBlock(d.bgp_detail));
-    this.body.replaceChildren(...parts);
+    kids(this.body, ...parts);
     this.scroller.scrollTop = scrollTop;
     if (running || this.scanWait?.id === id) {
       this.poll = setTimeout(() => { if (this.detail === id && this.isOpen) this.renderAsset(id).catch(() => {}); }, running ? 2000 : 1000);
@@ -197,18 +182,16 @@ export class Assets {
     const geo = rows.filter((r) => r.lat !== null && r.lat !== undefined);
     if (geo.length) {
       out.push(el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => {
-        this.map.setTool(geo.map((r) => point(r.lon, r.lat, { kind: "target", label: r.ip, ip: r.ip })));
-        this.map.fitTo(geo.map((r) => [r.lon, r.lat]), 6);
+        this.onMap({ points: geo.map((r) => ({ lon: r.lon, lat: r.lat, kind: "target", label: r.ip, ip: r.ip })) });
       } }, t("common.show_map"))));
     }
     out.push(table([t("as.d.ip"), t("as.d.ports"), t("as.d.vulns"), t("as.d.as")], rows.map((r) => el("tr", {},
-      el("td", {}, el("button", { type: "button", class: "link", onclick: () => this.tools.open("ipinfo", r.ip, true) }, r.ip),
+      el("td", {}, objLink("ip", r.ip),
         r.reputation?.drop ? el("span", { class: "tag bad" }, "DROP") : null, r.reputation?.tor ? el("span", { class: "tag warn" }, "Tor") : null,
         r.hostnames?.length ? el("div", { class: "muted" }, r.hostnames.slice(0, 3).join(", ")) : null,
         r.tags?.length ? el("div", { class: "muted" }, r.tags.join(", ")) : null),
       el("td", {}, r.status === "ok" ? r.ports.join(", ") || "–" : el("span", { class: "muted" }, t("as.d.nodata"))),
-      el("td", {}, r.vulns.length ? r.vulns.slice(0, 12).map((v) => el("div", {},
-        el("a", { href: `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(v)}`, target: "_blank", rel: "noopener noreferrer" }, v),
+      el("td", {}, r.vulns.length ? r.vulns.slice(0, 12).map((v) => el("div", {}, objLink("cve", v),
         r.kev.includes(v) ? el("span", { class: "tag bad" }, "KEV") : null)) : "–",
         r.vulns.length > 12 ? el("div", { class: "muted" }, t("common.more", { n: r.vulns.length - 12 })) : null),
       el("td", {}, r.asn ? `AS${r.asn} ${r.as_name || ""}` : "–", el("div", { class: "muted" }, t("as.d.fetched", { t: ago(r.fetched_at) })))))));
@@ -219,7 +202,7 @@ export class Assets {
     const drop = d.reputation?.drop;
     return [el("h4", {}, t("as.d.reputation")),
       el("p", { class: drop ? "bad-txt" : "note" }, drop ? t("as.d.on_drop", { cidr: `${drop.cidr} (${drop.sblid})` }) : t("as.d.not_drop")),
-      d.kind === "ip" ? el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => this.tools.open("ipinfo", d.value, true) }, t("tool.ipinfo"))) : null];
+      d.kind === "ip" ? el("div", { class: "btnrow" }, objLink("ip", d.value, t("as.d.open_object"), "btn")) : null];
   }
 
   scanBlock(d) {
@@ -295,7 +278,7 @@ export class Assets {
       el("td", {}, c.issuer || "–")))) : el("p", { class: "empty" }, t("as.d.ct_none")));
     out.push(el("h4", {}, t("as.d.typos")), el("p", { class: "note" }, t("as.d.typos_note", { n: num(dd.typo_checked), t: dd.typo_last ? ago(dd.typo_last) : t("common.never") })));
     out.push(dd.typos.length ? table(["Domain", t("tool.type"), "IP", t("c2.first")], dd.typos.map((x) => el("tr", {},
-      el("td", {}, el("button", { type: "button", class: "link", onclick: () => this.tools.open("rdap", x.candidate, true) }, x.candidate),
+      el("td", {}, objLink("domain", x.candidate),
         x.mx ? el("span", { class: "tag warn" }, t("as.d.mx")) : null),
       el("td", {}, x.technique), el("td", {}, x.ips.join(", ") || "–"), el("td", {}, x.first_seen ? dateOnly(x.first_seen) : "–")))) : el("p", { class: "empty" }, t("as.d.typos_none")));
     return out;
@@ -331,13 +314,14 @@ export class Assets {
         await this.renderProducts();
       } catch (err) { setMsg(feedback, err.message, true); }
     });
-    const rows = data.products.map((p) => el("li", { class: "clickable", onclick: () => { this.product = p.id; this.render(); } },
+    const rows = data.products.map((p) => el("li", { class: "clickable", onclick: () => go(routes.product(p.id)) },
       el("span", { class: "lbl" }, `${p.vendor} ${p.product}`.trim()),
       el("span", { class: "val" }, p.kev ? el("span", { class: "tag bad" }, t("pr.kev", { n: num(p.kev) })) : null,
         p.critical ? el("span", { class: "tag warn" }, t("pr.critical", { n: num(p.critical) })) : null),
       el("span", { class: "sub" }, `${t("pr.nvd", { n: num(p.nvd) })} · ${p.checked_at ? t("pr.checked", { t: ago(p.checked_at) }) : t("pr.pending")}`)));
-    this.body.replaceChildren(
-      el("p", { class: "note" }, t("pr.intro", { cvss: dec1(data.min_cvss) })),
+    kids(this.body,
+      el("h2", { class: "page-title" }, t("nz.nav.products")),
+      el("p", { class: "lead" }, t("pr.intro", { cvss: dec1(data.min_cvss) })),
       data.nvd_key ? null : el("p", { class: "note" }, t("pr.nvd_nokey")),
       form, feedback,
       rows.length ? el("ol", { class: "rank" }, rows) : el("p", { class: "empty" }, t("pr.none")),
@@ -353,28 +337,28 @@ export class Assets {
   async renderProduct(id) {
     const [list, data] = await Promise.all([api("api/products"), api(`api/products/${id}/cves`)]);
     const p = list.products.find((x) => x.id === id);
-    if (!p) { this.product = null; return this.renderProducts(); }
+    if (!p) { go("netz/products"); return undefined; }
     const name = `${p.vendor} ${p.product}`.trim();
     const feedback = msg();
     const head = el("div", { class: "detail-head" },
-      el("button", { type: "button", onclick: () => { this.product = null; this.render(); } }, `← ${t("common.back")}`),
-      el("h3", {}, name),
+      el("a", { class: "btn", href: "#/netz/products" }, `← ${t("nz.nav.products")}`),
+      el("h3", {}, objLink("vendor", p.vendor, name)),
       el("button", { type: "button", onclick: async () => {
         try { await api(`api/products/${id}/check`, { method: "POST" }); setMsg(feedback, t("pr.check_started")); } catch (e) { setMsg(feedback, e.message, true); }
       } }, t("common.check_now")),
       el("button", { type: "button", class: "danger", onclick: async () => {
         if (!window.confirm(t("pr.delete_q", { name }))) return;
-        try { await api(`api/products/${id}`, { method: "DELETE" }); this.product = null; this.changed(); this.render(); } catch (e) { setMsg(feedback, e.message, true); }
+        try { await api(`api/products/${id}`, { method: "DELETE" }); this.changed(); go("netz/products"); } catch (e) { setMsg(feedback, e.message, true); }
       } }, t("common.delete")));
     const rows = data.cves.map((c) => el("tr", {},
-      el("td", {}, el("a", { href: `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(c.cve)}`, target: "_blank", rel: "noopener noreferrer" }, c.cve),
+      el("td", {}, objLink("cve", c.cve),
         c.kev_name ? el("span", { class: "tag bad" }, t("pr.kev_tag")) : null,
         (c.kev_ransomware || "").toLowerCase() === "known" ? el("span", { class: "tag bad" }, t("pr.ransom_tag")) : null),
       el("td", { class: "num" }, c.cvss !== null && c.cvss !== undefined ? dec1(c.cvss) : "–"),
       el("td", { class: "num" }, c.epss !== null && c.epss !== undefined ? dec2(c.epss) : "–"),
       el("td", { class: "num" }, dateOnly(c.kev_added || c.published)),
       el("td", {}, c.kev_name || c.summary || "")));
-    this.body.replaceChildren(head, feedback, el("h4", {}, t("pr.cves", { name })),
+    kids(this.body, head, feedback, el("h4", {}, t("pr.cves", { name })),
       rows.length ? table(["CVE", "CVSS", "EPSS", "", ""], rows) : el("p", { class: "empty" }, t("pr.no_cves")));
   }
 
@@ -399,22 +383,23 @@ export class Assets {
     zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); pick(e.dataTransfer.files[0]); });
     go.addEventListener("click", async () => {
       if (!current) return;
-      if (current.size > st.max_mb * 1024 * 1024) { result.replaceChildren(el("p", { class: "state err" }, t("common.error", { msg: `> ${st.max_mb} MB` }))); return; }
+      if (current.size > st.max_mb * 1024 * 1024) { kids(result, el("p", { class: "state err" }, t("common.error", { msg: `> ${st.max_mb} MB` }))); return; }
       go.disabled = true;
-      result.replaceChildren(el("p", { class: "state" }, t("lg.running", { name: current.name, size: bytes(current.size) })));
+      kids(result, el("p", { class: "state" }, t("lg.running", { name: current.name, size: bytes(current.size) })));
       try {
         const r = await api("api/logs/analyze", { method: "POST", body: current, headers: { "Content-Type": "application/octet-stream" } });
         this.logResult(result, r);
       } catch (e) {
-        result.replaceChildren(el("p", { class: "state err" }, t("common.error", { msg: e.message })));
+        kids(result, el("p", { class: "state err" }, t("common.error", { msg: e.message })));
       } finally {
         go.disabled = false;
       }
     });
     const idx = st.indexes;
     const sl = st.syslog || {};
-    this.body.replaceChildren(
-      el("p", { class: "note" }, t("lg.intro")),
+    kids(this.body,
+      el("h2", { class: "page-title" }, t("nz.nav.logs")),
+      el("p", { class: "lead" }, t("lg.intro")),
       file, zone, el("div", { class: "btnrow" }, go),
       idx ? el("p", { class: "note" }, t("lg.indexes", { ips: num(idx.ips), domains: num(idx.domains), urls: num(idx.urls), drop: num(idx.drop), tor: num(idx.tor) })) : null,
       result,
@@ -439,13 +424,12 @@ export class Assets {
       const geo = r.hits.filter((h) => h.geo && h.geo.lat !== undefined && h.geo.lat !== null);
       if (geo.length) {
         parts.push(el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => {
-          this.map.setTool(geo.map((h) => point(h.geo.lon, h.geo.lat, { kind: "target", label: h.indicator, ip: h.indicator })));
-          this.map.fitTo(geo.map((h) => [h.geo.lon, h.geo.lat]), 5);
+          this.onMap({ points: geo.map((h) => ({ lon: h.geo.lon, lat: h.geo.lat, kind: "target", label: h.indicator, ip: h.indicator, sev: h.severity })) });
         } }, t("common.show_map"))));
       }
       parts.push(table(["", t("lg.indicator"), t("lg.count"), t("lg.match"), t("lg.line")], r.hits.map((h) => el("tr", {},
         el("td", {}, sevTag(h.severity)),
-        el("td", {}, h.type === "ip" ? el("button", { type: "button", class: "link", onclick: () => this.tools.open("ipinfo", h.indicator, true) }, h.indicator) : h.indicator,
+        el("td", {}, ["ip", "domain", "url"].includes(h.type) ? objLink(h.type, h.indicator) : h.indicator,
           el("div", { class: "mono-sm muted" }, h.sample)),
         el("td", { class: "num" }, num(h.count)),
         el("td", {}, h.labels.join("; "), " ", ...h.matches.map((m) => (m.reference ? safeLink(m.reference, "↗") : null))),
@@ -453,10 +437,10 @@ export class Assets {
     }
     if (r.top_ips?.length) {
       parts.push(el("h4", {}, t("lg.top_ips")), table(["IP", t("lg.count"), t("as.d.as")], r.top_ips.slice(0, 15).map((x) => el("tr", {},
-        el("td", { class: x.hit ? "bad-txt" : null }, el("button", { type: "button", class: "link", onclick: () => this.tools.open("ipinfo", x.ip, true) }, x.ip)),
+        el("td", { class: x.hit ? "bad-txt" : null }, objLink("ip", x.ip)),
         el("td", { class: "num" }, num(x.count)), el("td", {}, x.geo?.asn ? `AS${x.geo.asn} ${x.geo.as_name || ""}` : "–")))));
     }
-    box.replaceChildren(...parts);
+    kids(box, ...parts);
   }
 
   // --- alerts -------------------------------------------------------------------------------------------
@@ -472,11 +456,12 @@ export class Assets {
     src.addEventListener("change", apply);
     sev.addEventListener("change", apply);
     const s = data.stats;
-    this.body.replaceChildren(
-      el("div", { class: "filters" }, el("label", {}, t("al.filter_source"), src), el("label", {}, t("al.filter_sev"), sev)),
+    kids(this.body,
+      el("h2", { class: "page-title" }, t("nz.nav.alerts")),
+      el("div", { class: "filters wide" }, el("label", {}, t("al.filter_source"), src), el("label", {}, t("al.filter_sev"), sev)),
       el("p", { class: "note" }, t("al.stats", { total: num(s.total_7d), high: num(s.high_7d), medium: num(s.medium_7d), low: num(s.low_7d) })),
       data.alerts.length
-        ? el("ol", { class: "patterns" }, data.alerts.map((a) => alertItem(a, { onOpen: (x) => (x.asset_id ? this.openAsset(x.asset_id) : this.openProduct(x.product_id)) })))
+        ? el("ol", { class: "patterns" }, data.alerts.map((a) => alertItem(a, { onOpen: (x) => { const r = alertTarget(x); if (r) go(r); } })))
         : el("p", { class: "empty" }, t("al.none")),
     );
   }

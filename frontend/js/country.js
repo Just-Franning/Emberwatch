@@ -1,19 +1,21 @@
-// Country view in the right panel: shares, vectors, C2, ransomware, infrastructure, submarine cables, 30-day trend.
+// Compact country card in the right panel of the situation view: shares, trend, vectors, C2, ransomware, events.
+// Everything else (cables, all events, tables) is on the country's object page ("Analyse in depth").
 import { barChart, destroy, lineChart } from "./charts.js";
 import { locale, t } from "./i18n.js";
-import { api, countryName, dateTime, el, num, pct } from "./util.js";
+import { href, routes } from "./router.js";
+import { api, countryName, dateTime, el, kids, num, pct } from "./util.js";
 
 export async function renderCountry(cc, { onClose, onAnalyze }) {
   const box = document.getElementById("country");
   box.hidden = false;
   box.querySelectorAll("canvas").forEach(destroy);
-  box.replaceChildren(el("p", { class: "empty" }, t("country.loading", { name: countryName(cc) })));
+  kids(box, el("p", { class: "empty" }, t("country.loading", { name: countryName(cc) })));
   document.getElementById("right-body").scrollTop = 0;
   let d, tr;
   try {
     [d, tr] = await Promise.all([api(`api/country/${encodeURIComponent(cc)}`), api(`api/trends/${encodeURIComponent(cc)}?days=30`)]);
   } catch (e) {
-    box.replaceChildren(el("p", { class: "state err" }, t("country.failed", { msg: e.message })));
+    kids(box, el("p", { class: "state err" }, t("country.failed", { msg: e.message })));
     return;
   }
   const s = d.radar_shares_pct;
@@ -35,10 +37,13 @@ export async function renderCountry(cc, { onClose, onAnalyze }) {
   const c2 = el("canvas", { role: "img", "aria-label": t("country.counts_aria") });
 
   const cab = d.cables || { cables: [] };
-  box.replaceChildren(...[
+  kids(box, ...[
     el("div", { class: "chead" },
       el("h2", {}, d.name),
       el("button", { class: "collapse", type: "button", onclick: onClose, title: t("country.close") }, el("span", { "aria-hidden": "true" }, "×"), el("span", { class: "sr-only" }, t("country.close")))),
+    el("div", { class: "ai-actions", style: "margin-top:8px" },
+      el("a", { class: "btn primary", href: href(routes.obj("country", cc)) }, t("country.deep")),
+      el("button", { type: "button", onclick: () => onAnalyze(cc) }, t("country.analyze", { name: d.name }))),
     el("dl", {},
       el("dt", { style: "color:var(--text-3)" }, t("country.share")), el("dd", { class: "weak" }, "24 h"), el("dd", { class: "weak" }, t("country.7d")),
       ...row(t("country.l7_target"), s.l7_target_1d, s.l7_target_7d), ...row(t("country.l3_target"), s.l3_target_1d, s.l3_target_7d),
@@ -49,20 +54,15 @@ export async function renderCountry(cc, { onClose, onAnalyze }) {
     el("h3", {}, t("country.vectors")), vecChips(d.radar_drilldown?.l3_vector_target_1d),
     el("h3", {}, t("country.rules")), vecChips(d.radar_drilldown?.l7_rules_origin_1d),
     el("h3", {}, t("country.infra", { n: num(d.infra_events.length) })),
-    d.infra_events.length ? el("ul", { class: "events" }, d.infra_events.slice(0, 8).map((e) => el("li", {},
-      `${e.title}${e.ongoing ? t("map.ongoing") : ""}, ${dateTime(e.start_ts)}`,
-      el("span", { class: "sub" }, (e.detail || "").slice(0, 200))))) : el("p", { class: "note" }, t("country.no_events")),
-    el("h3", {}, t("country.cables", { n: num(cab.cables.length) })),
-    cab.cables.length ? el("p", { class: "note" }, t("country.cables_list", { list: cab.cables.slice(0, 14).join(", "),
-      more: cab.cables.length > 14 ? t("country.cables_more", { n: cab.cables.length - 14 }) : "", snap: cab.snapshot || "2021" }))
-      : el("p", { class: "note" }, t("country.no_cables")),
+    d.infra_events.length ? el("ul", { class: "events" }, d.infra_events.slice(0, 3).map((e) => el("li", {},
+      `${e.title}${e.ongoing ? t("map.ongoing") : ""}, ${dateTime(e.start_ts)}`))) : el("p", { class: "note" }, t("country.no_events")),
+    el("p", { class: "note" }, t("country.cables_short", { n: num(cab.cables.length) })),
     el("h3", {}, t("country.c2", { n: num(d.c2.total) })), chips(d.c2.by_malware),
     d.c2.by_asn.length ? chips(d.c2.by_asn) : null,
     el("h3", {}, t("country.ransom", { n: num(d.ransomware_7d.total) })), chips(d.ransomware_7d.by_group),
     d.ransomware_7d.by_sector.length ? chips(d.ransomware_7d.by_sector) : null,
     d.patterns.length ? el("h3", {}, t("country.patterns")) : null,
     d.patterns.length ? el("ul", { class: "events" }, d.patterns.map((p) => el("li", {}, p.title))) : null,
-    el("div", { class: "ai-actions", style: "margin-top:10px" }, el("button", { type: "button", class: "primary", onclick: () => onAnalyze(cc) }, t("country.analyze", { name: d.name }))),
   ].filter(Boolean));
   requestAnimationFrame(() => {
     if (shareSeries.length) lineChart(c1, { labels, unit: "%", series: shareSeries, spanGaps: false });
@@ -74,5 +74,5 @@ export function hideCountry() {
   const box = document.getElementById("country");
   box.querySelectorAll("canvas").forEach(destroy);
   box.hidden = true;
-  box.replaceChildren();
+  kids(box);
 }

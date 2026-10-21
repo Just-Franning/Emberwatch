@@ -1,7 +1,10 @@
 // Left panel (KPIs, rankings incl. filter/export), patterns, alert feed, legend.
 import { destroy, lineChart } from "./charts.js";
 import { locale, t } from "./i18n.js";
-import { COLORS, RAMP, ago, countryName, dateOnly, dateTime, dec1, dec2, el, num, pct, pp, safeLink, sevTag } from "./util.js";
+import { href, objLink, routes } from "./router.js";
+import { ago, COLORS, countryName, dateOnly, dateTime, dec1, dec2, el, kids, num, pct, pp, RAMP, safeLink, sevTag } from "./util.js";
+
+const moreLink = (view) => el("p", { class: "more-link" }, el("a", { class: "btn plain", href: href(routes.view(view)) }, t("lage.all_view", { name: t(`an.view.${view}`) })));
 
 // --- building blocks ---------------------------------------------------------------------
 export function rankList(items, { color, fmt = num, onCountry, onClick } = {}) {
@@ -73,7 +76,7 @@ export function renderKpis(ov) {
     [num(ic.outage || 0), t("kpi.outages"), t("kpi.bgp", { n: num((ic.hijack || 0) + (ic.leak || 0)) })],
     [num(w.hits_7d || 0), t("kpi.alerts"), t("kpi.alerts_sub", { high: num(w.high_7d || 0), assets: num(w.entries || 0), products: num(w.products || 0) })],
   ];
-  document.getElementById("kpis").replaceChildren(...tiles.map(([b, s, small], i) =>
+  kids(document.getElementById("kpis"), ...tiles.map(([b, s, small], i) =>
     el("div", { class: `kpi${i === 5 && (w.high_7d || 0) > 0 ? " alert" : ""}` },
       el("b", { class: /^[\d.,–\s]+$/.test(b) ? null : "word" }, b), el("span", {}, s), el("small", {}, small))));
 }
@@ -120,7 +123,7 @@ export function renderTab(tab, ctx) {
     content = [
       ...section(t("t.ransom_country"), t("t.ransom_note", { n: num(rw.total_7d), prev: rw.prev_window_complete ? num(rw.total_prev_7d) : t("t.ransom_prev_na") }),
         rankList(rw.by_country.filter((x) => x.key !== "??").map((x) => ({ label: countryName(x.key), value: x.count, cc: x.key })), { color: COLORS.ransom, onCountry })),
-      ...section(t("t.groups"), null, rankList(rw.by_group.map((x) => ({ label: x.key, value: x.count })), { color: COLORS.ransom })),
+      ...section(t("t.groups"), null, rankList(rw.by_group.map((x) => ({ label: x.key, value: x.count, ref: x.key })), { color: COLORS.ransom, onClick: (g) => ctx.onObject?.("group", g) })),
       ...section(t("t.sectors"), null, rankList(rw.by_sector.map((x) => ({ label: x.key || t("t.unknown_sector"), value: x.count })), { color: COLORS.ransom })),
       ...section(t("t.group_country"), null, rankList(rw.group_country.map((x) => ({ label: t("t.group_in", { group: x.group, country: countryName(x.country) }), value: x.count, cc: x.country })), { color: COLORS.ransom, onCountry })),
       ...section(t("t.latest"), t("t.latest_note"),
@@ -130,13 +133,14 @@ export function renderTab(tab, ctx) {
               el("span", { class: "val" }, v.grp),
               el("span", { class: "sub" }, `${countryName(v.country)}, ${v.activity || t("t.sector_unknown")}, ${dateTime(v.discovered)}`))))
           : empty()),
+      moreLink("ransom"),
     ];
   } else if (tab === "infra") {
     content = infraTab(ov, onCountry);
   } else if (tab === "kev") {
     const kev = ov.kev;
     const kevItem = (k) => el("li", { class: "clickable", onclick: () => onCve?.(k.cve) },
-      el("span", { class: "lbl" }, el("a", { href: `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(k.cve)}`, target: "_blank", rel: "noopener noreferrer", onclick: (e) => e.stopPropagation() }, k.cve)),
+      el("span", { class: "lbl" }, objLink("cve", k.cve)),
       el("span", { class: "val" }, k.epss !== null && k.epss !== undefined ? `EPSS ${dec2(k.epss)}` : dateOnly(k.date_added)),
       el("span", { class: "sub" }, t("t.kev_added", { vendor: k.vendor, product: k.product, date: dateOnly(k.date_added) })
         + ((k.ransomware || "").toLowerCase() === "known" ? t("t.kev_ransom") : "")));
@@ -144,11 +148,12 @@ export function renderTab(tab, ctx) {
       ...section(t("t.kev_new"), t("t.kev_note", { n30: num(kev.added_30d), total: num(kev.total) }),
         kev.latest.length ? el("ol", { class: "rank" }, kev.latest.map(kevItem)) : empty()),
       ...section(t("t.kev_top"), null, kev.top_epss_90d?.length ? el("ol", { class: "rank" }, kev.top_epss_90d.map(kevItem)) : empty("t.epss_na")),
-      ...section(t("t.kev_vendors"), null, rankList(kev.vendors_14d.map((x) => ({ label: x.key, value: x.count })), { color: COLORS.text3 })),
+      ...section(t("t.kev_vendors"), null, rankList(kev.vendors_14d.map((x) => ({ label: x.key, value: x.count, ref: x.key })), { color: COLORS.text3, onClick: (v) => ctx.onObject?.("vendor", v) })),
+      moreLink("kev"),
     ];
   }
   panel.querySelectorAll("canvas").forEach(destroy);
-  panel.replaceChildren(...content.filter(Boolean));
+  kids(panel, ...content.filter(Boolean));
 }
 
 function c2Tab(ov, ctx) {
@@ -178,7 +183,8 @@ function c2Tab(ov, ctx) {
     ...section(t("t.c2_countries"), t("t.c2_countries_note"),
       rankList(c2.by_country.map((x) => ({ label: countryName(x.key), value: x.count, cc: x.key })), { color: COLORS.c2, onCountry })),
     ...section(t("t.c2_asn"), null,
-      rankList(c2.by_asn.map((x) => ({ label: `AS${x.key} ${x.name || ""}`.trim(), value: x.count })), { color: COLORS.c2 })),
+      rankList(c2.by_asn.map((x) => ({ label: `AS${x.key} ${x.name || ""}`.trim(), value: x.count, ref: String(x.key) })), { color: COLORS.c2, onClick: (a) => ctx.onObject?.("asn", a) })),
+    moreLink("c2"),
   ];
 }
 
@@ -201,6 +207,7 @@ function infraTab(ov, onCountry) {
     ...section(t("t.hijack_cc"), t("t.hijack_cc_note"), rankList(inf.hijacks_by_country.map((x) => ({ label: countryName(x.key), value: x.count, cc: x.key })), { color: COLORS.infra, onCountry })),
     ...section(t("t.anomalies"), t("t.anomalies_note", { n: num(c.anomaly || 0) }),
       anomalies.length ? el("ol", { class: "rank" }, anomalies.slice(0, 20).map(evItem)) : empty("t.no_anomalies")),
+    moreLink("infra"),
   ];
 }
 
@@ -211,10 +218,10 @@ export function renderPatterns(patterns, onCountry) {
   document.getElementById("pattern-count").textContent = patterns.length
     ? (high ? t("patterns.count_high", { n: patterns.length, h: high }) : t("patterns.count", { n: patterns.length })) : "";
   if (!patterns.length) {
-    list.replaceChildren(el("li", { class: "empty" }, t("patterns.none")));
+    kids(list, el("li", { class: "empty" }, t("patterns.none")));
     return;
   }
-  list.replaceChildren(...patterns.map((p) =>
+  kids(list, ...patterns.map((p) =>
     el("li", { dataset: p.country ? { cc: p.country } : {}, onclick: p.country ? () => onCountry(p.country) : null },
       el("div", {}, sevTag(p.severity), el("span", { class: "cat" }, p.category_label || p.category)),
       el("div", { class: "ptitle" }, p.title),
@@ -234,7 +241,7 @@ export function renderAlertFeed(data, { onOpen, onWindow }) {
   const st = data?.stats || {};
   document.getElementById("alert-count").textContent = st.total_7d ? t("alerts.count", { n: num(st.total_7d) }) : "";
   const items = (data?.alerts || []).slice(0, 12);
-  list.replaceChildren(
+  kids(list,
     ...(items.length ? items.map((a) => alertItem(a, { onOpen })) : [el("li", { class: "empty" }, t("alerts.none"))]),
     el("li", { class: "more" }, el("button", { type: "button", onclick: onWindow }, t("alerts.open_window"))),
   );
@@ -252,7 +259,7 @@ export function renderLegend(info, { historicalDay } = {}) {
   } else if (info.meta) {
     parts.push(el("div", {}, t("legend.no_data", { label: info.meta.label })));
   }
-  box.replaceChildren(...parts);
+  kids(box, ...parts);
 }
 
 export function initLegend() {

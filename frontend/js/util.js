@@ -19,6 +19,12 @@ export function el(tag, attrs = {}, ...children) {
   return e;
 }
 
+/** replaceChildren without the trap: null/undefined/false are skipped (the DOM would insert the text "null"). */
+export function kids(node, ...children) {
+  node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+  return node;
+}
+
 const nf = new Intl.NumberFormat(locale);
 const nf1 = new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const nf2 = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -115,6 +121,8 @@ export const COLORS = {
   infra: "#e5e7eb",
   cable: "#6b7280",
   tool: "#ffffff",
+  high: "#ef4444",
+  medium: "#fb923c",
   accent: "#f87171",
   rule: "rgba(220, 38, 38, 0.16)",
   text: "#d4d4d8",

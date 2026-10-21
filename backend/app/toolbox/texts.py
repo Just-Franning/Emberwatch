@@ -93,7 +93,7 @@ TT: dict[str, dict[str, str]] = {
         "tb.s.mailsec": "{n} wichtige Hinweise", "tb.s.mb": "Bekannte Malware: {sig}",
         "tb.s.pathq": "{n} Hops, {loss} % Verlust am Ziel, Ø {avg} ms", "tb.s.pdns": "{n} historische Einträge",
         "tb.s.ping": "{recv} von {sent} Antworten, Ø {avg} ms", "tb.s.ports": "{open} von {n} Ports offen",
-        "tb.s.recipe": "{steps} Prüfungen: {high} hoch, {medium} mittel, {low} niedrig", "tb.s.ssh": "{banner}",
+        "tb.s.recipe": "Befunde: {high} hoch, {medium} mittel, {low} niedrig (Schritte: {steps})", "tb.s.ssh": "{banner}",
         "tb.s.tls": "Beste Version {best}, Zertifikat noch {days} Tage gültig",
         "tb.s.trace_no": "Ziel nicht erreicht ({n} Hops)", "tb.s.trace_ok": "Ziel nach {n} Hops erreicht",
         # sections
@@ -407,7 +407,7 @@ TT: dict[str, dict[str, str]] = {
         "tb.s.mailsec": "{n} important notes", "tb.s.mb": "Known malware: {sig}",
         "tb.s.pathq": "{n} hops, {loss} % loss at the target, avg {avg} ms", "tb.s.pdns": "{n} historical records",
         "tb.s.ping": "{recv} of {sent} replies, avg {avg} ms", "tb.s.ports": "{open} of {n} ports open",
-        "tb.s.recipe": "{steps} checks: {high} high, {medium} medium, {low} low", "tb.s.ssh": "{banner}",
+        "tb.s.recipe": "Findings: {high} high, {medium} medium, {low} low (steps: {steps})", "tb.s.ssh": "{banner}",
         "tb.s.tls": "Best version {best}, certificate valid for {days} more days",
         "tb.s.trace_no": "Target not reached ({n} hops)", "tb.s.trace_ok": "Target reached after {n} hops",
         "tb.sec.algorithms": "Algorithms", "tb.sec.all_headers": "All headers", "tb.sec.asn": "Autonomous system",

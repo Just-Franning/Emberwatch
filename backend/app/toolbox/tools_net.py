@@ -44,10 +44,10 @@ async def ping(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any]) ->
         elif typ == "reply":
             method = ev["method"]
             rows.append([ev["seq"], ev.get("ttl") if ev.get("ttl") is not None else "–", cell(f"{ev['rtt']} ms"), ev["method"]])
-            yield {"type": "row", "kind": "reply", **ev}
+            yield {**ev, "type": "row", "kind": "reply"}
         elif typ == "timeout":
             rows.append([ev["seq"], "–", cell(res.t("tb.ping.no_reply"), sev="medium"), ""])
-            yield {"type": "row", "kind": "timeout", **ev}
+            yield {**ev, "type": "row", "kind": "timeout"}
         elif typ == "info":
             text = res.t(ev["key"], **(ev.get("params") or {}))
             res.find("info", "tb.f.note", note=text)
@@ -106,7 +106,7 @@ async def traceroute(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, An
                 coords.append((g["lon"], g["lat"]))
                 res.point(g, "hop", str(ev["n"]), hip)
             relate_ip(res, hip, g)
-            yield {"type": "row", "kind": "hop", **ev}
+            yield {**ev, "type": "row", "kind": "hop"}
         elif typ == "info":
             text = ev.get("text") or res.t(ev["key"], **(ev.get("params") or {}))
             yield {"type": "info", "text": text}

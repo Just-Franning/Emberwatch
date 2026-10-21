@@ -115,7 +115,7 @@ export function valueTable(spec) {
   const series = spec.series.slice(0, 3);
   const head = el("tr", {}, el("th", {}, ""), series.map((s) => el("th", {}, s.name)));
   const rows = spec.labels.map((l, i) =>
-    el("tr", {}, el("td", {}, l), series.map((s) => el("td", {}, `${nf1.format(s.values[i])}${spec.unit ? " " + spec.unit : ""}`))),
+    el("tr", {}, el("td", {}, l), series.map((s) => el("td", {}, s.values[i] === null || s.values[i] === undefined ? "–" : `${nf1.format(s.values[i])}${spec.unit ? " " + spec.unit : ""}`))),
   );
   return el("details", {}, el("summary", {}, t("chart.table")), el("table", {}, el("thead", {}, head), el("tbody", {}, rows)));
 }

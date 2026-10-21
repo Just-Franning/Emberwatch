@@ -385,13 +385,13 @@ def test_tools_live_localhost(m, tmp_path):
         if Path(m.S.ping_bin).exists():
             r, events = run(tc, {"tool": "ping", "target": "127.0.0.1", "params": {"count": 2}})
             kinds = [e["type"] for e in events]
-            assert r.status_code == 200 and kinds[0] == "start" and kinds[-1] == "result"
+            assert r.status_code == 200 and kinds == ["start", "row", "row", "result"]
             res = events[-1]["result"]
             assert res["tool"] == "ping" and res["verdict"]["sev"] == "ok" and res["run_id"] > 0
             assert [row[0] for row in next(s for s in res["sections"] if s["kind"] == "table")["rows"]] == [1, 2]
         if Path(m.S.traceroute_bin).exists():
             r, events = run(tc, {"tool": "traceroute", "target": "127.0.0.1", "params": {"max_hops": 3}})
-            hops = [e for e in events if e["type"] == "hop"]
+            hops = [e for e in events if e["type"] == "row" and e["kind"] == "hop"]
             assert hops and hops[0]["ip"] == "127.0.0.1" and hops[0]["private"] is True
             assert events[-1]["type"] == "result" and events[-1]["result"]["verdict"]["sev"] == "ok"
         r, _ = run(tc, {"tool": "ping", "target": "bad host"})

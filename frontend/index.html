@@ -14,7 +14,7 @@
   <script src="vendor/chart.umd.min.js" defer></script>
   <script type="module" src="js/app.js"></script>
 </head>
-<body>
+<body class="area-lage">
   <!-- start animation (js/boot.js) -->
   <div class="boot" id="boot" aria-hidden="true">
     <canvas id="boot-canvas"></canvas>
@@ -35,6 +35,12 @@
   <header class="hud hud-top">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>Emberwatch</h1></div>
 
+    <nav class="areas" id="areas" data-i18n-aria="area.nav">
+      <a href="#/lage" data-area="lage" data-i18n="area.lage" data-i18n-title="area.lage_title"></a>
+      <a href="#/analyse" data-area="analyse" data-i18n="area.analyse" data-i18n-title="area.analyse_title"></a>
+      <a href="#/netz" data-area="netz" data-i18n="area.netz" data-i18n-title="area.netz_title"></a>
+    </nav>
+
     <form class="search" id="search" role="search" autocomplete="off">
       <label for="search-q" class="sr-only" data-i18n="search.label"></label>
       <input id="search-q" type="search" data-i18n-placeholder="search.placeholder" maxlength="100">
@@ -42,8 +48,8 @@
     </form>
 
     <div class="actions">
-      <button type="button" id="btn-assets" data-i18n="btn.assets" data-i18n-title="btn.assets_title"></button>
-      <button type="button" id="btn-tools" data-i18n="btn.tools" data-i18n-title="btn.tools_title"></button>
+      <button type="button" id="btn-palette" class="kbd-btn" data-i18n-title="btn.palette_title"><span data-i18n="btn.palette"></span></button>
+      <button type="button" id="btn-alerts" class="alert-btn" data-i18n-title="btn.alerts_title"><span id="alert-badge"></span></button>
       <button type="button" id="btn-projection" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
       <button type="button" id="btn-status" class="status-btn" data-i18n-title="btn.status_title"><span class="dots" id="status-dots"></span><span data-i18n="btn.status"></span></button>
       <button type="button" id="btn-settings" class="icon-btn" data-i18n-title="btn.settings_title"><span aria-hidden="true">⚙</span><span class="sr-only" data-i18n="btn.settings"></span></button>
@@ -114,43 +120,39 @@
     </div>
   </aside>
 
-  <!-- network tools -->
+  <!-- map tool bar (situation view): ping, traceroute, IP info; more tools in the menu -->
+  <div class="hud maptools" id="maptools" data-i18n-aria="mt.bar">
+    <form id="mt-form" autocomplete="off">
+      <label for="mt-target" class="sr-only" data-i18n="mt.target"></label>
+      <input id="mt-target" type="text" maxlength="500" spellcheck="false" data-i18n-placeholder="mt.placeholder">
+      <span class="mt-main" id="mt-main"></span>
+      <span class="mt-more">
+        <button type="button" id="mt-more-btn" aria-expanded="false" aria-haspopup="true" data-i18n="mt.more"></button>
+        <span class="mt-menu" id="mt-menu" hidden></span>
+      </span>
+    </form>
+  </div>
+
+  <!-- tool result window (situation view) -->
   <section class="panel panel-tools" id="panel-tools" hidden data-i18n-aria="panel.tools">
     <div class="panel-head">
-      <h2 data-i18n="panel.tools"></h2>
+      <h2 id="mt-title" data-i18n="panel.tools"></h2>
       <button type="button" class="collapse" id="tools-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
     </div>
-    <div class="panel-body">
-      <nav class="tabs tool-tabs" role="tablist" data-i18n-aria="tool.tabs">
-        <button role="tab" aria-selected="true" data-tool="ping" data-i18n="tool.ping"></button>
-        <button role="tab" aria-selected="false" data-tool="traceroute" data-i18n="tool.traceroute"></button>
-        <button role="tab" aria-selected="false" data-tool="dns" data-i18n="tool.dns"></button>
-        <button role="tab" aria-selected="false" data-tool="rdap" data-i18n="tool.rdap"></button>
-        <button role="tab" aria-selected="false" data-tool="ipinfo" data-i18n="tool.ipinfo"></button>
-        <button role="tab" aria-selected="false" data-tool="ports" data-i18n="tool.ports"></button>
-        <button role="tab" aria-selected="false" data-tool="http" data-i18n="tool.http"></button>
-      </nav>
-      <form class="tool-form" id="tool-form" autocomplete="off"></form>
-      <div class="tool-out" id="tool-out" aria-live="polite"></div>
-    </div>
+    <div class="panel-body" id="mt-body"></div>
   </section>
 
-  <!-- assets, products, logs, alerts -->
-  <section class="panel panel-assets" id="panel-assets" hidden data-i18n-aria="panel.assets">
-    <div class="panel-head">
-      <h2 data-i18n="panel.assets"></h2>
-      <button type="button" class="collapse" id="assets-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
-    </div>
-    <div class="panel-body">
-      <nav class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-atab="assets" data-i18n="as.tab.assets"></button>
-        <button role="tab" aria-selected="false" data-atab="products" data-i18n="as.tab.products"></button>
-        <button role="tab" aria-selected="false" data-atab="logs" data-i18n="as.tab.logs"></button>
-        <button role="tab" aria-selected="false" data-atab="alerts" data-i18n="as.tab.alerts"></button>
-      </nav>
-      <div class="assets-body" id="assets-body"></div>
-    </div>
-  </section>
+  <!-- analysis area -->
+  <main class="page" id="area-analyse" hidden data-i18n-aria="area.analyse">
+    <nav class="page-nav" id="an-nav" data-i18n-aria="area.analyse"></nav>
+    <div class="page-main" id="an-main"></div>
+  </main>
+
+  <!-- my network area -->
+  <main class="page" id="area-netz" hidden data-i18n-aria="area.netz">
+    <nav class="page-nav" id="nz-nav" data-i18n-aria="area.netz"></nav>
+    <div class="page-main" id="nz-main"></div>
+  </main>
 
   <!-- legend with layer switches -->
   <section class="hud legend" id="legend" data-i18n-aria="legend.title">

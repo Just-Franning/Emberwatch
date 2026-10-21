@@ -1,20 +1,27 @@
+// Emberwatch web interface. Three areas, switched by the hash router (router.js):
+//   LAGE     world map with rankings, country card, patterns, alerts, Gemini and the map tool bar
+//   ANALYSE  object pages, tool box, deep views, run history (analyse.js)
+//   MEIN NETZ  overview, own IPs, assets, products, alerts, logs (netz.js, assets.js)
 import { AIPanel } from "./ai.js";
-import { Assets } from "./assets.js";
+import { Analyse } from "./analyse.js";
 import { hideCountry, renderCountry } from "./country.js";
 import { applyStatic, t } from "./i18n.js";
 import { initPanels, initShortcuts, renderSettings, renderStatusDots, renderStatusPanel, setCollapsed } from "./layout.js";
 import { Emberwatch } from "./map.js";
+import { MapTools } from "./maptools.js";
+import { Netz } from "./netz.js";
+import { Palette } from "./palette.js";
 import { initLegend, renderAlertFeed, renderKpis, renderLegend, renderPatterns, renderTab } from "./panels.js";
+import { AREAS, go, onRoute, routes, start as startRouter } from "./router.js";
 import { Search } from "./search.js";
 import { Timeline } from "./timeline.js";
-import { Tools } from "./tools.js";
-import { api, dateTime, el, loadCentroids, num } from "./util.js";
+import { api, dateTime, el, kids, loadCentroids, num } from "./util.js";
 import { initWindows } from "./windows.js";
 
 const REFRESH_MS = 5 * 60 * 1000;
 const boot = window.EmberBoot || { step() {}, progress() {}, done() {} };
 const state = {
-  ov: null, victims: [], status: null, alerts: null, tab: "targets", country: null, historical: null,
+  ov: null, victims: [], status: null, alerts: null, tab: "targets", country: null, historical: null, area: "lage",
   c2Filter: { days: 30, source: "all", minConf: 0, family: null }, families: [],
 };
 
@@ -31,6 +38,8 @@ function infraForDay(events, day) {
   return events.filter((x) => (Date.parse(x.start_ts) || 0) < e && (!x.end_ts || Date.parse(x.end_ts) >= s));
 }
 
+const alertRoute = (a) => (a.asset_id ? routes.asset(a.asset_id) : a.product_id ? routes.product(a.product_id) : "netz/alerts");
+
 async function main() {
   applyStatic();
   boot.step(t("boot.init"), "ok");
@@ -40,27 +49,49 @@ async function main() {
   await loadCentroids();
   initPanels();
   initLegend();
-  initWindows(["panel-left", "panel-right", "panel-tools", "panel-assets"]);
-  // the header height varies with width and language: panels start below it
+  initWindows(["panel-left", "panel-right", "panel-tools"]);
+  // the header height varies with width and language: panels and pages start below it
   const header = document.querySelector(".hud-top");
   const setTop = () => document.documentElement.style.setProperty("--top-h", `${Math.ceil(header.getBoundingClientRect().height)}px`);
   new ResizeObserver(setTop).observe(header);
   setTop();
 
-  let tools;
-  let assets;
+  let maptools;
   boot.step(t("boot.map"), "run");
   const map = new Emberwatch(document.getElementById("map"), {
     onCountry: (cc) => selectCountry(cc),
-    onIp: (ip) => tools.open("ipinfo", ip, true),
+    onIp: (ip) => mapTool("ipinfo", ip),
   });
   await map.ready;
   boot.progress(0.45);
-  tools = new Tools(map);
+  maptools = new MapTools({ map });
+  maptools.init();
   const ai = new AIPanel();
-  assets = new Assets({ map, tools, onChange: () => refresh() });
   const statusPanel = document.getElementById("status-panel");
   const settingsPanel = document.getElementById("settings-panel");
+
+  /** Shows a tool/object result on the map: switches to the situation view first. */
+  function showOnMap(m) {
+    if (state.area !== "lage") go("lage");
+    requestAnimationFrame(() => requestAnimationFrame(() => map.showResult(m)));
+  }
+
+  /** Runs a map tool (situation view) with a target. */
+  function mapTool(tool, target) {
+    if (state.area !== "lage") go("lage");
+    maptools.open(tool, target, true);
+  }
+
+  /** Tool from the palette or a link: map tools stay on the map, everything else runs in the tool box. */
+  function runTool(toolId, target) {
+    const tool = (maptools.reg || {}).byId?.[toolId];
+    if (tool?.bar && state.area === "lage") maptools.open(toolId, target, true);
+    else go(routes.tools(target, toolId, true));
+  }
+
+  const analyse = new Analyse({ nav: document.getElementById("an-nav"), main: document.getElementById("an-main"), onMap: showOnMap });
+  const netz = new Netz({ nav: document.getElementById("nz-nav"), main: document.getElementById("nz-main"), onMap: showOnMap, onChange: () => refresh() });
+  const palette = new Palette({ onTool: runTool });
 
   function selectCountry(cc) {
     if (!cc || !/^[A-Z]{2}$/.test(cc)) return;
@@ -75,7 +106,28 @@ async function main() {
     });
   }
 
-  const onCve = (cve) => window.open(`https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cve)}`, "_blank", "noopener,noreferrer");
+  // --- areas --------------------------------------------------------------------------------------------------------
+  const pages = { analyse: document.getElementById("area-analyse"), netz: document.getElementById("area-netz") };
+  function setArea(area) {
+    if (state.area === area) return;
+    if (state.area === "analyse") analyse.leave();
+    if (state.area === "netz") netz.leave();
+    state.area = area;
+    for (const a of AREAS) document.body.classList.toggle(`area-${a}`, a === area);
+    for (const [a, node] of Object.entries(pages)) node.hidden = a !== area;
+    document.querySelectorAll("#areas a").forEach((x) => (x.dataset.area === area ? x.setAttribute("aria-current", "page") : x.removeAttribute("aria-current")));
+    map.pause(area !== "lage");
+    statusPanel.hidden = true;
+    settingsPanel.hidden = true;
+  }
+  onRoute((r) => {
+    setArea(r.area);
+    if (r.area === "analyse") analyse.show(r);
+    else if (r.area === "netz") netz.show(r);
+  });
+  document.querySelectorAll("#areas a").forEach((x) => (x.dataset.area === "lage" ? x.setAttribute("aria-current", "page") : null));
+
+  const onCve = (cve) => go(routes.obj("cve", cve));
 
   function onC2Filter(partial) {
     state.c2Filter = { ...state.c2Filter, ...partial };
@@ -86,7 +138,7 @@ async function main() {
   function drawTab() {
     if (!state.ov) return;
     renderTab(state.tab, {
-      ov: state.ov, victims: state.victims, onCountry: selectCountry, onCve,
+      ov: state.ov, victims: state.victims, onCountry: selectCountry, onCve, onObject: (type, value) => go(routes.obj(type, value)),
       c2Filter: state.c2Filter, onC2Filter, families: state.families, c2Count: map.c2Count,
     });
   }
@@ -118,40 +170,44 @@ async function main() {
   });
 
   const search = new Search({
-    onCountry: selectCountry,
+    onCountry: (cc) => (state.area === "lage" ? selectCountry(cc) : go(routes.obj("country", cc))),
     onC2: (c) => {
-      if (c.lon !== null && c.lon !== undefined) {
-        map.flyTo(c.lon, c.lat, 5);
-        map.c2Popup(c, [c.lon, c.lat]);
-      } else if (c.country) selectCountry(c.country);
+      if (state.area !== "lage") go("lage");
+      requestAnimationFrame(() => {
+        if (c.lon !== null && c.lon !== undefined) {
+          map.flyTo(c.lon, c.lat, 5);
+          map.c2Popup(c, [c.lon, c.lat]);
+        } else if (c.country) selectCountry(c.country);
+      });
     },
-    onIp: (ip) => tools.open("ipinfo", ip, true),
+    onIp: (ip) => mapTool("ipinfo", ip),
     onCve,
-    onAsn: (asn) => tools.open("rdap", asn, true),
+    onAsn: (asn) => go(routes.obj("asn", String(asn).replace(/^as/i, ""))),
     onWatchProduct: async (vendor, product) => {
       try {
-        await assets.watchProduct(vendor, product);
+        await netz.assets.watchProduct(vendor, product);
         search.notice(t("s.product_added", { name: `${vendor} ${product}`.trim() }));
-        assets.open("products");
+        go("netz/products");
       } catch (e) { search.notice(e.message); }
     },
     onWatchAsset: (value) => {
-      assets.open("assets");
-      const input = document.querySelector("#assets-body .watch-form input");
-      if (input) { input.value = value; input.focus(); }
+      netz.assets.prefill = value;
+      go("netz/assets");
     },
-    onOpenAsset: (id) => assets.openAsset(id),
-    onOpenProducts: (id) => (id ? assets.openProduct(id) : assets.open("products")),
+    onOpenAsset: (id) => go(routes.asset(id)),
+    onOpenProducts: (id) => go(id ? routes.product(id) : "netz/products"),
   });
 
   initShortcuts({
-    onTools: () => tools.toggle(),
-    onAssets: () => assets.toggle(),
+    onPalette: () => palette.toggle(),
+    onArea: (a) => go(a),
+    onTools: () => (state.area === "lage" ? maptools.focus() : go(routes.tools())),
     onSearch: () => search.focus(),
-    onEscape: () => { tools.close(); assets.close(); search.hide(); statusPanel.hidden = true; settingsPanel.hidden = true; },
+    onEscape: () => { maptools.close(); search.hide(); palette.close(); statusPanel.hidden = true; settingsPanel.hidden = true; },
+    isLage: () => state.area === "lage",
   });
 
-  // controls
+  // --- controls -----------------------------------------------------------------------------------------------------
   for (const [id, layer] of [["lyr-arcs", "arcs"], ["lyr-c2", "c2"], ["lyr-ransom", "ransom"], ["lyr-infra", "infra"], ["lyr-cables", "cables"]]) {
     const cb = document.getElementById(id);
     map.setVisible(layer, cb.checked);
@@ -164,8 +220,8 @@ async function main() {
   });
   const projBtn = document.getElementById("btn-projection");
   projBtn.addEventListener("click", () => { projBtn.textContent = t(map.toggleProjection() === "globe" ? "btn.flat" : "btn.globe"); });
-  document.getElementById("btn-tools").addEventListener("click", () => tools.toggle());
-  document.getElementById("btn-assets").addEventListener("click", () => assets.toggle());
+  document.getElementById("btn-palette").addEventListener("click", () => palette.open());
+  document.getElementById("btn-alerts").addEventListener("click", () => go("netz/alerts"));
   const popover = (btn, panel, render) => {
     document.getElementById(btn).addEventListener("click", (e) => {
       e.stopPropagation();
@@ -186,6 +242,16 @@ async function main() {
     drawTab();
   }));
 
+  function renderAlertBadge(stats) {
+    const badge = document.getElementById("alert-badge");
+    const high = stats?.high_7d || 0;
+    const medium = stats?.medium_7d || 0;
+    const btn = document.getElementById("btn-alerts");
+    btn.classList.toggle("hot", high > 0);
+    kids(badge, t("btn.alerts"), high || medium ? el("b", {}, num(high + medium)) : null);
+    btn.title = t("btn.alerts_title_n", { high: num(high), medium: num(medium), low: num(stats?.low_7d || 0) });
+  }
+
   async function refresh(first = false) {
     try {
       if (first) boot.step(t("boot.feeds"), "run");
@@ -203,10 +269,12 @@ async function main() {
       renderKpis(ov);
       drawTab();
       renderPatterns(ov.patterns, selectCountry);
-      renderAlertFeed(alertData, { onOpen: (a) => (a.asset_id ? assets.openAsset(a.asset_id) : assets.openProduct(a.product_id)), onWindow: () => assets.open("alerts") });
+      renderAlertFeed(alertData, { onOpen: (a) => go(alertRoute(a)), onWindow: () => go("netz/alerts") });
+      renderAlertBadge(alertData.stats);
       renderStatusDots(status);
       ai.setRegion(status.region);
-      assets.setStatus(status);
+      analyse.setStatus(status);
+      netz.setStatus(status);
       if (!statusPanel.hidden) renderStatusPanel(status, { basemapFailed: map.basemapFailed });
       document.getElementById("stamp").textContent = t("stamp.as_of", { t: dateTime(ov.generated_at) });
       if (first) {
@@ -217,13 +285,16 @@ async function main() {
       }
       await timeline.load();
     } catch (e) {
-      document.getElementById("stamp").replaceChildren(el("span", { class: "warn-txt" }, t("stamp.failed", { msg: e.message })));
+      kids(document.getElementById("stamp"), el("span", { class: "warn-txt" }, t("stamp.failed", { msg: e.message })));
       if (first) boot.step(t("stamp.failed", { msg: e.message }), "fail");
     }
   }
 
   map.setC2Filter(state.c2Filter);
   await refresh(true);
+  // the address this interface is opened from (via the reverse proxy): sighting for "my IP"
+  api("api/myip/visit", { method: "POST" }).catch(() => {});
+  startRouter();
   boot.progress(1);
   boot.step(t("boot.ready"), "ok");
   boot.done();
