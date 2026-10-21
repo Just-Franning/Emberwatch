@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.2.0 – unreleased
+## 3.2.0 – 2026-10-21
 
 The map has two views now: the **Cyberlage** (attack data, red) and the new **Weltlage** (security reports in their geopolitical context, indigo). The map view is tidier: one side panel, layer chips above the map, four key figures below it.
 
