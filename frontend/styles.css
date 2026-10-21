@@ -815,6 +815,13 @@ body.left-collapsed .maptools, body.right-collapsed .maptools, body.panel-left-f
 .tool-live .kv { margin-top: 6px; }
 .panel-tools .tool-out .result { border: 0; padding: 4px 0 0; margin: 0; background: none; }
 
+.map-note {
+  top: calc(var(--top-h) + var(--gap) + 48px); left: 50%; transform: translateX(-50%); z-index: 16; display: flex; gap: 10px; align-items: center;
+  background: var(--panel-solid); border: 1px solid var(--border-strong); padding: 4px 6px 4px 10px; font-size: 11.5px; max-width: 60vw;
+}
+.map-note span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body:not(.area-lage) .map-note { display: none; }
+
 /* --- command palette ---------------------------------------------------------------------------------------- */
 .palette-back { position: fixed; inset: 0; z-index: 9500; background: rgba(0, 0, 0, 0.55); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; }
 .palette-back[hidden] { display: none; }
@@ -846,6 +853,7 @@ body.left-collapsed .maptools, body.right-collapsed .maptools, body.panel-left-f
   .maptools { left: var(--gap); right: var(--gap); top: auto; bottom: calc(var(--bottom-h) + var(--gap) + 92px); max-width: none; }
   .maptools input { flex-basis: 100%; }
   body:not(.right-collapsed) .maptools { display: none; }
+  .map-note { top: auto; bottom: calc(var(--bottom-h) + var(--gap) + 172px); left: var(--gap); right: var(--gap); transform: none; max-width: none; }
   .big-form { flex-direction: column; align-items: stretch; }
   .kv { grid-template-columns: minmax(0, 1fr); }
   .kv dt { margin-top: 4px; }

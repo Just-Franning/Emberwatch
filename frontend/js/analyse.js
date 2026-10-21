@@ -165,7 +165,7 @@ export class Analyse {
       ...groups.map(([g, list]) => el("div", { class: "act-group" }, el("span", { class: "act-label" }, t(`tb.group.${g}`)),
         ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available, title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
           class: `lvl-btn lvl-${x.level}`, onclick: () => this.stack.tool(x.id, toolTarget(o)) }, x.name)))),
-      page.map ? el("button", { type: "button", onclick: () => this.onMap(page.map) }, t("common.show_map")) : null,
+      page.map ? el("button", { type: "button", onclick: () => this.onMap(page.map, `${t(`obj.type.${page.type}`)}: ${page.title}`) }, t("common.show_map")) : null,
       tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null);
     const reasons = page.risk.reasons?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.assessment")), findingsNode(page.risk.reasons)) : null;
     const sections = (page.sections || []).map(sectionNode);

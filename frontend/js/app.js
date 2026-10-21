@@ -70,10 +70,16 @@ async function main() {
   const statusPanel = document.getElementById("status-panel");
   const settingsPanel = document.getElementById("settings-panel");
 
-  /** Shows a tool/object result on the map: switches to the situation view first. */
-  function showOnMap(m) {
+  /** Shows a tool/object result on the map: switches to the situation view first and names what is shown. */
+  const note = document.getElementById("map-note");
+  document.getElementById("map-note-clear").addEventListener("click", () => { map.clearTool(); note.hidden = true; });
+  function showOnMap(m, label = "") {
     if (state.area !== "lage") go("lage");
-    requestAnimationFrame(() => requestAnimationFrame(() => map.showResult(m)));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const n = map.showResult(m);
+      document.getElementById("map-note-txt").textContent = t("mt.on_map", { what: label || t("mt.result"), n: num(n) });
+      note.hidden = false;
+    }));
   }
 
   /** Runs a map tool (situation view) with a target. */

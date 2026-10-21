@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.1.0 – unreleased
+
+The interface is split into three areas: **Situation** (world map), **Analysis** (objects and tools) and **My network**. The map stays lean; depth moved to its own pages.
+
+### Added
+- Analysis area with object pages for IPs, networks, AS numbers, domains, URLs, file hashes, CVEs, countries, malware families, ransomware groups and vendors: risk with reasons, local data, relation to your own assets and IPs, related objects, own alerts, tool history, pinning and recently opened objects
+- Tool box with input detection (IP, network, AS, domain, URL, e-mail address, hash, CVE, mail header) and tools grouped by question; every tool is labelled passive, active or intrusive, with "target sees you" and the third party that receives the input
+- New tools: path quality (traceroute with several probes per hop), Globalping, BGP/RPKI (RIPEstat), passive DNS (mnemonic), certificates (Certificate Transparency for any domain), GreyNoise, file hashes (MalwareBazaar), lookalike domains for any domain, TLS in depth (versions, weak ciphers), HTTP security (redirect chain, headers, cookies, disclosure, CORS), SSH audit (algorithms, Terrapin, vulnerable OpenSSH versions), DNS with DNSSEC/CAA and an optional zone transfer test (needs confirmation), mail security (SPF incl. lookup count, DMARC with organisational fallback, DKIM, MTA-STS, TLS-RPT, DNSSEC, optional STARTTLS), mail header analysis with the delivery path on the map, CyberChef link
+- Recipes: server check, domain check, suspicious IP, suspicious mail
+- Unified result format for all tools, stored for 90 days (history in the analysis area, JSON download)
+- Deep views: exploited vulnerabilities with filters (EPSS, ransomware, "mine"), infrastructure events, C2 servers, ransomware victims
+- Gemini assessment per object with follow-up questions; own assets are only sent as a flag, leak site victim names never
+- My IP: tracking of the home connection and of this server's egress address with history, checks (Spamhaus DROP, Tor, C2/IOC data, AbuseIPDB, InternetDB ports) and alerts; home IP via visits (confirmation or automatically within the provider's network), DynDNS host name, or a reporter with a token (`/api/myip/report`, dyndns2 `/nic/update`)
+- My network overview: own IPs, alerts, assets by risk, products, operation
+- Situation view: map tool bar (ping, traceroute, IP info; more: path quality, Globalping, mail hops), "analyse in depth" from the country card, links from rankings to the deep views
+- Command palette (`Ctrl+K`), area shortcuts `1` `2` `3`, alert counter in the header
+- Settings `GREYNOISE_API_KEY`, `GLOBALPING_TOKEN`, `CYBERCHEF_URL`
+- Image tags for feature branches (`feature-<name>`) to test changes before a release
+
+### Changed
+- Assets, products, alerts and logs moved from the floating window into *My network*; the keys `A` (assets) and the tools window were replaced by the areas and the map tool bar
+- Network tools stream newline-delimited JSON instead of server-sent events (`/api/tb/*` replaces `/api/tools/*`)
+- CVE links open the CVE's object page (with KEV, EPSS, NVD and your exposure) instead of the NVD website
+
+### Fixed
+- Error messages with an upstream HTTP status (Gemini, RDAP and others) no longer turn into an internal error
+- Lists in the interface no longer show the word "null" where an optional block is missing
+- The login page loads all its scripts without a session
+
 ## 3.0.1 – 2026-10-20
 
 ### Fixed

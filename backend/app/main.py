@@ -377,7 +377,7 @@ CSP = (
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/boot.js",
+                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 

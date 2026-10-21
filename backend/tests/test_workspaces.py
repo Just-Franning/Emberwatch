@@ -644,3 +644,26 @@ def test_myip_auto_asn_and_jobs(m, monkeypatch):
     assert page["mine"]["myip"] == "server" and "ob.f.myip" in [f["key"] for f in page["risk"]["reasons"]]
     from app.objects import object_context
     assert "5.9.1.2" in json.dumps(object_context(page)) and "ob.f.myip" not in json.dumps(object_context(page))
+
+
+def test_login_page_assets_public(tmp_path, monkeypatch):
+    """With a login, the login page and every module it imports load without a session; the app itself does not."""
+    m = v3.load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="a-long-test-password-123")
+    from fastapi.testclient import TestClient
+    js = ROOT / "frontend" / "js"
+    todo, seen = ["login.js"], set()
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        todo += re.findall(r'from "\./([\w.-]+\.js)"', (js / f).read_text())
+    assert {"login.js", "i18n.js", "texts.js"} <= seen
+    with TestClient(m.app) as tc:
+        assert tc.get("/login").status_code == 200
+        for f in sorted(seen):
+            assert tc.get(f"/js/{f}").status_code == 200, f
+        assert tc.get("/js/app.js").status_code == 401
+        assert tc.get("/api/myip").status_code == 401
+        assert tc.post("/api/myip/report").json()["status"] == "badauth"  # public path, token checked by the endpoint
+        assert tc.get("/nic/update").text == "badauth"

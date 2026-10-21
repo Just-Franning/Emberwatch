@@ -55,6 +55,7 @@ export const TEXTS = {
     "mt.mail_label": "Mail-Header oder komplette .eml", "mt.mail_ph": "Header einfügen (in Outlook: Datei > Eigenschaften > Internetkopfzeilen)",
     "mt.load_file": ".eml laden", "mt.too_big": "Datei zu groß (max. 15 MB).", "mt.loss": "Verlust",
     "mt.progress": "{done} von {total} Messpunkten fertig", "mt.stopped": "Abgebrochen.",
+    "mt.on_map": "Auf der Karte: {what} ({n} Punkte)", "mt.result": "Ergebnis",
     // analysis area
     "an.title": "Analyse", "an.lead": "Ein Objekt eingeben und alles sehen, was Emberwatch dazu weiß, oder gezielt Werkzeuge ausführen.",
     "an.input_ph": "IP, Netz, AS, Domain, URL, E-Mail, Hash, CVE oder Mail-Header …", "an.analyse": "Analysieren",
@@ -201,6 +202,7 @@ export const TEXTS = {
     "mt.mail_label": "Mail header or complete .eml", "mt.mail_ph": "Paste the header (Outlook: File > Properties > Internet headers)",
     "mt.load_file": "Load .eml", "mt.too_big": "File too large (max. 15 MB).", "mt.loss": "Loss",
     "mt.progress": "{done} of {total} probes done", "mt.stopped": "Stopped.",
+    "mt.on_map": "On the map: {what} ({n} points)", "mt.result": "result",
     "an.title": "Analysis", "an.lead": "Enter an object and see everything Emberwatch knows about it, or run specific tools.",
     "an.input_ph": "IP, network, AS, domain, URL, e-mail, hash, CVE or mail header …", "an.analyse": "Analyse",
     "an.detected": "Detected:", "an.open_object": "Open object page", "an.to_tools": "In the tool box", "an.text_as": "Open as:",

@@ -10,32 +10,42 @@ Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ranso
 
 ## Funktionen
 
-**Globales Lagebild**
+Emberwatch hat drei Bereiche: **Lage** (die Weltkarte), **Analyse** (Objekte und Werkzeuge) und **Mein Netz** (eigene IPs, Assets, Produkte und Logs). `Strg+K` öffnet eine Befehlspalette für alles.
+
+**Lage – globales Lagebild**
 - Weltkarte mit L7-Angriffsflüssen (Ursprung → Ziel), Länderflächen nach Angriffsanteil, gemeldeten C2-Servern, Ransomware-Opfern je Land, Internet-Ausfällen, BGP-Hijacks/Route-Leaks, Traffic-Anomalien und Seekabeln
 - Ranglisten: Ziel- und Ursprungsländer (24 h gegenüber 7 Tagen), DDoS-Vektoren, L7-Angriffskategorien, C2-Familien und Hosting-Netze, Ransomware-Gruppen und Branchen, neu ausgenutzte Schwachstellen (CISA KEV mit FIRST EPSS)
 - Regelbasierte Mustererkennung (steigende Länder und Vektoren, Spikes, neue C2-Familien, KEV-Häufungen, kritische Ausfälle, Korrelationen), deterministisch und nachvollziehbar
-- Zeitachse mit Tageshistorie (bis 90 Tage) und 30-Tage-Trends je Land
-- Export einer C2-Blockliste (TXT/CSV) mit Filtern
+- Zeitachse mit Tageshistorie (bis 90 Tage), kompakte Länderkarte mit Sprung zur vollständigen Länderanalyse
+- Karten-Werkzeugleiste: Ping, Traceroute und IP-Info mit Live-Anzeige auf der Karte; unter *Mehr*: Pfad-Qualität (Traceroute mit mehreren Paketen pro Hop), Globalping (Messungen von Messpunkten weltweit) und Mail-Hops (der Zustellweg eines Mail-Headers auf der Karte)
 - Optionale Gemini-Berichte (global, Land, Heimatregion, freie Fragen mit Rückfragen), exportierbar als Markdown oder PDF. Das Modell erhält nur aggregierte Kennzahlen.
 
-**Eigene Assets** (IPs, Netze, AS-Nummern, Domains)
-- Abgleich mit C2-Servern, ThreatFox-IOCs, BGP-Hijacks/-Leaks, Ausfällen, Ransomware-Leak-Sites, Spamhaus DROP und AbuseIPDB
-- Passive Angriffsfläche über Shodan InternetDB: offene Ports, CVEs (markiert, wenn in CISA KEV), Änderungen werden zu Alarmen
-- Optionaler aktiver TCP-Scan für Assets, die du ausdrücklich freigegeben und bestätigt hast: offene Ports, TLS-Zertifikate (Ablauf, Wechsel), HTTP-Server, Dienst-Banner
-- Überwachung der Zertifikats-Transparenz (neue Namen und neue Zertifizierungsstellen) und Erkennung ähnlicher Domains (Tippfehler, Homoglyphen, IDN, Bitflips, andere TLDs)
-- Live-BGP-Überwachung eigener Präfixe über RIPE RIS Live: unerwarteter Origin-AS, spezifischere Ankündigungen, massenhafte Rückzüge
+**Analyse – Objekte und Werkzeuge**
+- Objektseiten für IPs, Netze, AS-Nummern, Domains, URLs, Datei-Hashes, CVEs, Länder, Malware-Familien, Ransomware-Gruppen und Hersteller: Risikobewertung mit Begründung, alles, was die lokalen Daten wissen, Bezug zu den eigenen Assets, Zusammenhänge, deine Alarme dazu, frühere Werkzeug-Läufe und eine optionale Gemini-Bewertung
+- Werkzeugkasten: beliebige Eingabe einfügen (IP, Netz, AS, Domain, URL, E-Mail-Adresse, Hash, CVE oder Mail-Header); Emberwatch erkennt den Typ und zeigt, welche Werkzeuge passen, gruppiert nach Fragestellung:
+  - *Erreichbarkeit:* Ping, Traceroute, Pfad-Qualität, Globalping
+  - *Herkunft:* IP-Info, RDAP/Whois, BGP/RPKI (RIPEstat), Passive DNS (mnemonic), Zertifikate (Certificate Transparency)
+  - *Bedrohung:* lokale Bedrohungsdaten (C2, ThreatFox, Spamhaus DROP, Tor), GreyNoise, Datei-Hashes (MalwareBazaar), registrierte ähnliche Domains
+  - *Absicherung:* Portcheck, TLS (Versionen, schwache Cipher, Zertifikat), HTTP-Sicherheit (Weiterleitungen, Header, Cookies, preisgegebene Versionen), SSH-Audit (Verfahren, Terrapin, bekannt verwundbare OpenSSH-Versionen), DNS/DNSSEC/CAA mit optionalem Zonentransfer-Test, Mail-Sicherheit (MX, SPF inkl. Zahl der Lookups, DMARC, DKIM, MTA-STS, TLS-RPT, DNSSEC, optional STARTTLS)
+  - *E-Mail:* Header-Analyse (Absender- und Authentifizierungsprüfungen, Zustellweg, Links, Anhänge)
+  - *Umwandeln:* CyberChef (im Browser)
+- Jedes Werkzeug ist gekennzeichnet: **passiv** (nur Datenquellen), **aktiv** (harmloser Kontakt mit dem Ziel) oder **Eingriff** (braucht pro Lauf deine Bestätigung); dazu *Ziel sieht dich* und welcher *Dritte* die Eingabe erhält
+- Rezepte führen mehrere Werkzeuge in einem Durchgang aus: Server-Check, Domain-Check, verdächtige IP, verdächtige Mail
+- Tiefenansichten: ausgenutzte Schwachstellen (Filter, EPSS, markiert, was dich betrifft), Infrastruktur-Ereignisse, C2-Server (mit Blocklisten-Export), Ransomware-Opfer; Verlauf aller Werkzeug-Läufe (90 Tage)
 
-**Produktbeobachtung:** nach einem Hersteller oder Produkt suchen (z. B. „Sophos“) und beobachten. Alarm bei neuen CISA-KEV-Einträgen und neuen kritischen CVEs aus der NVD.
+**Mein Netz**
+- Übersicht: deine IPs, Alarme der letzten 7 Tage, Assets nach Risiko, Produkte, Betrieb
+- **Meine IP:** verfolgt den eigenen Anschluss und die ausgehende Adresse dieses Servers, protokolliert jeden Wechsel und prüft beide gegen Spamhaus DROP, Tor, die C2-/IOC-Daten, AbuseIPDB und Shodan InternetDB (offene Ports). Die Heim-IP kommt aus deinen Aufrufen (mit Bestätigung, optional automatisch im Netz deines Anbieters), einem DynDNS-Hostnamen oder einem Melder: `curl` mit Token oder jeder dyndns2-Client (Router, ddclient)
+- Assets (IPs, Netze, AS-Nummern, Domains): Abgleich mit C2-Servern, ThreatFox-IOCs, BGP-Hijacks/-Leaks, Ausfällen, Leak-Sites, Spamhaus DROP und AbuseIPDB; passive Angriffsfläche über Shodan InternetDB; optionaler aktiver TCP-Scan nach ausdrücklicher Bestätigung; Überwachung von Zertifikats-Transparenz und ähnlichen Domains; Live-BGP-Überwachung über RIPE RIS Live
+- Produktbeobachtung für Hersteller/Produkte gegen CISA KEV und NVD
+- Log-Analyse (Upload, auch .gz) und optionaler Syslog-Empfang
+- Ein Alarm-Feed mit optionaler Matrix-Benachrichtigung und Tagesbericht
 
-**Log-Analyse:** Firewall-, Proxy-, DNS-, Web- oder Mailserver-Logs hochladen (Text oder .gz). Enthaltene IPs, Domains und URLs werden gegen C2-Server, ThreatFox-IOCs, Tor-Exit-Nodes und Spamhaus DROP geprüft. Die Datei wird nicht gespeichert. Optional fortlaufender Syslog-Empfang (UDP/TCP).
+**Oberfläche:** Deutsch und Englisch, verschiebbare und skalierbare Fenster auf der Karte, Tastenkürzel, Start-Animation, optionale Anmeldung.
 
-**Alarme:** ein gemeinsamer Alarm-Feed für alles, was dich betrifft, optional mit Matrix-Benachrichtigung und Tagesbericht.
+![Objektseite eines Landes](docs/object.webp)
 
-**Netzwerk-Tools** mit Live-Anzeige auf der Karte: Ping, Traceroute, DNS (mit SPF/DMARC/DNSSEC-Flag), Whois (RDAP), IP-Info mit Reputation, Port-Check, HTTP/TLS-Prüfung.
-
-**Oberfläche:** Deutsch und Englisch, verschiebbare und skalierbare Fenster mit einstellbarer Deckkraft, Tastenkürzel, Start-Animation, optionale Anmeldung.
-
-![Asset-Detail mit Angriffsfläche und Alarmen](docs/assets.webp)
+![Werkzeugkasten](docs/toolbox.webp)
 
 ## Voraussetzungen
 
@@ -84,9 +94,10 @@ Das Image `ghcr.io/saturdaynetlab/emberwatch` wird für `linux/amd64` und `linux
 | Tag | Inhalt |
 |---|---|
 | `latest` | neuestes Release |
-| `3`, `3.0` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
-| `3.0.0` | genau dieses Release |
+| `3`, `3.1` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
+| `3.1.0` | genau dieses Release |
 | `edge` | aktueller Stand von `main`, Änderungen zwischen den Releases |
+| `feature-<name>` | Test-Build eines Feature-Branches vor dem Zusammenführen (instabil) |
 | `sha-<commit>` | ein einzelner Build |
 
 ## Aktualisieren
@@ -108,11 +119,28 @@ Neue Versionen stehen auf der [Releases-Seite](https://github.com/SaturdayNetLab
    docker exec emberwatch cat /data/initial-password.txt
    ```
 2. **Auf Daten warten.** Der erste Abruf dauert einige Minuten, die Radar-Historie (standardmäßig 30 Tage) lädt im Hintergrund. *Status* zeigt den Zustand jeder Quelle.
-3. **Assets anlegen.** *Assets* (Taste `A`): IPs, Netze, AS-Nummern oder Domains. Aktive Scans sind erst möglich, nachdem du bestätigt hast, dass du das Asset scannen darfst.
-4. **Produkte beobachten.** Nach einem Hersteller suchen, z. B. `Sophos`, und *Als Produkt beobachten* wählen, oder unter *Assets → Produkte* anlegen.
-5. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
+3. **Assets anlegen.** *Mein Netz → Assets*: IPs, Netze, AS-Nummern oder Domains. Aktive Scans sind erst möglich, nachdem du bestätigt hast, dass du das Asset scannen darfst.
+4. **Meine IP einrichten.** *Mein Netz → Meine IP*: die Adresse übernehmen, von der du verbunden bist, einen DynDNS-Hostnamen eintragen oder ein Token für einen Melder erzeugen (siehe [Meine IP](#meine-ip)).
+5. **Produkte beobachten.** Nach einem Hersteller suchen, z. B. `Sophos`, und *Als Produkt beobachten* wählen, oder unter *Mein Netz → Produkte* anlegen.
+6. **Analysieren.** Unter *Analyse* eine IP, Domain, einen Hash, eine CVE oder einen Mail-Header eingeben, oder überall `Strg+K` drücken.
+7. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
 
-Tastenkürzel: `[` und `]` Seitenpanels ein/aus, `T` Netzwerk-Tools, `A` Assets-Fenster, `/` Suche, `Esc` schließen. Fenster lassen sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft und Start-Animation stehen unter *Einstellungen* (⚙).
+Tastenkürzel: `Strg+K` Befehlspalette, `1` `2` `3` Bereiche wechseln, `/` Suche, `T` Karten-Werkzeugleiste (in der Lage; sonst Werkzeugkasten), `[` und `]` Seitenpanels ein/aus, `Esc` schließen. Fenster auf der Karte lassen sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft und Start-Animation stehen unter *Einstellungen* (⚙).
+
+### Meine IP
+
+Die Heim-IP kommt auf einem von drei Wegen (kombinierbar):
+
+1. **Beim Aufruf von Emberwatch**: *Meine IP* zeigt die Adresse, von der du verbunden bist, und übernimmt sie auf Wunsch. Optional wird sie künftig automatisch übernommen, wenn du wieder aus demselben Netz (AS) kommst; Mobilfunk oder Hotels werden so ignoriert. Dafür braucht es einen Reverse Proxy, der `X-Forwarded-For` setzt.
+2. **DynDNS-Hostname**: zeigt ein Hostname auf deinen Anschluss, löst Emberwatch ihn alle 10 Minuten auf.
+3. **Melder mit Token** (unter *Meine IP* erzeugt, nur einmal angezeigt, gespeichert wird nur der Hash):
+   ```bash
+   # Cronjob auf einem Gerät zu Hause: es gilt die Adresse, von der die Anfrage kommt
+   curl -fsS -X POST -H "Authorization: Bearer <token>" https://emberwatch.example.org/api/myip/report
+   ```
+   dyndns2-Clients (Router, ddclient, inadyn) nutzen `https://emberwatch.example.org/nic/update?myip=<ipaddr>` mit HTTP-Basic-Auth (Benutzername beliebig, Passwort = Token).
+
+Beide Pfade melden sich mit dem Token an und sind ohne Sitzung erreichbar. Schützt ein Login oder SSO vor Emberwatch (z. B. Pangolin, Authelia) jeden Pfad, für `/api/myip/report` und `/nic/update` eine Ausnahme anlegen.
 
 ## Konfiguration
 
@@ -129,11 +157,15 @@ Alle Einstellungen sind Umgebungsvariablen; [`.env.example`](.env.example) enth�
 | `ABUSEIPDB_API_KEY` | – | Optional, IP-Reputation (kostenlos: 1.000 Abfragen pro Tag) |
 | `NVD_API_KEY` | – | Optional, schnellere Produktprüfung (50 statt 5 Anfragen je 30 s) |
 | `CERTSPOTTER_API_KEY` | – | Optional, höhere Limits für die Zertifikats-Transparenz |
+| `GREYNOISE_API_KEY` | – | Optional, GreyNoise-Community-Key für das Werkzeug GreyNoise (geht auch ohne Key, mit geringerem Limit) |
+| `GLOBALPING_TOKEN` | – | Optional, Globalping-Token (mehr Messungen als ohne) |
+| `CYBERCHEF_URL` | öffentliche GCHQ-Instanz | CyberChef für den Werkzeugkasten, z. B. eine selbst gehostete Instanz |
 | `GEMINI_API_KEY` | – | Optional, KI-Berichte |
 | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_ROOM_ID` | – | Optionale Matrix-Benachrichtigung (Bot-Konto in einem unverschlüsselten Raum) |
 | `MATRIX_MIN_SEVERITY` | `high` | Mindest-Schwere für Benachrichtigungen |
 | `DAILY_REPORT_TIME` | `07:00` | Tagesbericht (Ortszeit, `TZ`), leer = aus |
 | `HOME_REGION`, `HOME_REGION_NAME` | – | Optionale Heimatregion, z. B. `DE,AT,CH` / `DACH`, ergänzt eine Regionsanalyse |
+| `TOOLS_ENABLED` | `1` | `0` schaltet die Netzwerk-Tools und den Werkzeugkasten ab |
 | `TOOLS_ALLOW_PRIVATE` | `0` | `1` = Tools und aktive Scans dürfen private Adressen ansprechen |
 | `SCAN_ENABLED` | `1` | `0` schaltet aktive Scans vollständig ab |
 | `SYSLOG_ENABLED` | `0` | `1` = Syslog-Empfang auf `SYSLOG_PORT` (Standard 5514, UDP und TCP) |
@@ -141,16 +173,19 @@ Alle Einstellungen sind Umgebungsvariablen; [`.env.example`](.env.example) enth�
 
 Woher die Keys kommen:
 - Cloudflare: *My Profile → API Tokens → Create Token* (eigenes Token mit Leserecht für Radar)
-- abuse.ch: <https://auth.abuse.ch/>
+- abuse.ch: <https://auth.abuse.ch/> (auch für die Hash-Prüfung über MalwareBazaar)
 - AbuseIPDB: <https://www.abuseipdb.com/account/api>
 - NVD: <https://nvd.nist.gov/developers/request-an-api-key>
 - Gemini: <https://aistudio.google.com/apikey>
+- GreyNoise: <https://viz.greynoise.io> (Kontomenü → *My API Key*)
+- Globalping: <https://dash.globalping.io> (*Tokens*)
 
 ## Reverse Proxy und Anmeldung
 
 - Auf Port 8000 des Containers weiterleiten. Den `Host`-Header beibehalten (Standard bei Traefik, Nginx Proxy Manager und Pangolin). Schreibt dein Proxy ihn um, den öffentlichen Host in `TRUSTED_ORIGINS` eintragen.
-- Die Netzwerk-Tools nutzen Server-Sent Events; der Proxy darf `text/event-stream` nicht puffern (Emberwatch sendet `X-Accel-Buffering: no`).
-- `FORWARDED_ALLOW_IPS` steht standardmäßig auf `*`, damit die Client-Adressen vom Proxy übernommen werden (Login-Rate-Limit). Ist Port 8000 nicht nur für den Proxy erreichbar, auf die Proxy-Adresse setzen.
+- Werkzeug-Ergebnisse werden gestreamt (`application/x-ndjson`); der Proxy darf diese Antworten nicht puffern (Emberwatch sendet `X-Accel-Buffering: no`).
+- `FORWARDED_ALLOW_IPS` steht standardmäßig auf `*`, damit die Client-Adressen vom Proxy übernommen werden (Login-Rate-Limit, *Meine IP*). Mit `*` gilt der erste Eintrag in `X-Forwarded-For`; auf die Proxy-Adresse setzen, wenn Port 8000 nicht nur für den Proxy erreichbar ist oder dein Proxy vom Client mitgeschickte Header weiterreicht.
+- `/api/myip/report` und `/nic/update` (Melder für *Meine IP*) prüfen ihr eigenes Token und sind ohne Sitzung erreichbar; zu SSO siehe [Meine IP](#meine-ip).
 - Mit `AUTH_MODE=none` ist die Anmeldung aus. Nur hinter einem Proxy verwenden, der Benutzer authentifiziert (z. B. Pangolin, Authelia, Authentik).
 - Passwort zurücksetzen: `AUTH_PASSWORD` setzen oder `/data/auth.json` und `/data/initial-password.txt` löschen und neu starten.
 
@@ -158,11 +193,13 @@ Woher die Keys kommen:
 
 - Anmeldung für einen Benutzer: Passwort als scrypt-Hash, HMAC-signiertes Sitzungs-Cookie (`HttpOnly`, `SameSite=Strict`, `Secure` bei HTTPS), Schutz gegen Durchprobieren, Same-Origin-Prüfung aller API-Anfragen, strikte Content Security Policy.
 - Der Container läuft als unprivilegierter Benutzer mit schreibgeschütztem Root-Dateisystem, ohne Capabilities und mit `no-new-privileges`.
-- Netzwerk-Tools und Scans erreichen nur öffentliche Adressen, solange `TOOLS_ALLOW_PRIVATE=1` nicht gesetzt ist; Hostnamen werden einmal aufgelöst und jede Adresse geprüft (kein DNS-Rebinding), es ist keine Shell beteiligt.
+- Netzwerk-Tools und Scans erreichen nur öffentliche Adressen, solange `TOOLS_ALLOW_PRIVATE=1` nicht gesetzt ist; Hostnamen werden einmal aufgelöst und jede Adresse geprüft (kein DNS-Rebinding), es ist keine Shell beteiligt. Private Adressen gehen nie an Globalping.
+- Jedes Werkzeug zeigt, ob es passiv, aktiv oder ein Eingriff ist, ob das Ziel die Anfrage sieht und welcher Dritte die Eingabe erhält. Der Zonentransfer-Test braucht pro Lauf eine Bestätigung. Links von außen (Lesezeichen, andere Seiten) öffnen den Werkzeugkasten, starten aber nie selbst einen Lauf.
 - **Aktive Scans:** nur Systeme scannen, die dir gehören oder für die du eine Freigabe hast. Emberwatch scannt ein Asset erst nach ausdrücklicher Bestätigung und begrenzt Hosts, Ports und Parallelität. Das Scannen fremder Systeme kann strafbar sein.
 - Hochgeladene Logs werden in einer temporären Datei verarbeitet und sofort gelöscht; nur das Ergebnis geht an den Browser. Syslog-Zeilen werden nur als Alarm zu bekannten Indikatoren gespeichert.
-- Gemini erhält nur aggregierte Kennzahlen und erkannte Muster: keine Opfernamen, keine Roh-IOCs, keine Assets, keine Log-Inhalte.
-- Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), DB-IP-Downloads sowie die Ziele, die du in den Netzwerk-Tools oder Scans wählst.
+- Gemini-Lageberichte erhalten nur aggregierte Kennzahlen und erkannte Muster: keine Opfernamen, keine Roh-IOCs, keine Assets, keine Log-Inhalte. Die Gemini-Bewertung eines Objekts (nur auf Anforderung) sendet das Objekt und die Daten seiner Seite; eigene Assets, IPs und Produkte gehen nur als Hinweis mit, Opfernamen von Leak-Sites gar nicht.
+- *Meine IP* speichert die Adressen, von denen die Oberfläche aufgerufen wird (90 Tage), den Verlauf von Heim- und Server-IP und den Hash des Melder-Tokens. Werkzeug-Läufe werden 90 Tage gespeichert und lassen sich im Verlauf löschen.
+- Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), DB-IP-Downloads, die Ziele, die du in Werkzeugen oder Scans wählst, und die Dritten der Werkzeuge, die du ausführst (in der Oberfläche gekennzeichnet). CyberChef öffnet sich im Browser; die Eingabe steht im URL-Fragment und geht an keinen Server.
 - Sicherung: alles liegt im Volume `/data` (`emberwatch.sqlite`, Anmeldedateien, Geodatenbanken).
 
 ## Aufbau
@@ -172,14 +209,17 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
                                                                           FastAPI + uvicorn (1 Worker)
                                                                           ├─ Collectoren (asyncio-Schleifen) ── öffentliche Quellen
                                                                           ├─ Asset-Überwachung: InternetDB, Scans, CT, Typo, RIS Live
+                                                                          ├─ eigene IPs (Aufrufe, DynDNS, Melder)
+                                                                          ├─ Werkzeugkasten (NDJSON-Streams) und Objektseiten
                                                                           ├─ Alarme → Matrix
                                                                           ├─ Log-Analyse / Syslog-Empfang
                                                                           └─ SQLite (/data)
 ```
 
-- Backend: `backend/app` (ein Modul je Aufgabe: `sources/` Collectoren, `analytics.py` Muster, `surface.py` Angriffsfläche und Scans, `domains.py` CT und ähnliche Domains, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` Log-Analyse und Syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`).
+- Backend: `backend/app` (ein Modul je Aufgabe: `sources/` Collectoren, `analytics.py` Muster, `surface.py` Angriffsfläche und Scans, `domains.py` CT und ähnliche Domains, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` Log-Analyse und Syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` Objektseiten, `myip.py` eigene IPs).
+- Werkzeugkasten: `backend/app/toolbox` – `registry.py` beschreibt jedes Werkzeug (Eingaben, Stufe, Kennzeichen, Parameter) und ist die einzige Quelle für Oberfläche und serverseitige Prüfung; `detect.py` Typerkennung; `result.py` das einheitliche Ergebnisformat; `tools_*.py` die Werkzeuge nach Fragestellung; `runner.py` Läufe, Rezepte und Verlauf.
 - Texte des Backends (Muster, Alarme, Fehler) werden sprachneutral gespeichert und je Anfrage auf Deutsch oder Englisch erzeugt.
-- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML.
+- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML. `router.js` (Bereiche), `maptools.js` (Karten-Werkzeugleiste), `analyse.js` (Objekte, Werkzeugkasten, Ansichten), `netz.js` und `assets.js` (Mein Netz), `result.js` (stellt jedes Werkzeug-Ergebnis dar), `palette.js` (`Strg+K`).
 
 ## Datenquellen und Lizenzen
 
@@ -197,6 +237,12 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
 | [AbuseIPDB](https://www.abuseipdb.com) | IP-Reputation (optional) | Bedingungen von AbuseIPDB |
 | [RIPE NCC RIS Live, RIPEstat](https://ris-live.ripe.net) | Live-BGP, Routing | Bedingungen des RIPE NCC |
 | [Cert Spotter](https://sslmate.com/certspotter/) | Zertifikats-Transparenz | Bedingungen von SSLMate |
+| [Globalping](https://globalping.io) (jsDelivr) | Messungen von Messpunkten weltweit (Werkzeug, auf Anforderung) | Bedingungen von Globalping |
+| [mnemonic PassiveDNS](https://docs.mnemonic.no/api/services/pdns/) | Passive DNS (Werkzeug, auf Anforderung) | Bedingungen von mnemonic |
+| [GreyNoise Community API](https://www.greynoise.io) | Internet-Scanner und bekannte Dienste (Werkzeug, auf Anforderung) | Bedingungen von GreyNoise |
+| [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch) | Datei-Hashes (Werkzeug, auf Anforderung) | Nutzungsbedingungen von abuse.ch |
+| [rdap.org](https://rdap.org) | RDAP-Bootstrap (Whois-Werkzeug) | öffentlich |
+| [CyberChef](https://github.com/gchq/CyberChef) (GCHQ) | Dekodieren im Browser (Link) | Apache 2.0 |
 | [DB-IP Lite](https://db-ip.com) | IP-Geolokalisierung und ASN | CC BY 4.0 |
 | [TeleGeography](https://www.submarinecablemap.com) | Seekabel (Stand 2021) | CC BY-NC-SA 3.0 |
 | [OpenFreeMap](https://openfreemap.org), OpenMapTiles, OpenStreetMap | Kartengrundlage | siehe [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
@@ -213,6 +259,8 @@ Mehrere Quellen erlauben nur nicht-kommerzielle Nutzung. Emberwatch ist für pri
 - Die Erkennung ähnlicher Domains nutzt eine Heuristik für registrierbare Domains (keine Public Suffix List) und wertet jede DNS-Antwort außer NXDOMAIN als registriert.
 - BGP-Alarme sind Heuristiken ohne RPKI-Prüfung; ein neuer Upstream oder ein DDoS-Schutzdienst kann sie auslösen.
 - Syslog wird unverschlüsselt empfangen; Absender über `SYSLOG_ALLOW` und die Firewall einschränken. Bei Docker-Portfreigaben können alle Absender mit der Adresse des Docker-Gateways erscheinen.
+- Werkzeuge mit Drittanbietern haben Rate-Limits (z. B. mnemonic PassiveDNS ohne Key: 10 Anfragen pro Minute); Antworten von Passive DNS, GreyNoise und MalwareBazaar werden 24 Stunden zwischengespeichert.
+- *Meine IP* über Aufrufe braucht einen Reverse Proxy, der `X-Forwarded-For` setzt; hinter CGNAT ist die Heim-IP die gemeinsame Adresse des Anbieters.
 - Ein Benutzer (ein Passwort), eine Instanz (SQLite, ein Worker).
 
 ## Entwicklung

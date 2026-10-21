@@ -182,7 +182,7 @@ export class Assets {
     const geo = rows.filter((r) => r.lat !== null && r.lat !== undefined);
     if (geo.length) {
       out.push(el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => {
-        this.onMap({ points: geo.map((r) => ({ lon: r.lon, lat: r.lat, kind: "target", label: r.ip, ip: r.ip })) });
+        this.onMap({ points: geo.map((r) => ({ lon: r.lon, lat: r.lat, kind: "target", label: r.ip, ip: r.ip })) }, label(d));
       } }, t("common.show_map"))));
     }
     out.push(table([t("as.d.ip"), t("as.d.ports"), t("as.d.vulns"), t("as.d.as")], rows.map((r) => el("tr", {},
@@ -424,7 +424,7 @@ export class Assets {
       const geo = r.hits.filter((h) => h.geo && h.geo.lat !== undefined && h.geo.lat !== null);
       if (geo.length) {
         parts.push(el("div", { class: "btnrow" }, el("button", { type: "button", onclick: () => {
-          this.onMap({ points: geo.map((h) => ({ lon: h.geo.lon, lat: h.geo.lat, kind: "target", label: h.indicator, ip: h.indicator, sev: h.severity })) });
+          this.onMap({ points: geo.map((h) => ({ lon: h.geo.lon, lat: h.geo.lat, kind: "target", label: h.indicator, ip: h.indicator, sev: h.severity })) }, t("nz.nav.logs"));
         } }, t("common.show_map"))));
       }
       parts.push(table(["", t("lg.indicator"), t("lg.count"), t("lg.match"), t("lg.line")], r.hits.map((h) => el("tr", {},

@@ -85,7 +85,7 @@ export function renderResult(r, opts = {}) {
   const verdict = el("p", { class: "verdict" }, sevTag(r.verdict?.sev || "ok"), r.verdict?.text || "");
   const actions = el("div", { class: "btnrow res-actions" },
     r.object ? objLink(r.object.type, r.object.value, t("res.open_object"), "btn") : null,
-    r.map && opts.onMap ? el("button", { type: "button", onclick: () => opts.onMap(r.map) }, t("common.show_map")) : null,
+    r.map && opts.onMap ? el("button", { type: "button", onclick: () => opts.onMap(r.map, `${r.title}: ${r.target}`) }, t("common.show_map")) : null,
     el("button", { type: "button", onclick: () => download(`emberwatch-${slug(r.tool)}-${slug(r.target)}.json`, JSON.stringify(r, null, 2), "application/json") }, t("res.json")),
     ...(opts.actions || []));
   const raw = r.raw ? el("details", { class: "res-raw" }, el("summary", {}, t("res.raw"))) : null;
@@ -135,7 +135,7 @@ function collectMaps(r, opts) {
       paths.push(...(s.result.map.paths || []));
     }
   }
-  return points.length ? [el("button", { type: "button", onclick: () => opts.onMap({ points, paths }) }, t("common.show_map"))] : [];
+  return points.length ? [el("button", { type: "button", onclick: () => opts.onMap({ points, paths }, `${r.title}: ${r.target}`) }, t("common.show_map"))] : [];
 }
 
 export function destroyIn(node) {
