@@ -1,5 +1,5 @@
-// Search across C2, ThreatFox IOCs, KEV, NVD, ransomware victims, infrastructure events, countries,
-// your assets and watched products. Vendor/product queries (e.g. "Sophos") can be watched directly.
+// Search across C2, ThreatFox IOCs, KEV, NVD, ransomware victims, infrastructure events, countries, threat actors,
+// security reports (Weltlage), your assets and watched products. Vendor/product queries (e.g. "Sophos") can be watched directly.
 import { t } from "./i18n.js";
 import { detect, objectOf } from "./registry.js";
 import { go, routes } from "./router.js";
@@ -82,6 +82,12 @@ export class Search {
     }
     if (r.countries?.length) {
       g.push(el("h4", {}, t("s.countries")), ...r.countries.map((c) => item(c.name, c.cc, () => this.cb.onCountry(c.cc))));
+    }
+    if (r.actors?.length) {
+      g.push(el("h4", {}, t("s.actors")), ...r.actors.map((a) => item(a.name, a.country ? countryName(a.country) : t("obj.type.actor"), () => go(routes.obj("actor", a.name)))));
+    }
+    if (r.news?.length) {
+      g.push(el("h4", {}, t("s.news", { n: r.news.length })), ...r.news.map((n) => item(n.title, `${n.source}, ${dateTime(n.published)}`, () => go(routes.news(n.id)))));
     }
     const fams = [...new Set((r.c2 || []).map((c) => c.malware).filter(Boolean))].slice(0, 6);
     const groups = [...new Set((r.victims || []).map((v) => v.grp).filter(Boolean))].filter((x) => x.toLowerCase().includes(q.toLowerCase())).slice(0, 6);

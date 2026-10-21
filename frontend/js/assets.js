@@ -5,7 +5,7 @@ import { alertItem } from "./panels.js";
 import { go, objLink, routes } from "./router.js";
 import { ago, api, bytes, dateOnly, dateTime, dec1, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip"];
+const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news"];
 const label = (w) => (w.kind === "asn" ? `AS${w.value}` : w.value);
 const kindTag = (k) => el("span", { class: "kind" }, t(`as.kind.${k}`));
 const msg = (cls = "note") => el("p", { class: cls });

@@ -624,7 +624,9 @@ class News:
         origin_by = head["origin_by"] if head["origin"] else next((m["origin_by"] for m in members if m["origin"]), None)
         countries = [c for c in union("countries") if c != origin]
         src_names = list(dict.fromkeys(self.by_id[m["source"]].name if m["source"] in self.by_id else m["source"] for m in members))
-        image = head["image"] or next((m["image"] for m in members if m["image"]), None)
+        pic = head if head["image"] else next((m for m in members if m["image"]), None)  # whose image is shown
+        image = pic["image"] if pic else None
+        image_src = (self.by_id[pic["source"]].name if pic["source"] in self.by_id else pic["source"]) if pic else None
         mine, seen = [], set()
         for m in members:
             for x in m["mine"]:
@@ -641,7 +643,8 @@ class News:
         src = self.by_id.get(head["source"])
         return {
             "id": head["id"], "cluster": head["cluster"] or head["id"], "title": head["title"], "summary": head["summary"],
-            "url": head["url"], "image": image if self.s.news_images else None, "published": head["published"],
+            "url": head["url"], "image": image if self.s.news_images else None,
+            "image_source": image_src if self.s.news_images and image else None, "published": head["published"],
             "first": min(m["published"] for m in members), "latest": max(m["published"] for m in members),
             "source": {"id": head["source"], "name": src.name if src else head["source"], "tier": head["tier"]},
             "lang": head["lang"], "n": len(members), "sources": src_names, "origin": origin, "origin_by": origin_by,
@@ -661,10 +664,12 @@ class News:
         return out
 
     def matches(self, it: dict[str, Any], *, kind: str | None = None, country: str | None = None, origin: str | None = None,
-                target: str | None = None, actor: str | None = None, mine: bool = False) -> bool:
-        if kind and kind not in it["kinds"]:
+                target: str | None = None, actor: str | None = None, mine: bool = False, confirmed: bool = False) -> bool:
+        if kind and not set(kind.split(",")) & set(it["kinds"]):  # one or more kinds
             return False
-        if country and country != it["origin"] and country not in it["countries"]:
+        if confirmed and not (it["source"]["tier"] == "gov" or len(it["sources"]) >= 2):  # an authority or 2+ sources
+            return False
+        if country and not ({it["origin"], *it["countries"]} & set(country.split(","))):  # one or more ISO codes
             return False
         if origin and origin != it["origin"]:
             return False
@@ -713,7 +718,7 @@ class News:
                 "events": len(items), "items": sum(x["n"] for x in items), "pairs": len(pairs),
                 "home": sum(1 for x in items if home_set & ({x["origin"]} | set(x["countries"]))),
                 "mine": sum(1 for x in items if any(m.get("type") != "vendor" for m in x["mine"])),
-                "vendor": sum(1 for x in items if x["mine"]),
+                "vendor": sum(1 for x in items if any(m.get("type") == "vendor" for m in x["mine"])),  # a watched vendor is named
             },
             "home": sorted(home_set),
             "pairs": [{"origin": o, "target": t, "n": n} for (o, t), n in sorted(pairs.items(), key=lambda x: -x[1])[:60]],
@@ -771,8 +776,11 @@ class News:
         today = datetime.now(timezone.utc).date()
         labels = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
         news = dict.fromkeys(labels, 0)
-        for r in self._rows(days):
-            if r["origin"] == origin and target in r["countries"]:
+        seen: set[int] = set()  # events, not reports: a cluster counts once, on the day of its first report
+        for r in sorted(self._rows(days), key=lambda x: x["published"]):
+            cl = r["cluster"] or r["id"]
+            if r["origin"] == origin and target in r["countries"] and cl not in seen:
+                seen.add(cl)
                 d = r["published"][:10]
                 if d in news:
                     news[d] += 1

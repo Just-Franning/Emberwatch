@@ -332,12 +332,17 @@ def test_overview_detail_and_api(m):
         assert fo["source"]["tier"] == "gov" and fo["n"] == 2  # the authority heads the event
         assert [x["title"] for x in tc.get("/api/welt", params={"days": 7, "kind": "ddos"}).json()["items"]] == [dd["title"]]
         assert tc.get("/api/welt", params={"days": 7, "origin": "cn"}).json()["kpis"]["events"] == 1
+        assert tc.get("/api/welt", params={"days": 7, "country": "DE"}).json()["kpis"]["events"] == 1
+        assert tc.get("/api/welt", params={"days": 7, "country": "AT,DE,US"}).json()["kpis"]["events"] == 2
+        assert tc.get("/api/welt", params={"days": 7, "country": "DE,XX1"}).status_code == 400
         assert tc.get("/api/welt", params={"days": 7, "mine": "true"}).json()["kpis"]["events"] == 2
         assert tc.get("/api/welt", params={"days": 7, "actor": "apt28"}).json()["kpis"]["events"] == 1
         assert tc.get("/api/welt", params={"days": 7, "tier": "gov"}).json()["kpis"]["events"] == 1
+        assert tc.get("/api/welt", params={"days": 7, "confirmed": "true"}).json()["kpis"]["events"] == 2  # DDoS (2 sources), BSI
+        assert tc.get("/api/welt", params={"days": 7, "kind": "botnet,ddos"}).json()["kpis"]["events"] == 2
         assert tc.get("/api/welt", params={"days": 7, "q": "qakbot"}).json()["kpis"]["events"] == 1
         assert tc.get("/api/welt", params={"days": 7, "source": "bsi"}).json()["kpis"]["events"] == 1
-        for bad in ({"days": 5}, {"kind": "nope"}, {"country": "D1"}, {"source": "unknown_src"}, {"tier": "x"}):
+        for bad in ({"days": 5}, {"kind": "nope"}, {"kind": "ddos,nope"}, {"country": "D1"}, {"source": "unknown_src"}, {"tier": "x"}):
             r = tc.get("/api/welt", params={"days": 7, **bad})
             assert r.status_code in (400, 422), bad
         lst = tc.get("/api/news", params={"days": 30, "limit": 2, "offset": 1}).json()
@@ -350,7 +355,7 @@ def test_overview_detail_and_api(m):
         assert (ai["name"], ai["canonical"], ai["confidence"]) == ("Fancy Bear", "APT28", "80") and "APT28" in ai["synonyms"]
         assert ov["actors"][0] == {"name": "Fancy Bear", "canonical": "APT28", "n": 1, "country": "RU"}
         assert dd_det["pair"]["origin"] == "RU" and dd_det["pair"]["target"] == "DE" and len(dd_det["pair"]["labels"]) == 14
-        assert sum(dd_det["pair"]["news"]) == 2
+        assert sum(dd_det["pair"]["news"]) == 1  # one event, reported twice
         qak = next(x for x in ov["items"] if "QakBot" in x["malware"])
         assert tc.get(f"/api/news/{qak['id']}").json()["malware_info"][0]["c2_30d"] >= 1
         assert tc.get("/api/news/999999").status_code == 404

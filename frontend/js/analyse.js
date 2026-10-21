@@ -135,7 +135,7 @@ export class Analyse {
     // free text: a malware family, ransomware group or vendor name
     const box = this.main.querySelector(".detect-line");
     if (box) kids(box, el("span", { class: "muted" }, t("an.text_as")),
-      ...["malware", "group", "vendor"].map((ty) => el("a", { class: "btn", href: href(routes.obj(ty, q.slice(0, 200))) }, t(`obj.type.${ty}`))),
+      ...["actor", "malware", "group", "vendor"].map((ty) => el("a", { class: "btn", href: href(routes.obj(ty, q.slice(0, 200))) }, t(`obj.type.${ty}`))),
       el("a", { class: "btn plain", href: href(routes.tools(q.slice(0, MAX_INPUT))) }, t("an.to_tools")));
   }
 
@@ -167,6 +167,8 @@ export class Analyse {
         ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available, title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
           class: `lvl-btn lvl-${x.level}`, onclick: () => this.stack.tool(x.id, toolTarget(o)) }, x.name)))),
       page.map ? el("button", { type: "button", onclick: () => this.onMap(page.map, `${t(`obj.type.${page.type}`)}: ${page.title}`) }, t("common.show_map")) : null,
+      page.type === "actor" ? el("a", { class: "btn", href: href(routes.welt({ actor: page.title, days: 90 })) }, t("an.actor_welt")) : null,
+      page.type === "country" ? el("a", { class: "btn", href: href(routes.welt({ country: page.value })) }, t("an.country_welt")) : null,
       tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null);
     const reasons = page.risk.reasons?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.assessment")), findingsNode(page.risk.reasons)) : null;
     const sections = (page.sections || []).map(sectionNode);

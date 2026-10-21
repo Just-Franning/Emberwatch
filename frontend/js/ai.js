@@ -13,7 +13,8 @@ function charts(list) {
 }
 
 export class AIPanel {
-  constructor() {
+  constructor({ onShow } = {}) {
+    this.onShow = onShow; // brings the Gemini tab to the front
     this.out = document.getElementById("ai-out");
     this.history = document.getElementById("ai-history");
     this.countryBtn = document.getElementById("ai-country");
@@ -23,14 +24,13 @@ export class AIPanel {
     this.current = null;
     this.thread = [];
 
-    document.querySelectorAll("#sect-ai .ai-actions button[data-scope]").forEach((b) =>
+    document.querySelectorAll("#tp-ai .ai-actions button[data-scope]").forEach((b) =>
       b.addEventListener("click", () => this.run({ scope: b.dataset.scope, country: b.dataset.scope === "country" ? this.country : null })));
     document.getElementById("ai-ask").addEventListener("submit", (e) => {
       e.preventDefault();
       const q = document.getElementById("ai-question").value.trim();
       if (q) this.run({ scope: "question", question: q, country: this.country });
     });
-    this.history.addEventListener("click", (e) => e.stopPropagation()); // do not toggle <summary>
     this.history.addEventListener("change", async () => {
       const r = this.reports?.find((x) => String(x.id) === this.history.value);
       if (r) await this.show(r, true);
@@ -54,7 +54,8 @@ export class AIPanel {
   }
 
   async loadHistory() {
-    try { this.reports = (await api("api/ai/reports?limit=40")).filter((r) => !String(r.scope || "").startsWith("obj:")); } catch { this.reports = []; }
+    // reports of objects (analysis) and of the Weltlage are shown there
+    try { this.reports = (await api("api/ai/reports?limit=60")).filter((r) => !/^(obj|news|welt):/.test(String(r.scope || ""))).slice(0, 40); } catch { this.reports = []; }
     kids(this.history,
       el("option", { value: "" }, this.reports.length ? t("ai.history") : t("ai.history_none")),
       ...this.reports.map((r) => el("option", { value: r.id }, `${dateTime(r.created_at)} ${r.scope === "daily" ? t("ai.daily") : ""} ${r.title || r.scope}`.replace(/\s+/g, " "))),
@@ -63,13 +64,13 @@ export class AIPanel {
 
   setBusy(on) {
     this.busy = on;
-    document.querySelectorAll("#sect-ai button").forEach((b) => (b.disabled = on));
+    document.querySelectorAll("#tp-ai button").forEach((b) => (b.disabled = on));
     if (!on) this.countryBtn.disabled = !this.country;
   }
 
   async run(body) {
     if (this.busy) return;
-    document.getElementById("sect-ai").open = true;
+    this.onShow?.();
     this.setBusy(true);
     this.out.querySelectorAll("canvas").forEach(destroy);
     kids(this.out, el("p", { class: "state" }, t("ai.running")));

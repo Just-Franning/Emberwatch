@@ -422,7 +422,7 @@ CSP = (
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/boot.js",
+                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
@@ -1315,14 +1315,16 @@ def _int_or_404(v: str) -> int:
 
 
 def _welt_filters(tier: str | None, source: str | None, kind: str | None, country: str | None, origin: str | None,
-                  target: str | None, actor: str | None, mine: bool, q: str | None) -> dict[str, Any]:
+                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False) -> dict[str, Any]:
     if not news.enabled:
         raise AppError("err.news.disabled", 404)
-    if kind and kind not in nlp.KINDS:
+    kinds = [k for k in (kind or "").split(",") if k]
+    if any(k not in nlp.KINDS for k in kinds) or len(kinds) > 5:
         raise AppError("err.bad_request")
     if source and source not in news.by_id:
         raise AppError("err.bad_request")
-    return {"tier": tier, "source": source, "kind": kind or None, "country": _cc(country) if country else None,
+    ccs = [_cc(c) for c in (country or "").split(",") if c.strip()][:12]  # a country or a region ("DE,AT,CH")
+    return {"tier": tier, "source": source, "kind": ",".join(kinds) or None, "country": ",".join(ccs) or None, "confirmed": confirmed,
             "origin": _cc(origin) if origin else None, "target": _cc(target) if target else None,
             "actor": (actor or "").strip() or None, "mine": mine, "q": (q or "").strip() or None}
 
@@ -1345,25 +1347,25 @@ def welt_overview(days: int, flt: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/api/welt")
 def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press)$"),
-             source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=20),
-             country: str | None = Query(None, max_length=2), origin: str | None = Query(None, max_length=2),
+             source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=80),
+             country: str | None = Query(None, max_length=40), origin: str | None = Query(None, max_length=2),
              target: str | None = Query(None, max_length=2), actor: str | None = Query(None, max_length=120),
-             mine: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+             mine: bool = False, confirmed: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q))
+    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed))
 
 
 @app.get("/api/news")
 def api_news(days: int = Query(7), offset: int = Query(0, ge=0, le=20000), limit: int = Query(40, ge=1, le=100),
              tier: str | None = Query(None, pattern="^(gov|press)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
-             kind: str | None = Query(None, max_length=20), country: str | None = Query(None, max_length=2),
+             kind: str | None = Query(None, max_length=80), country: str | None = Query(None, max_length=40),
              origin: str | None = Query(None, max_length=2), target: str | None = Query(None, max_length=2),
-             actor: str | None = Query(None, max_length=120), mine: bool = False,
+             actor: str | None = Query(None, max_length=120), mine: bool = False, confirmed: bool = False,
              q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q)
+    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed)
     return news.listing(days, offset, limit, **flt)
 
 

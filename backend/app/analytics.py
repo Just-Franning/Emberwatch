@@ -162,6 +162,8 @@ def kev_stats(db: DB) -> dict[str, Any]:
         "ransomware_known_30d": sum(1 for r in recent if (r["ransomware"] or "").lower() == "known"),
         "epss_high_14d": sum(1 for r in recent if (r["date_added"] or "") >= d14 and (r["epss"] or 0) >= EPSS_HIGH),
         "epss_available": bool(db.query("SELECT 1 FROM epss LIMIT 1")),
+        "mine_14d": db.query("SELECT COUNT(DISTINCT k.cve) AS n FROM kev k JOIN product_cves p ON p.cve = k.cve "
+                             "WHERE k.date_added >= ?", (d14,))[0]["n"],  # new KEV entries of watched products
         "latest": recent[:20],
         "top_epss_90d": top_epss,
         "vendors_14d": _top(vendors14, 10),

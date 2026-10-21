@@ -2,6 +2,7 @@
 // Switching the language reloads the page so every view, the map and server-rendered texts change together.
 
 import { TEXTS } from "./texts.js";
+import { TEXTS_WELT } from "./texts_welt.js";
 
 const KEY = "emberwatch.lang";
 export const LANGS = ["de", "en"];
@@ -33,7 +34,7 @@ export function setLang(l) {
 
 const T = {
   de: {
-    "app.tagline": "Cyber-Lagebild", "app.loading": "lädt …",
+    "app.tagline": "Cyber-Lagebild",
     "common.close": "Schließen", "common.delete": "Löschen", "common.add": "Hinzufügen", "common.run": "Ausführen",
     "common.none": "keine", "common.unknown": "unbekannt",
     "common.yes": "ja", "common.no": "nein", "common.error": "Fehler: {msg}", "common.no_data": "Keine Daten.",
@@ -51,20 +52,17 @@ const T = {
     "metricl.l7_target": "L7-Angriffe als Ziel, Anteil 24 h", "metricl.l3_target": "DDoS als Ziel, Anteil 24 h",
     "metricl.l7_origin": "L7-Angriffe als Ursprung, Anteil 24 h", "metricl.l3_origin": "DDoS als Ursprung, Anteil 24 h",
     "metricl.ransomware_7d": "Ransomware-Opfer, 7 Tage", "metricl.c2": "Gemeldete C2-Server", "metricl.outages_7d": "Internet-Ausfälle, 7 Tage",
-    "search.label": "Suche", "search.placeholder": "Suche: IP, AS, CVE, Domain, Hersteller, Malware, Land ( / )",
+    "search.label": "Suche", "search.placeholder": "Suche: IP, Domain, CVE, Akteur, Land … ( / )",
     "btn.globe": "Globus", "btn.flat": "Flach", "btn.projection_title": "Projektion umschalten", "btn.status": "Status",
     "btn.status_title": "Datenquellen und Konfiguration", "btn.settings": "Einstellungen", "btn.settings_title": "Sprache, Fenster, Animation",
     "stamp.as_of": "Stand {t}", "stamp.failed": "Aktualisierung fehlgeschlagen: {msg}",
     // panels and windows
-    "panel.left": "Zahlen & Ranglisten", "panel.right": "Was ist neu", "panel.tools": "Tools",
+    "panel.tools": "Tools",
     "panel.collapse": "Einklappen", "panel.expand": "Ausklappen", "panel.close": "Schließen", "panel.move_hint": "Ziehen zum Verschieben, Doppelklick dockt wieder an",
     "panel.resize": "Größe ändern",
     "tab.targets": "Ziele", "tab.origins": "Ursprung", "tab.vectors": "Vektoren", "tab.c2": "C2", "tab.ransom": "Ransom", "tab.infra": "Infra", "tab.kev": "KEV",
     // KPIs
-    "kpi.c2_new": "neue C2 in 24 h", "kpi.c2_total": "{n} im Bestand", "kpi.ransom": "Ransomware-Opfer 7 T", "kpi.ransom_prev": "Vorwoche {n}",
-    "kpi.ransom_prev_na": "Vorwoche noch nicht erfasst", "kpi.top_target": "Top-L7-Ziel 24 h", "kpi.share": "{v} Anteil", "kpi.no_radar": "keine Radar-Daten",
-    "kpi.kev": "neue KEV 14 T", "kpi.kev_epss": "{n} mit EPSS ≥ {thr}", "kpi.epss_na": "EPSS noch nicht geladen", "kpi.outages": "Internet-Ausfälle 7 T",
-    "kpi.bgp": "{n} {n|BGP-Ereignis|BGP-Ereignisse}", "kpi.alerts": "Alarme 7 T", "kpi.alerts_sub": "{high} hoch, {assets} Assets, {products} Produkte",
+    "kpi.top_target": "Top-L7-Ziel 24 h", "kpi.share": "{v} Anteil", "kpi.no_radar": "keine Radar-Daten",
     // tab content
     "rank.delta_title": "Veränderung 24 h gegenüber 7 Tagen", "rank.not_top": "nicht unter den Top 25 der letzten 7 Tage",
     "radar.stamp": "Cloudflare Radar, {ago}", "radar.never": "Cloudflare Radar: noch nicht abgerufen",
@@ -99,16 +97,15 @@ const T = {
     "cause.NETWORK_PROBLEM": "Netzproblem", "cause.POWER_OUTAGE": "Stromausfall", "cause.SOFTWARE": "Softwarefehler",
     "cause.TECHNICAL_PROBLEM": "technisches Problem", "cause.UNKNOWN": "unbekannt", "cause.WEATHER": "Wetter",
     // patterns, alerts (right panel)
-    "sect.ai": "Gemini", "sect.patterns": "Muster", "sect.alerts": "Alarme", "patterns.count": "{n} aktiv", "patterns.count_high": "{n} aktiv, {h} hoch",
+    "sect.ai": "Gemini", "sect.patterns": "Muster", "patterns.count": "{n} aktiv", "patterns.count_high": "{n} aktiv, {h} hoch",
     "patterns.none": "Keine Auffälligkeiten nach den aktuellen Schwellwerten.",
-    "alerts.none": "Keine Alarme. Assets und Produkte im Fenster „Assets“ anlegen.", "alerts.open_window": "Alle Alarme und Assets",
-    "alerts.count": "{n} in 7 Tagen",
+    "alerts.none": "Keine Alarme. Assets und Produkte im Fenster „Assets“ anlegen.",
     "src.watch": "Bedrohungsdaten", "src.surface": "Angriffsfläche", "src.scan": "Aktiver Scan", "src.product": "Produkte", "src.ct": "Zertifikate",
     "src.typo": "Ähnliche Domains", "src.bgp": "BGP live", "src.syslog": "Syslog", "src.rep": "Reputation", "src.legacy": "Watchlist (alt)",
     // legend
     "legend.timeline": "Zeitachse: {day}", "legend.no_data": "{label}: keine Daten", "legend.arcs": "L7-Angriffsfluss (Ursprung → Ziel)",
     "legend.c2": "C2-Server (blass: nur Land bekannt)", "legend.ransom": "Ransomware-Opfer 7 Tage", "legend.outage": "Ausfall",
-    "legend.bgp": "BGP-Hijack / Route-Leak", "legend.cables": "Seekabel (Stand 2021)", "legend.title": "Legende und Ebenen",
+    "legend.bgp": "BGP-Hijack / Route-Leak", "legend.cables": "Seekabel (Stand 2021)",
     "legend.infra": "Infrastruktur-Ereignisse", "legend.anomaly": "Anomalie",
     // map
     "map.aria": "Weltkarte der Bedrohungslage", "map.no_data": "keine Daten", "map.ransom_pop": "{n} Ransomware-Opfer in 7 Tagen (Leak-Sites)",
@@ -223,7 +220,7 @@ const T = {
     "st.version": "Version", "st.matrix_test": "Matrix testen", "st.matrix_sending": "sendet …", "st.matrix_sent": "Testnachricht gesendet.",
     "st.map": "Karte", "st.map_failed": "Basemap-Kacheln nicht erreichbar, Offline-Darstellung aktiv.", "st.map_offline": "Offline-Darstellung (Natural Earth, ohne Beschriftung).",
     "st.map_online": "Beschriftete Karte von OpenFreeMap.", "st.map_use_online": "Beschriftete Karte nutzen", "st.map_use_offline": "Offline-Karte nutzen",
-    "st.shortcuts": "Tastenkürzel", "st.k_left": "linkes Panel ein/aus", "st.k_right": "rechtes Panel ein/aus", "st.k_tools": "Netzwerk-Tools",
+    "st.shortcuts": "Tastenkürzel", "st.k_tools": "Netzwerk-Tools",
     "st.k_search": "Suche", "st.k_esc": "schließen",
     "src_name.radar_infra": "Radar Infrastruktur", "src_name.threatfox_iocs": "ThreatFox IOCs", "src_name.spamhaus_drop": "Spamhaus DROP",
     "src_name.tor_exits": "Tor-Exit-Liste", "src_name.internetdb": "Shodan InternetDB", "src_name.nvd": "NVD", "src_name.certspotter": "Cert Spotter",
@@ -241,7 +238,7 @@ const T = {
     "login.failed": "Anmeldung fehlgeschlagen: {msg}",
   },
   en: {
-    "app.tagline": "Cyber threat picture", "app.loading": "loading …",
+    "app.tagline": "Cyber threat picture",
     "common.close": "Close", "common.delete": "Delete", "common.add": "Add", "common.run": "Run",
     "common.none": "none", "common.unknown": "unknown",
     "common.yes": "yes", "common.no": "no", "common.error": "Error: {msg}", "common.no_data": "No data.",
@@ -258,18 +255,15 @@ const T = {
     "metricl.l7_target": "L7 attacks as target, share 24 h", "metricl.l3_target": "DDoS as target, share 24 h",
     "metricl.l7_origin": "L7 attacks as origin, share 24 h", "metricl.l3_origin": "DDoS as origin, share 24 h",
     "metricl.ransomware_7d": "Ransomware victims, 7 days", "metricl.c2": "Reported C2 servers", "metricl.outages_7d": "Internet outages, 7 days",
-    "search.label": "Search", "search.placeholder": "Search: IP, AS, CVE, domain, vendor, malware, country ( / )",
+    "search.label": "Search", "search.placeholder": "Search: IP, domain, CVE, actor, country … ( / )",
     "btn.globe": "Globe", "btn.flat": "Flat", "btn.projection_title": "Toggle projection", "btn.status": "Status",
     "btn.status_title": "Data sources and configuration", "btn.settings": "Settings", "btn.settings_title": "Language, windows, animation",
     "stamp.as_of": "As of {t}", "stamp.failed": "Update failed: {msg}",
-    "panel.left": "Figures & rankings", "panel.right": "What's new", "panel.tools": "Tools",
+    "panel.tools": "Tools",
     "panel.collapse": "Collapse", "panel.expand": "Expand", "panel.close": "Close", "panel.move_hint": "Drag to move, double-click to dock again",
     "panel.resize": "Resize",
     "tab.targets": "Targets", "tab.origins": "Origins", "tab.vectors": "Vectors", "tab.c2": "C2", "tab.ransom": "Ransom", "tab.infra": "Infra", "tab.kev": "KEV",
-    "kpi.c2_new": "new C2 in 24 h", "kpi.c2_total": "{n} in inventory", "kpi.ransom": "Ransomware victims 7 d", "kpi.ransom_prev": "previous week {n}",
-    "kpi.ransom_prev_na": "previous week not yet recorded", "kpi.top_target": "Top L7 target 24 h", "kpi.share": "{v} share", "kpi.no_radar": "no Radar data",
-    "kpi.kev": "new KEV 14 d", "kpi.kev_epss": "{n} with EPSS ≥ {thr}", "kpi.epss_na": "EPSS not loaded yet", "kpi.outages": "Internet outages 7 d",
-    "kpi.bgp": "{n} BGP {n|event|events}", "kpi.alerts": "Alerts 7 d", "kpi.alerts_sub": "{high} high, {assets} assets, {products} products",
+    "kpi.top_target": "Top L7 target 24 h", "kpi.share": "{v} share", "kpi.no_radar": "no Radar data",
     "rank.delta_title": "Change 24 h compared with 7 days", "rank.not_top": "not in the top 25 of the last 7 days",
     "radar.stamp": "Cloudflare Radar, {ago}", "radar.never": "Cloudflare Radar: not fetched yet",
     "chart.series_7d": "7-day trend: {names}",
@@ -302,15 +296,14 @@ const T = {
     "cause.MILITARY_ACTION": "military action", "cause.MISCONFIGURATION": "misconfiguration", "cause.NATURAL_DISASTER": "natural disaster",
     "cause.NETWORK_PROBLEM": "network problem", "cause.POWER_OUTAGE": "power outage", "cause.SOFTWARE": "software failure",
     "cause.TECHNICAL_PROBLEM": "technical problem", "cause.UNKNOWN": "unknown", "cause.WEATHER": "weather",
-    "sect.ai": "Gemini", "sect.patterns": "Patterns", "sect.alerts": "Alerts", "patterns.count": "{n} active", "patterns.count_high": "{n} active, {h} high",
+    "sect.ai": "Gemini", "sect.patterns": "Patterns", "patterns.count": "{n} active", "patterns.count_high": "{n} active, {h} high",
     "patterns.none": "Nothing stands out with the current thresholds.",
-    "alerts.none": "No alerts. Add assets and products in the “Assets” window.", "alerts.open_window": "All alerts and assets",
-    "alerts.count": "{n} in 7 days",
+    "alerts.none": "No alerts. Add assets and products in the “Assets” window.",
     "src.watch": "Threat data", "src.surface": "Attack surface", "src.scan": "Active scan", "src.product": "Products", "src.ct": "Certificates",
     "src.typo": "Lookalike domains", "src.bgp": "BGP live", "src.syslog": "Syslog", "src.rep": "Reputation", "src.legacy": "Watchlist (old)",
     "legend.timeline": "Timeline: {day}", "legend.no_data": "{label}: no data", "legend.arcs": "L7 attack flow (origin → target)",
     "legend.c2": "C2 servers (faint: country only)", "legend.ransom": "Ransomware victims 7 days", "legend.outage": "Outage",
-    "legend.bgp": "BGP hijack / route leak", "legend.cables": "Submarine cables (as of 2021)", "legend.title": "Legend and layers",
+    "legend.bgp": "BGP hijack / route leak", "legend.cables": "Submarine cables (as of 2021)",
     "legend.infra": "Infrastructure events", "legend.anomaly": "anomaly",
     "map.aria": "World map of the threat situation", "map.no_data": "no data", "map.ransom_pop": "{n} ransomware {n|victim|victims} in 7 days (leak sites)",
     "map.group.outage": "Internet outages", "map.group.bgp": "BGP events", "map.group.anomaly": "Traffic anomalies",
@@ -417,7 +410,7 @@ const T = {
     "st.version": "Version", "st.matrix_test": "Test Matrix", "st.matrix_sending": "sending …", "st.matrix_sent": "Test message sent.",
     "st.map": "Map", "st.map_failed": "Basemap tiles unreachable, offline rendering active.", "st.map_offline": "Offline rendering (Natural Earth, no labels).",
     "st.map_online": "Labelled map from OpenFreeMap.", "st.map_use_online": "Use labelled map", "st.map_use_offline": "Use offline map",
-    "st.shortcuts": "Keyboard shortcuts", "st.k_left": "toggle left panel", "st.k_right": "toggle right panel", "st.k_tools": "network tools",
+    "st.shortcuts": "Keyboard shortcuts", "st.k_tools": "network tools",
     "st.k_search": "search", "st.k_esc": "close",
     "src_name.radar_infra": "Radar infrastructure", "src_name.threatfox_iocs": "ThreatFox IOCs", "src_name.spamhaus_drop": "Spamhaus DROP",
     "src_name.tor_exits": "Tor exit list", "src_name.internetdb": "Shodan InternetDB", "src_name.nvd": "NVD", "src_name.certspotter": "Cert Spotter",
@@ -434,7 +427,7 @@ const T = {
   },
 };
 
-for (const l of LANGS) Object.assign(T[l], TEXTS[l]);
+for (const l of LANGS) Object.assign(T[l], TEXTS[l], TEXTS_WELT[l]);
 
 const PLURAL = /\{(\w+)\|([^{}|]*)\|([^{}|]*)\}/g;
 

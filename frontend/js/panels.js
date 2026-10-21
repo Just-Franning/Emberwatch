@@ -1,8 +1,8 @@
-// Left panel (KPIs, rankings incl. filter/export), patterns, alert feed, legend.
+// Cyberlage: key figures, "today", rankings incl. filter/export, patterns, map legend.
 import { destroy, lineChart } from "./charts.js";
 import { locale, t } from "./i18n.js";
 import { href, objLink, routes } from "./router.js";
-import { ago, COLORS, countryName, dateOnly, dateTime, dec1, dec2, el, kids, num, pct, pp, RAMP, safeLink, sevTag } from "./util.js";
+import { ago, COLORS, countryName, dateOnly, dateTime, dec2, el, kids, num, pct, pp, RAMP, safeLink, sevTag } from "./util.js";
 
 const moreLink = (view) => el("p", { class: "more-link" }, el("a", { class: "btn plain", href: href(routes.view(view)) }, t("lage.all_view", { name: t(`an.view.${view}`) })));
 
@@ -63,22 +63,52 @@ function seriesChart(block, n = 3) {
 export const causeName = (c) => t(`cause.${c || "UNKNOWN"}`);
 const empty = (key = "common.no_data") => el("p", { class: "empty" }, t(key));
 
-// --- KPIs ----------------------------------------------------------------------------------
-export function renderKpis(ov) {
-  const top = ov.radar.l7_target_1d?.rows?.[0];
-  const ic = ov.infra?.counts_7d || {};
-  const w = ov.watch || {};
+// --- key figures (bottom left) -------------------------------------------------------------
+/** Four key figures: home country as attack target, active C2, ransomware in the home region, new KEV. */
+export function renderKpis(ov, status, { onTile } = {}) {
+  const codes = status?.region?.codes || [];
+  const region = codes.length ? (status.region.name || codes.join(", ")) : null;
+  const rows = ov.radar.l7_target_1d?.rows || [];
+  const home = codes[0] || null;
+  const idx = home ? rows.findIndex((r) => r.target === home) : -1;
+  const top = rows[0];
+  const attack = home
+    ? [t("kpi.attack_home", { cc: home }), idx >= 0 ? `#${idx + 1}` : "–", idx >= 0 ? t("kpi.attack_rank", { v: pct(rows[idx].value) }) : t("kpi.attack_none")]
+    : [t("kpi.top_target"), top ? countryName(top.target) : "–", top ? t("kpi.share", { v: pct(top.value) }) : t("kpi.no_radar")];
+  const rw = ov.ransomware;
+  const rwHome = codes.length ? (rw.by_country || []).filter((x) => codes.includes(x.key)).reduce((a, x) => a + x.count, 0) : rw.total_7d;
+  const kev = ov.kev;
   const tiles = [
-    [num(ov.c2.new_24h), t("kpi.c2_new"), t("kpi.c2_total", { n: num(ov.c2.total) })],
-    [num(ov.ransomware.total_7d), t("kpi.ransom"), ov.ransomware.prev_window_complete ? t("kpi.ransom_prev", { n: num(ov.ransomware.total_prev_7d) }) : t("kpi.ransom_prev_na")],
-    [top ? countryName(top.target) : "–", t("kpi.top_target"), top ? t("kpi.share", { v: pct(top.value) }) : t("kpi.no_radar")],
-    [num(ov.kev.added_14d), t("kpi.kev"), ov.kev.epss_available ? t("kpi.kev_epss", { n: num(ov.kev.epss_high_14d), thr: dec1(0.5) }) : t("kpi.epss_na")],
-    [num(ic.outage || 0), t("kpi.outages"), t("kpi.bgp", { n: num((ic.hijack || 0) + (ic.leak || 0)) })],
-    [num(w.hits_7d || 0), t("kpi.alerts"), t("kpi.alerts_sub", { high: num(w.high_7d || 0), assets: num(w.entries || 0), products: num(w.products || 0) })],
+    { key: "attack", label: attack[0], value: attack[1], sub: attack[2], hot: idx >= 0 && idx < 5 },
+    { key: "c2", label: t("kpi.c2_active"), value: num(ov.c2.total), sub: t("kpi.c2_new24", { n: num(ov.c2.new_24h) }) },
+    { key: "ransom", label: region ? t("kpi.ransom_region", { name: region }) : t("kpi.ransom_world"), value: num(rwHome), sub: t("kpi.ransom_sub") },
+    { key: "kev", label: t("kpi.kev_new"), value: num(kev.added_14d),
+      sub: kev.mine_14d ? t("kpi.kev_mine", { n: num(kev.mine_14d) }) : t("kpi.kev_sub", { n: num(kev.epss_high_14d || 0) }), hot: (kev.mine_14d || 0) > 0 },
   ];
-  kids(document.getElementById("kpis"), ...tiles.map(([b, s, small], i) =>
-    el("div", { class: `kpi${i === 5 && (w.high_7d || 0) > 0 ? " alert" : ""}` },
-      el("b", { class: /^[\d.,–\s]+$/.test(b) ? null : "word" }, b), el("span", {}, s), el("small", {}, small))));
+  kids(document.getElementById("kpis"), ...tiles.map((x) => kpiTile(x, onTile)));
+}
+
+export function kpiTile(x, onTile) {
+  const attrs = { class: `kpi${x.hot ? " hot" : ""}`, title: x.title || null };
+  const body = [el("span", { class: "k-label" }, x.label), el("b", { class: /^[#\d.,–\s]+$/.test(String(x.value)) ? null : "word" }, x.value), el("small", {}, x.sub)];
+  return onTile ? el("button", { ...attrs, type: "button", onclick: () => onTile(x.key) }, ...body) : el("div", attrs, ...body);
+}
+
+// --- "today": the few things that matter most ------------------------------------------------
+export function renderToday(data, { onItem }) {
+  const list = document.getElementById("today");
+  const items = data?.items || [];
+  if (!items.length) {
+    kids(list, el("li", { class: "empty" }, t("today.none")));
+    return;
+  }
+  kids(list, ...items.map((x, i) => el("li", { class: `sev-${x.severity}` },
+    el("button", { type: "button", class: "today-item", onclick: () => onItem(x) },
+      el("span", { class: "today-n" }, String(i + 1)),
+      el("span", { class: "today-body" },
+        el("span", { class: "today-head" }, el("span", { class: `badge ${x.severity}` }, t(`sev.${x.severity}`)), el("span", { class: "cat" }, t(`today.kind.${x.kind}`))),
+        el("span", { class: "today-title" }, x.title),
+        x.detail ? el("span", { class: "today-detail" }, x.detail) : null)))));
 }
 
 // --- tabs ---------------------------------------------------------------------------------------
@@ -236,43 +266,19 @@ export function alertItem(a, { onOpen } = {}) {
     el("div", { class: "pdetail" }, a.detail, " ", safeLink(a.url, "↗")));
 }
 
-export function renderAlertFeed(data, { onOpen, onWindow }) {
-  const list = document.getElementById("alerts-feed");
-  const st = data?.stats || {};
-  document.getElementById("alert-count").textContent = st.total_7d ? t("alerts.count", { n: num(st.total_7d) }) : "";
-  const items = (data?.alerts || []).slice(0, 12);
-  kids(list,
-    ...(items.length ? items.map((a) => alertItem(a, { onOpen })) : [el("li", { class: "empty" }, t("alerts.none"))]),
-    el("li", { class: "more" }, el("button", { type: "button", onclick: onWindow }, t("alerts.open_window"))),
-  );
-}
-
-// --- legend -----------------------------------------------------------------------------------
-export function renderLegend(info, { historicalDay } = {}) {
-  const box = document.getElementById("legend-scale");
+// --- legend (line above the key figures) ---------------------------------------------------------
+export function renderLegend(info, { historicalDay, stamp } = {}) {
+  const box = document.getElementById("maphint");
   const parts = [];
-  if (historicalDay) parts.push(el("div", { class: "hist" }, t("legend.timeline", { day: historicalDay })));
+  if (historicalDay) parts.push(el("span", { class: "hist" }, t("legend.timeline", { day: historicalDay })));
   if (info.meta && info.max) {
-    parts.push(el("div", {}, info.meta.label),
-      el("div", { class: "ramp", style: `background:linear-gradient(90deg, ${RAMP.join(", ")})` }),
-      el("div", { class: "ends" }, el("span", {}, "0"), el("span", {}, info.meta.fmt(info.max))));
+    parts.push(el("span", { class: "lg-scale" }, el("span", {}, info.meta.label), el("span", { class: "ends" }, "0"),
+      el("i", { class: "ramp", style: `background:linear-gradient(90deg, ${RAMP.join(", ")})`, "aria-hidden": "true" }), el("span", { class: "ends" }, info.meta.fmt(info.max))));
   } else if (info.meta) {
-    parts.push(el("div", {}, t("legend.no_data", { label: info.meta.label })));
+    parts.push(el("span", {}, t("legend.no_data", { label: info.meta.label })));
   }
+  parts.push(el("span", { class: "lg-sym" }, el("i", { class: "sw sw-infra", "aria-hidden": "true" }), t("legend.outage"),
+    el("i", { class: "sw sw-diamond", "aria-hidden": "true" }), t("legend.bgp"), el("i", { class: "sw sw-square", "aria-hidden": "true" }), t("legend.anomaly")));
+  if (stamp) parts.push(el("span", { class: "lg-stamp" }, stamp));
   kids(box, ...parts);
-}
-
-export function initLegend() {
-  const lg = document.getElementById("legend");
-  const btn = document.getElementById("legend-toggle");
-  const set = (collapsed) => {
-    lg.classList.toggle("collapsed", collapsed);
-    btn.setAttribute("aria-expanded", String(!collapsed));
-    btn.querySelector("[aria-hidden]").textContent = collapsed ? "+" : "–";
-    try { localStorage.setItem("emberwatch.legend", collapsed ? "1" : "0"); } catch { /* ignore */ }
-  };
-  let start = window.matchMedia("(max-width: 900px)").matches;
-  try { const v = localStorage.getItem("emberwatch.legend"); if (v !== null) start = v === "1"; } catch { /* ignore */ }
-  set(start);
-  btn.addEventListener("click", () => set(!lg.classList.contains("collapsed")));
 }
