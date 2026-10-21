@@ -79,7 +79,7 @@ class Result:
         det = None
         if detail:
             det = detail[1:] if detail.startswith("=") else self.t(detail, **params)
-        self.findings.append({"sev": sev if sev in SEV_ORDER else "info", "text": text, "detail": det})
+        self.findings.append({"sev": sev if sev in SEV_ORDER else "info", "text": text, "detail": det, "key": key})
 
     # --- sections ---------------------------------------------------------------------------------------------
     def kv(self, title: str | None, rows: list[tuple[str, Any]]) -> None:

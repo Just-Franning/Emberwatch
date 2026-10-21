@@ -140,8 +140,9 @@ class ToolKit:
         self._rdap_calls: list[float] = []
 
     # --- server location (start of the traceroute) --------------------------------
-    async def origin(self, client: httpx.AsyncClient) -> dict[str, Any]:
-        if self._origin and time.time() - self._origin[0] < 6 * 3600:
+    async def origin(self, client: httpx.AsyncClient, max_age: float = 6 * 3600) -> dict[str, Any]:
+        """Public egress address of this server (via Cloudflare's trace endpoint), cached for max_age seconds."""
+        if self._origin and time.time() - self._origin[0] < (max_age if self._origin[1].get("ip") else 600):
             return self._origin[1]
         info: dict[str, Any] = {"ip": None}
         try:

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import csv
 import io
 import ipaddress
@@ -36,7 +38,11 @@ from .domains import Domains
 from .geo import Geo
 from .i18n import AppError, t
 from .logs import Matcher, SyslogServer, analyze_file
+from .myip import KINDS as MYIP_KINDS
+from .myip import MyIP
 from .notify import Notifier
+from .objects import TYPES as OBJ_TYPES
+from .objects import Objects, object_context
 from .products import Products
 from .reputation import Reputation
 from .sources import abusech, epss, infra, kev, radar, ransomware
@@ -67,6 +73,8 @@ bgp = BgpMonitor(S, db)
 matcher = Matcher(db, reputation)
 syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
 auth = Auth(S)
+myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
+objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -305,6 +313,12 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def daily_job() -> None:
         await _daily_report(client)
 
+    async def myip_job() -> None:
+        await myip.refresh(client)
+        for kind in MYIP_KINDS:
+            if myip.needs_check(kind):
+                await myip.check(client, kind)
+
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
@@ -316,7 +330,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
         "kev": kev_job, "epss": epss_job, "products": products_job, "reputation": reputation_job, "surface": surface_job,
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
-        "daily": daily_job, "maintenance": maintenance_job,
+        "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job,
     }
 
 
@@ -333,6 +347,7 @@ async def lifespan(app: FastAPI):
             ("epss", S.epss_interval, 120), ("products", 60, 180), ("reputation", 30, 40), ("surface", 60, 90),
             ("scan", 60, 600), ("ct", S.ct_interval_h * 60, 150), ("typo", S.typo_interval_h * 60, 240),
             ("alerts", 2, 120), ("patterns", 10, 300), ("daily", 1, 90), ("maintenance", 24 * 60, 900),
+            ("myip", 10, 45),
         ]
         tasks = [asyncio.create_task(_loop(name, minutes, jobs[name], delay)) for name, minutes, delay in plan]
         if S.bgp_live:
@@ -362,7 +377,8 @@ CSP = (
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/boot.js"}
+                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/boot.js",
+                "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 
 
@@ -1142,8 +1158,12 @@ async def api_analyze(request: Request, body: AnalyzeIn) -> dict[str, Any]:
 
 
 @app.get("/api/ai/reports")
-def api_reports(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
-    rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports ORDER BY id DESC LIMIT ?", (limit,))
+def api_reports(limit: int = Query(20, ge=1, le=100), scope: str | None = Query(None, max_length=320)) -> list[dict[str, Any]]:
+    if scope:
+        rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports WHERE scope=? ORDER BY id DESC LIMIT ?",
+                        (scope, limit))
+    else:
+        rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports ORDER BY id DESC LIMIT ?", (limit,))
     return [{**json.loads(r["payload"]), "id": r["id"], "created_at": r["created_at"], "scope": r["scope"], "model": r["model"]}
             for r in rows]
 
@@ -1168,9 +1188,13 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     report = json.loads(rows[0]["payload"])
     thread = api_thread(body.report_id)
     scope = rows[0]["scope"]
-    cc = scope.split(":", 1)[1] if ":" in scope else None
-    country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
-    ctx = build_context(overview(), geo.country_name, lang, cc, country, S.home_region)
+    if scope.startswith("obj:") and scope.count(":") >= 2:
+        _, otype, value = scope.split(":", 2)
+        ctx = obj_ai_context(await object_page(request, otype, value), lang)
+    else:
+        cc = scope.split(":", 1)[1] if ":" in scope else None
+        country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
+        ctx = build_context(overview(), geo.country_name, lang, cc, country, S.home_region)
     ans = await ai.followup(request.app.state.client, report, thread, body.question.strip(), ctx, lang)
     tid = db.insert("INSERT INTO ai_threads(report_id, created_at, question, payload) VALUES(?,?,?,?)",
                     (body.report_id, utcnow(), body.question.strip(), json.dumps(ans)))
@@ -1262,6 +1286,303 @@ def api_tb_history_delete(rid: int) -> dict[str, Any]:
     if not db.execute("DELETE FROM tool_runs WHERE id=?", (rid,)):
         raise AppError("err.not_found", 404)
     return {"deleted": rid}
+
+
+# --- objects (analysis area) -------------------------------------------------------------------------------------------
+async def object_page(request: Request, otype: str, value: str) -> dict[str, Any]:
+    lang = _lang(request)
+    if otype not in OBJ_TYPES:
+        raise AppError("err.obj.invalid")
+    client = request.app.state.client
+    if otype == "country":
+        cc = _cc(value)
+        country = country_localized(await country_data(request, cc), lang)
+        return await objects.build("country", cc, lang, client, country=country, trends=analytics.trends(db, cc, 30))
+    return await objects.build(otype, value, lang, client)
+
+
+def obj_ai_context(page: dict[str, Any], lang: str) -> dict[str, Any]:
+    ctx = object_context(page)
+    ctx["as_of_utc"] = utcnow()
+    ctx["available_tools"] = [i18n.t(lang, f"tb.tool.{tid}") for tid in page.get("tools") or [] if tid != "cyberchef"]
+    return ctx
+
+
+@app.get("/api/obj")
+async def api_obj(request: Request, type: str = Query(..., max_length=10),
+                  value: str = Query(..., min_length=1, max_length=300)) -> dict[str, Any]:
+    return await object_page(request, type, value)
+
+
+class ObjAiIn(BaseModel):
+    type: str = Field(..., max_length=10)
+    value: str = Field(..., min_length=1, max_length=300)
+    question: str | None = Field(None, max_length=600)
+
+
+@app.post("/api/ai/object")
+async def api_ai_object(request: Request, body: ObjAiIn) -> dict[str, Any]:
+    """Gemini assessment of one object. The object value is sent to Google; own assets only as a flag (objects.object_context)."""
+    lang = _lang(request)
+    page = await object_page(request, body.type, body.value)
+    q = (body.question or "").strip()
+    task = TASKS[lang]["object_question"] + q if q else TASKS[lang]["object"]
+    result = await ai.analyze(request.app.state.client, task, obj_ai_context(page, lang), lang)
+    scope_label = f"obj:{page['type']}:{page['value']}"
+    if not result.get("cached"):
+        result["id"] = db.insert("INSERT INTO ai_reports(created_at, scope, model, payload) VALUES(?,?,?,?)",
+                                 (utcnow(), scope_label, result["model"], json.dumps({**result, "question": q or None})))
+    return {**result, "scope": scope_label, "question": q or None}
+
+
+# --- deep views ---------------------------------------------------------------------------------------------------------
+@app.get("/api/kev")
+def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Query(None, max_length=80),
+            days: int = Query(0, ge=0, le=3650), ransomware: bool = False, min_epss: float = Query(0.0, ge=0.0, le=1.0),
+            mine: bool = False, sort: str = Query("date", pattern="^(date|epss)$"),
+            limit: int = Query(300, ge=1, le=2000)) -> dict[str, Any]:
+    """CISA KEV with EPSS, filterable. 'mine' = only CVEs of watched products or seen on own IPs (InternetDB)."""
+    exposed: set[str] = set()
+    for r in db.query("SELECT vulns FROM surface"):
+        try:
+            exposed.update(json.loads(r["vulns"] or "[]"))
+        except ValueError:
+            continue
+    watched = {r["cve"] for r in db.query("SELECT DISTINCT cve FROM product_cves")}
+    sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile "
+           "FROM kev k LEFT JOIN epss e ON e.cve = k.cve WHERE 1=1")
+    params: list[Any] = []
+    if q and q.strip():
+        sql += " AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
+        params += [_like(q.strip())] * 4
+    if vendor:
+        sql += " AND k.vendor = ? COLLATE NOCASE"
+        params.append(vendor.strip())
+    if days:
+        sql += " AND k.date_added >= ?"
+        params.append(_cutoff(days)[:10])
+    if ransomware:
+        sql += " AND lower(k.ransomware) = 'known'"
+    if min_epss > 0:
+        sql += " AND e.epss >= ?"
+        params.append(min_epss)
+    sql += " ORDER BY " + ("COALESCE(e.epss, -1) DESC, k.date_added DESC" if sort == "epss" else "k.date_added DESC, k.cve DESC")
+    rows = db.query(sql, params)
+    for r in rows:
+        r["watched"] = r["cve"] in watched
+        r["exposed"] = r["cve"] in exposed
+    if mine:
+        rows = [r for r in rows if r["watched"] or r["exposed"]]
+    vendors: dict[str, int] = {}
+    for r in rows:
+        vendors[r["vendor"] or "?"] = vendors.get(r["vendor"] or "?", 0) + 1
+    return {"total": len(rows), "rows": rows[:limit],
+            "vendors": [{"key": k, "count": v} for k, v in sorted(vendors.items(), key=lambda x: -x[1])[:25]],
+            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"]}
+
+
+@app.get("/api/infra")
+def api_infra(request: Request, days: int = Query(30, ge=1, le=60),
+              kind: str | None = Query(None, pattern="^(outage|hijack|leak|anomaly)$"),
+              cc: str | None = Query(None, max_length=2), limit: int = Query(500, ge=1, le=2000)) -> dict[str, Any]:
+    """Infrastructure events (Cloudflare Radar: outages, BGP hijacks and leaks, traffic anomalies); stored for 60 days."""
+    lang = _lang(request)
+    sql = ("SELECT id, kind, start_ts, end_ts, countries, asns, prefixes, cause, scope, confidence, url, meta FROM infra_events "
+           "WHERE COALESCE(end_ts, start_ts, updated_at) >= ?")
+    params: list[Any] = [_cutoff(days)]
+    if kind:
+        sql += " AND kind = ?"
+        params.append(kind)
+    rows = db.query(sql + " ORDER BY start_ts DESC", params)
+    want = _cc(cc) if cc else None
+    out = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            r["countries"] = json.loads(r["countries"] or "[]")
+            r["asns"] = json.loads(r["asns"] or "[]")
+            r["prefixes"] = json.loads(r["prefixes"] or "[]")
+            r["meta"] = json.loads(r["meta"] or "{}")
+        except ValueError:
+            continue
+        if want and want not in r["countries"]:
+            continue
+        r["meta"]["kind"] = r["kind"]
+        r["ongoing"] = r["end_ts"] is None and r["kind"] in ("outage", "leak", "anomaly")
+        counts[r["kind"]] = counts.get(r["kind"], 0) + 1
+        out.append(_event(r, lang))
+    return {"total": len(out), "counts": counts, "events": out[:limit]}
+
+
+# --- own IP and "my network" ----------------------------------------------------------------------------------------------
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _myip_kick(request: Request) -> None:
+    kick("myip", request.app.state.jobs["myip"])
+
+
+async def _myip_check_all(client: Any) -> None:
+    for kind in MYIP_KINDS:
+        if myip.current()[kind]:
+            await myip.check(client, kind)
+
+
+@app.get("/api/myip")
+def api_myip(request: Request) -> dict[str, Any]:
+    return {**myip.state(), "you": myip.peek(_client_ip(request)), "sightings": myip.sightings()}
+
+
+@app.post("/api/myip/visit")
+async def api_myip_visit(request: Request) -> dict[str, Any]:
+    res = myip.visit(_client_ip(request))
+    if res.get("auto_applied"):
+        _myip_kick(request)
+    return res
+
+
+class MyIPConfirmIn(BaseModel):
+    auto: bool = False
+
+
+@app.post("/api/myip/confirm")
+async def api_myip_confirm(request: Request, body: MyIPConfirmIn) -> dict[str, Any]:
+    res = myip.confirm(_client_ip(request), body.auto)
+    _myip_kick(request)
+    return res
+
+
+class MyIPConfigIn(BaseModel):
+    dyndns: str | None = Field(None, max_length=253)
+    auto_asn: bool | None = None
+
+
+@app.post("/api/myip/config")
+async def api_myip_config(request: Request, body: MyIPConfigIn) -> dict[str, Any]:
+    cfg = myip.configure(body.dyndns, body.auto_asn)
+    if body.dyndns:
+        _myip_kick(request)
+    return cfg
+
+
+@app.post("/api/myip/token")
+def api_myip_token() -> dict[str, Any]:
+    """Creates a new reporter token (replaces the old one). It is shown once; only its hash is stored."""
+    return {"token": myip.new_token()}
+
+
+@app.delete("/api/myip/token")
+def api_myip_token_delete() -> dict[str, Any]:
+    myip.revoke_token()
+    return {"ok": True}
+
+
+class MyIPKindIn(BaseModel):
+    kind: str = Field(..., pattern="^(home|server)$")
+
+
+@app.post("/api/myip/clear")
+def api_myip_clear(body: MyIPKindIn) -> dict[str, Any]:
+    myip.clear(body.kind)
+    return {"ok": True}
+
+
+@app.post("/api/myip/check")
+async def api_myip_check(request: Request) -> dict[str, Any]:
+    _throttle("myip-check", 60)
+    client = request.app.state.client
+    kick("myip-check", lambda: _myip_check_all(client))
+    return {"ok": True}
+
+
+def _report_token(request: Request) -> str | None:
+    """Bearer token, or the password of HTTP Basic auth (dyndns2 clients); the user name is ignored."""
+    scheme, _, cred = (request.headers.get("authorization") or "").partition(" ")
+    if scheme.lower() == "bearer":
+        return cred.strip() or None
+    if scheme.lower() == "basic":
+        try:
+            dec = base64.b64decode(cred.strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+        return dec.partition(":")[2] or None
+    return None
+
+
+def _claimed(*vals: str | None) -> list[str] | None:
+    out = [x.strip() for v in vals if v for x in v.split(",") if x.strip()]
+    return out[:4] or None
+
+
+@app.post("/api/myip/report")
+async def api_myip_report(request: Request, ip: str | None = Query(None, max_length=100)) -> JSONResponse:
+    """Reporter for the home IP: a device at home calls this with the token (Authorization: Bearer).
+    Without ?ip= the connecting address is used (requires a reverse proxy that sets X-Forwarded-For)."""
+    status, ips = myip.report(_report_token(request), _client_ip(request), _claimed(ip))
+    if status == "ok":
+        _myip_kick(request)
+    code = {"ok": 200, "nochg": 200, "badauth": 401, "locked": 429, "noip": 400, "wait": 429}[status]
+    return JSONResponse({"status": status, "ips": ips}, code)
+
+
+@app.get("/nic/update")
+async def nic_update(request: Request, myip_q: str | None = Query(None, alias="myip", max_length=100),
+                     myipv6: str | None = Query(None, max_length=60)) -> PlainTextResponse:
+    """dyndns2-compatible update for routers and DynDNS clients (HTTP Basic auth, password = reporter token)."""
+    challenge = {"WWW-Authenticate": 'Basic realm="Emberwatch"'}
+    token = _report_token(request)
+    if not token:
+        return PlainTextResponse("badauth", 401, headers=challenge)
+    status, ips = myip.report(token, _client_ip(request), _claimed(myip_q, myipv6))
+    if status == "ok":
+        _myip_kick(request)
+        return PlainTextResponse("good " + " ".join(ips))
+    if status == "nochg":
+        return PlainTextResponse("nochg " + " ".join(ips))
+    if status in ("badauth", "locked"):
+        return PlainTextResponse("badauth", 401, headers=challenge)
+    return PlainTextResponse("911")  # noip / wait: the client retries later
+
+
+def _asset_risk(a: dict[str, Any]) -> str:
+    sf = a.get("surface") or {}
+    rep = a.get("reputation") or {}
+    if a.get("high_7d") or rep.get("drop") or sf.get("kev"):
+        return "high"
+    if a.get("alerts_7d") or sf.get("vulns") or rep.get("tor"):
+        return "medium"
+    return "ok"
+
+
+@app.get("/api/netz/overview")
+def api_netz_overview(request: Request) -> dict[str, Any]:
+    lang = _lang(request)
+    st = myip.state()
+    entries = []
+    for w in db.query("SELECT id, kind, value, label, created_at, scan, scan_ack FROM watchlist ORDER BY id DESC"):
+        a = asset_summary(w)
+        a["risk"] = _asset_risk(a)
+        entries.append(a)
+    rank = {"high": 0, "medium": 1, "ok": 2}
+    entries.sort(key=lambda a: (rank[a["risk"]], -(a.get("alerts_7d") or 0)))
+    prods = products.listing()
+    return {
+        "myip": {k: {f: st[k].get(f) for f in ("ip", "ip6", "source", "updated_at", "checked_at", "checks", "geo")}
+                 for k in MYIP_KINDS},
+        "myip_configured": bool(st["home"]["config"].get("dyndns") or st["home"]["config"].get("token_set")
+                                or st["home"]["config"].get("auto_asn")),
+        "you": myip.peek(_client_ip(request)),
+        "assets": {"total": len(entries), "by_risk": {k: sum(1 for a in entries if a["risk"] == k) for k in rank},
+                   "top": [{k: a.get(k) for k in ("id", "kind", "value", "label", "risk", "alerts_7d", "high_7d", "surface",
+                                                  "reputation")} for a in entries[:8]],
+                   "max": watchlist.MAX_ENTRIES},
+        "products": {"total": len(prods), "with_kev": sum(1 for p in prods if p["kev"]),
+                     "with_critical": sum(1 for p in prods if p["critical"])},
+        "alerts": {"stats": alerts.stats(db), "latest": alerts.listing(db, lang, limit=10)},
+        "scan": {"enabled": S.scan_enabled, "running": surface.current},
+        "syslog": syslog.info() if syslog else {"enabled": False},
+    }
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")

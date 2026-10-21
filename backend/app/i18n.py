@@ -520,17 +520,22 @@ def has(key: str) -> bool:
     return key in T[DEFAULT_LANG]
 
 
+class Key(str):
+    """A text key used as a parameter value; it is translated when the message is rendered."""
+
+
 class AppError(Exception):
     """Error with a translatable message. status is the HTTP status when it reaches the API."""
 
-    def __init__(self, key: str, status: int = 400, **params: Any) -> None:
+    def __init__(self, key: str, status: int = 400, /, **params: Any) -> None:
+        # positional-only, so "status" can also be a text placeholder (e.g. an upstream HTTP status)
         super().__init__(key)
         self.key = key
         self.status = status
         self.params = params
 
     def render(self, lang: str) -> str:
-        return t(lang, self.key, **self.params)
+        return t(lang, self.key, **{k: t(lang, v) if isinstance(v, Key) else v for k, v in self.params.items()})
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -668,6 +673,11 @@ def render_alert(row: dict[str, Any], params: dict[str, Any], lang: str) -> tupl
         args["expected"] = ", ".join(f"AS{a}" for a in args["expected"]) or t(lang, "none")
     if "count" in args:
         args["count"] = fint(args["count"], lang)
+    if key.startswith("myip."):
+        if args.get("kind") in ("home", "server"):
+            args["kind"] = t(lang, f"myip.kind.{args['kind']}")
+        if args.get("source") in ("visit", "confirmed", "report", "dyndns", "egress"):
+            args["source"] = t(lang, f"myip.src.{args['source']}")
     title = t(lang, f"alert.{key}.title", **args)
     detail = t(lang, f"alert.{key}.detail", **args)
     return title[:300], detail[:800]
@@ -713,3 +723,7 @@ def _merge(extra: dict[str, dict[str, str]]) -> None:
 from .toolbox.texts import TT as _TB  # noqa: E402
 
 _merge(_TB)
+
+from .texts_more import OT as _OT  # noqa: E402
+
+_merge(_OT)

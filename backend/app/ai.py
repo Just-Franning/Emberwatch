@@ -281,6 +281,13 @@ TASKS = {
             "Was zeigen die Daten für diese Länder, welche Vektoren, Gruppen und KEV sind relevant, was sollte priorisiert werden?"
         ),
         "question": "Beantworte die folgende Frage anhand von DATA. Frage: ",
+        "object": (
+            "Bewerte das Objekt in DATA.object für erfahrene IT-Security-Fachleute: Was ist es, wie riskant ist es nach den "
+            "vorliegenden Daten, welche Befunde sind belastbar und welche nicht? relates_to_own_assets zeigt, ob es die eigene "
+            "Umgebung betrifft (Details dazu werden bewusst nicht übermittelt). Empfiehl konkrete nächste Prüfschritte; nutze dafür "
+            "bevorzugt die Werkzeuge in available_tools. Keine Diagramme, außer DATA enthält Zeitreihen."
+        ),
+        "object_question": "Beantworte die folgende Frage zum Objekt in DATA.object anhand von DATA. Frage: ",
     },
     "en": {
         "global": (
@@ -303,6 +310,13 @@ TASKS = {
             "organisations: what do the data show for these countries, which vectors, groups and KEV matter, what should be prioritised?"
         ),
         "question": "Answer the following question based on DATA. Question: ",
+        "object": (
+            "Assess the object in DATA.object for experienced IT security professionals: what is it, how risky is it according "
+            "to the data, which findings are solid and which are not? relates_to_own_assets shows whether it concerns the user's "
+            "own environment (details are deliberately not transmitted). Recommend concrete next checks, preferably with the "
+            "tools in available_tools. No charts unless DATA contains time series."
+        ),
+        "object_question": "Answer the following question about the object in DATA.object based on DATA. Question: ",
     },
 }
 

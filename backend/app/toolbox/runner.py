@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from .. import i18n
 from ..db import DB, utcnow
 from ..i18n import AppError
+from ..tools import parse_ports
 from . import tools_harden, tools_ident, tools_mail, tools_net, tools_threat
 from .common import Ctx
 from .detect import detect, norm_host
@@ -81,6 +82,8 @@ def prepare(spec: ToolSpec, raw: str, params: dict[str, Any] | None, consent: bo
         raise AppError("err.tb.param", name=str(exc)) from exc
     if spec.consent and p.get(spec.consent) and not consent:
         raise AppError("err.tb.consent")
+    if spec.id == "ports":
+        parse_ports(p.get("ports") or "")  # invalid lists fail before the stream starts (400 instead of an error event)
     if spec.id == "mailhdr":
         text = p.get("text") or raw or ""
         if not text.strip():
@@ -106,7 +109,7 @@ def prepare(spec: ToolSpec, raw: str, params: dict[str, Any] | None, consent: bo
         host = norm_host(raw.strip())
         if host:  # single-label names (e.g. "nas") for tools that connect to a host
             return host, "domain", p
-    raise AppError("err.tb.input", tool=spec.id, type=t)
+    raise AppError("err.tb.input", tool=spec.id, type=i18n.Key(f"tb.in.{t}"))
 
 
 def check_available(spec: ToolSpec, ctx: Ctx) -> None:
@@ -242,7 +245,7 @@ def prepare_recipe(rid: str, raw: str) -> tuple[str, str]:
     else:
         val = det.get("value", "")
     if t not in RECIPES[rid]:
-        raise AppError("err.tb.recipe_input", type=t)
+        raise AppError("err.tb.recipe_input", type=i18n.Key(f"tb.in.{t}"))
     return val, t
 
 
@@ -337,9 +340,14 @@ def recipe_result(ctx: Ctx, rid: str, target: str, steps: list[dict[str, Any]], 
     if first:
         obj = first
     counts = {k: sum(1 for f in findings if f["sev"] == k) for k in ("high", "medium", "low")}
+    results = [s["result"] for s in out_steps if s.get("result")]
+    levels = [r.get("level") for r in results]
+    level = next((lv for lv in ("intrusive", "active", "passive") if lv in levels), "passive")
+    parties = sorted({p.strip() for r in results for p in (r.get("third_party") or "").split(",") if p.strip()})
     return {
         "tool": "recipe", "recipe": rid, "title": i18n.t(ctx.lang, f"tb.recipe.{rid}"), "target": target or obj and obj.get("value") or "",
         "object": obj, "started_at": started, "ms": round((time.perf_counter() - t0) * 1000),
+        "level": level, "target_sees": any(r.get("target_sees") for r in results), "third_party": ", ".join(parties) or None,
         "verdict": {"sev": sev, "text": i18n.t(ctx.lang, "tb.s.recipe", high=counts["high"], medium=counts["medium"], low=counts["low"],
                                                steps=len(out_steps))},
         "findings": findings[:40], "steps": out_steps,

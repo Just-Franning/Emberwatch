@@ -479,9 +479,14 @@ def _resolver(name: str) -> dns.asyncresolver.Resolver:
 def _axfr_sync(ip: str, zone: str) -> dict[str, Any]:
     count = 0
     sample: list[str] = []
+    soa_seen = False
     try:
-        for msg in dns.query.xfr(ip, zone, timeout=5, lifetime=15):
+        for msg in dns.query.xfr(ip, zone, timeout=5, lifetime=15, relativize=False):
             for rrset in msg.answer:
+                if rrset.rdtype == dns.rdatatype.SOA:
+                    if soa_seen:  # the closing SOA ends the transfer and is not a record of its own
+                        continue
+                    soa_seen = True
                 for rd in rrset:
                     count += 1
                     if len(sample) < 40:
@@ -592,7 +597,7 @@ async def spf_lookups(r: dns.asyncresolver.Resolver, record: str, depth: int = 0
     n = 0
     for term in record.split()[1:]:
         t = term.lstrip("+-~?").lower()
-        mech = re.split(r"[:=/]", t, 1)[0]
+        mech = re.split(r"[:=/]", t, maxsplit=1)[0]
         if mech in ("a", "mx", "ptr", "exists"):
             n += 1
         elif mech in ("include", "redirect"):

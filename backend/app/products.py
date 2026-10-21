@@ -156,6 +156,23 @@ class Products:
             [(c["cve"], c["published"], c["last_modified"], c["cvss"], c["severity"], c["summary"], now) for c in cves],
         )
 
+    async def cve_detail(self, client: httpx.AsyncClient, cve: str) -> dict[str, Any] | None:
+        """One CVE from NVD (cached for a day). None if NVD does not know it."""
+        cve = cve.upper()
+        if not CVE_RE.match(cve):
+            return None
+        rows = self.db.query("SELECT cve, published, last_modified, cvss, severity, summary, fetched_at FROM nvd_cve WHERE cve=?", (cve,))
+        if rows:
+            ts = datetime.strptime(rows[0]["fetched_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - ts).total_seconds() < 86400:
+                return rows[0]
+        body = await self._nvd(client, {"cveId": cve})
+        found = [c for c in (parse_cve(v) for v in body.get("vulnerabilities") or [] if isinstance(v, dict)) if c]
+        if not found:
+            return None
+        self._store_cves(found[:1])
+        return {**found[0], "fetched_at": utcnow()}
+
     # --- search integration --------------------------------------------------------------
     async def search(self, client: httpx.AsyncClient, q: str) -> dict[str, Any]:
         """Recent NVD CVEs (published within 120 days) for a free-text vendor/product query, cached 6 h."""
