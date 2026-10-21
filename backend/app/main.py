@@ -485,6 +485,10 @@ async def guard(request: Request, call_next):
     resp.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
     if path.startswith("/api/") or path in ("/", "/index.html", "/login"):
         resp.headers["Cache-Control"] = "no-store"
+    elif path.endswith((".js", ".css", ".html", ".json", ".svg")):
+        # Scripts, styles and pages are revalidated on every load (ETag, usually 304). Without this header browsers cache
+        # them heuristically and mix the scripts of an older version with the page of a new one after an update.
+        resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 

@@ -847,6 +847,18 @@ def test_myip_auto_asn_and_jobs(m, monkeypatch):
     assert "5.9.1.2" in json.dumps(object_context(page)) and "ob.f.myip" not in json.dumps(object_context(page))
 
 
+def test_static_files_are_revalidated(m):
+    """After an update the browser must not mix cached scripts of the old version with the new page."""
+    from fastapi.testclient import TestClient
+    with TestClient(m.app) as tc:
+        for path in ("/js/app.js", "/js/search.js", "/styles.css"):
+            r = tc.get(path)
+            assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers.get("etag"), path
+            again = tc.get(path, headers={"If-None-Match": r.headers["etag"]})
+            assert again.status_code == 304, path
+        assert tc.get("/").headers["cache-control"] == "no-store"
+
+
 def test_login_page_assets_public(tmp_path, monkeypatch):
     """With a login, the login page and every module it imports load without a session; the app itself does not."""
     m = v3.load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="a-long-test-password-123")

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.1.1 – 2026-10-21
+
+### Fixed
+- After an update, browsers could keep the scripts of the previous version from their cache and show an empty interface
+  ("null is not an object … this.form"). Scripts, styles and pages are now revalidated on every load. If you updated to
+  3.1.0 and see this error: clear the browser cache for Emberwatch once or reload with Ctrl+Shift+R.
+
 ## 3.1.0 – 2026-10-21
 
 The interface is split into three areas: **Situation** (world map), **Analysis** (objects and tools) and **My network**. The map stays lean; depth moved to its own pages.
