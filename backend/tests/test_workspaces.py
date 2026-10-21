@@ -522,10 +522,15 @@ def test_mail_anchor_parsing_is_linear(m):
     from app.toolbox import tools_mail as tm
     html = '<a class="x" href="https://a.example/1">A <b>bold</b></a> <A\nHREF=\'https://b.example\'>B</a >'
     assert tm.anchors(html) == [("https://a.example/1", "A <b>bold</b>"), ("https://b.example", "B")]
+    assert tm.shown_host("https://www.Bank.example/login") == "www.bank.example"
+    assert tm.shown_host("Kontakt: service@bank.example.") == "bank.example"
+    assert tm.shown_host("Version 1.2.3") is None and tm.shown_host("http://203.0.113.9/p") is None
     crafted = ("<a href='https://x.example/'>" * 40000) + ("<a " + "x" * 50) * 20000
     started = time.perf_counter()
     assert tm.anchors(crafted) == []
-    assert time.perf_counter() - started < 2  # the former single regex needed minutes for this
+    crafted = ('<a href="https://x.example">' + "a." * 1990 + "1</a>") * 500
+    assert all(tm.shown_host(tm.TAG.sub("", inner)) is None for _, inner in tm.anchors(crafted))
+    assert time.perf_counter() - started < 2  # the former patterns needed minutes for these
 
 
 def test_recipes(m, fdns):

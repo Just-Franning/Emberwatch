@@ -18,7 +18,7 @@ from ..domains import registrable
 from ..logs import URL_RE, _norm_url
 from ..tools import ToolError
 from .common import Ctx, geo_of, ip_cell, is_global, loc_text
-from .detect import norm_host, url_host
+from .detect import is_domain, norm_host, url_host
 from .registry import ToolSpec
 from .result import Result, cell
 from .tools_threat import mb_lookup
@@ -115,6 +115,22 @@ def anchors(html: str) -> list[tuple[str, str]]:
     return out
 
 
+SCHEME = re.compile(r"^[a-z][a-z0-9+.-]{0,15}:(?://)?", re.I)
+
+
+def shown_host(text: str) -> str | None:
+    """First domain in the visible text of a link ("www.bank.example", "https://bank.example/login", "x@bank.example").
+    Token by token instead of one search pattern: a pattern like (?:[\\w-]+\\.)+tld needs polynomial time on crafted
+    link texts such as "a.a.a.a…1"."""
+    for tok in text[:300].split():
+        tok = SCHEME.sub("", tok.strip(".,;:!?()[]{}<>\"'«»"))
+        host = tok.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].rsplit("@", 1)[-1].strip(".,;:!?()[]{}<>\"'«»")
+        h = norm_host(host)
+        if h and is_domain(h):
+            return h
+    return None
+
+
 def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], list[dict[str, Any]]]:
     """Links, shown-vs-real link mismatches and attachment hashes. CPU-bound on large mails: runs in a worker thread."""
     urls: dict[str, str] = {}
@@ -152,8 +168,8 @@ def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], lis
                 for href, inner in anchors(body):
                     shown = TAG.sub("", inner).strip()
                     hh = url_host(href.replace("&amp;", "&"))
-                    m = re.search(r"(?:https?://)?((?:[\w-]+\.)+[a-z]{2,})", shown, re.I)
-                    if hh and m and _org(norm_host(m.group(1)) or m.group(1)) != _org(norm_host(hh) or hh):
+                    sh = shown_host(shown)
+                    if hh and sh and _org(sh) != _org(norm_host(hh) or hh):
                         mismatches.append((shown[:80], hh))
     return urls, mismatches, atts
 
