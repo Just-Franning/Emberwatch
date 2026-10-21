@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.1.0 – unreleased
+## 3.1.0 – 2026-10-21
 
 The interface is split into three areas: **Situation** (world map), **Analysis** (objects and tools) and **My network**. The map stays lean; depth moved to its own pages.
 
