@@ -12,7 +12,7 @@ from typing import Any
 from . import i18n
 from .db import DB, utcnow
 
-SOURCES = ("watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "legacy")
+SOURCES = ("watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news", "legacy")
 SEVERITIES = ("high", "medium", "low")
 SEV_RANK = {"high": 0, "medium": 1, "low": 2}
 

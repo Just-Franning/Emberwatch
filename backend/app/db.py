@@ -317,6 +317,44 @@ CREATE TABLE IF NOT EXISTS myip_sightings (
     as_name TEXT,
     country TEXT
 );
+CREATE TABLE IF NOT EXISTS news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    summary TEXT,
+    image TEXT,
+    published TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    lang TEXT,
+    tier TEXT,
+    origin TEXT,
+    origin_by TEXT,
+    countries TEXT,
+    actors TEXT,
+    cves TEXT,
+    malware TEXT,
+    kinds TEXT,
+    mine TEXT,
+    cluster INTEGER,
+    og_tried INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS news_published ON news(published);
+CREATE INDEX IF NOT EXISTS news_cluster ON news(cluster);
+CREATE TABLE IF NOT EXISTS actors (
+    name TEXT PRIMARY KEY,
+    country TEXT,
+    sponsor TEXT,
+    synonyms TEXT,
+    victims TEXT,
+    targets TEXT,
+    sectors TEXT,
+    incident TEXT,
+    confidence TEXT,
+    description TEXT,
+    refs TEXT,
+    updated_at TEXT
+);
 """
 
 # (table, column, declaration) – applied with ALTER TABLE if the column is missing
