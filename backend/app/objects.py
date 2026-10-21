@@ -44,8 +44,8 @@ def _needle_re(needle: str, kind: str) -> re.Pattern[str]:
         return re.compile(r"(?<![A-Za-z0-9_-])" + n + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])", re.I)
     if kind == "ip" and ":" in needle:
         return re.compile(r"(?<![A-Za-z0-9_.:-])" + n + r"(?![A-Za-z0-9_:-]|\.[0-9])", re.I)
-    if kind == "ip":  # 1.2.3.4:443 counts
-        return re.compile(r"(?<![A-Za-z0-9_.:-])" + n + r"(?![A-Za-z0-9_-]|\.[0-9])", re.I)
+    if kind == "ip":  # 1.2.3.4:443 and client:1.2.3.4 count
+        return re.compile(r"(?<![A-Za-z0-9_.-])" + n + r"(?![A-Za-z0-9_-]|\.[0-9])", re.I)
     return re.compile(r"(?<![A-Za-z0-9_.-])" + n + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])", re.I)
 
 
@@ -98,17 +98,26 @@ class Objects:
         likes = [needle] + ([str(asn)] if asn is not None else [])
         where = " OR ".join("params LIKE ? ESCAPE '\\'" for _ in likes)
         args = ["%" + x.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for x in likes]
-        rows = self.db.query(f"SELECT * FROM alerts WHERE {where} ORDER BY id DESC LIMIT ?", (*args, limit * 10))
-        out = []
-        for r in rows:
-            try:
-                params = json.loads(r["params"] or "{}")
-            except ValueError:
-                continue
-            if rx.search(json.dumps(params, ensure_ascii=False)) or (asn is not None and _asn_field(params, asn)):
-                out.append(alerts.render(r, lang))
-            if len(out) >= limit:
+        out: list[dict[str, Any]] = []
+        # The LIKE filter also returns near misses (1.2.3.40 for 1.2.3.4): page through them until enough real matches
+        # are found, so a noisy neighbour cannot push the object's own alerts out (at most 20 000 rows are looked at).
+        last_id = None
+        for _ in range(40):
+            cond = f"({where})" + (" AND id < ?" if last_id is not None else "")
+            rows = self.db.query(f"SELECT * FROM alerts WHERE {cond} ORDER BY id DESC LIMIT 500",
+                                 (*args, *([last_id] if last_id is not None else [])))
+            for r in rows:
+                try:
+                    params = json.loads(r["params"] or "{}")
+                except ValueError:
+                    continue
+                if rx.search(json.dumps(params, ensure_ascii=False)) or (asn is not None and _asn_field(params, asn)):
+                    out.append(alerts.render(r, lang))
+                    if len(out) >= limit:
+                        return out
+            if len(rows) < 500:
                 break
+            last_id = rows[-1]["id"]
         return out
 
     def _assets_with_ip(self, ip: str) -> list[dict[str, Any]]:
@@ -144,8 +153,12 @@ class Objects:
         det = {"type": otype, "value": value}
         if otype == "url":
             det = detect(value)
+        host_t = tbreg.effective_type(det) if otype == "url" else otype
+        private = otype in ("ip", "cidr", "domain", "url") and tbrun.private_target(det.get("host") or value if otype == "url" else value,
+                                                                                    host_t)
         return {
             "type": otype, "value": value, "title": title, "subtitle": subtitle,
+            "private": private,  # private address or internal name: not sent to Gemini or other third parties
             "risk": {"sev": sev, "text": i18n.t(r.lang, f"ob.risk.{sev}"), "reasons": reasons},
             "sections": r.sections, "map": {"points": r.points, "paths": r.paths} if r.points else None,
             "related": r.related, "mine": mine, "alerts": alert_rows,

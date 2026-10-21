@@ -33,6 +33,7 @@ from .db import DB, utcnow
 from .geo import Geo
 from .i18n import AppError
 from .surface import RISKY_PORTS
+from .tools import is_public
 from .toolbox.detect import is_domain, norm_host
 
 KINDS = ("home", "server")
@@ -47,7 +48,7 @@ def _public(ip: str | None) -> bool:
         a = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return a.is_global and not a.is_multicast
+    return is_public(a)  # global, not multicast, no IPv6 wrapper of a private IPv4 address
 
 
 def _same(ip: str, known: list[str]) -> bool:

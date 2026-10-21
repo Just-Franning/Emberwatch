@@ -344,14 +344,16 @@ async def globalping(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, An
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # a name is resolved locally first: names that point to private addresses (split horizon, internal zones)
-        # or do not resolve here stay on the server
+        # a name is resolved locally first: names that point to private addresses (split horizon, internal zones) stay
+        # on the server. Names this server cannot resolve or that a DNS filter blocks (Pi-hole, AdGuard: NXDOMAIN or
+        # 0.0.0.0) are still measured: they are not shown to be internal, and malicious domains are a typical target.
         try:
             await resolve(host, False)
         except ToolError as exc:
             if exc.key == "err.tool.private":
                 raise ToolError("err.tb.third_private", addr=host, party="Globalping") from exc
-            raise
+            if exc.key not in ("err.tool.resolve", "err.tool.multicast"):
+                raise
     res.obj = ("ip", host) if is_global(host) else ("domain", host)
     body: dict[str, Any] = {"type": mode, "target": host, "limit": limit, "measurementOptions": opts}
     if loc.lower() != "world":

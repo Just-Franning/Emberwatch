@@ -187,7 +187,7 @@ export class Analyse {
   }
 
   geminiBlock(page) {
-    const enabled = Boolean(this.status?.ai?.enabled);
+    const enabled = Boolean(this.status?.ai?.enabled) && !page.private; // private objects stay local
     const scope = `obj:${page.type}:${page.value}`;
     const out = el("div", { class: "ai-out" });
     const q = el("input", { type: "text", maxlength: 600, placeholder: t("an.ai_q_ph"), "aria-label": t("an.ai_q_ph") });
@@ -241,7 +241,7 @@ export class Analyse {
       }).catch(() => {});
     }
     return el("section", { class: "res-sec gemini" }, el("h4", {}, t("an.ai_title")),
-      el("p", { class: "note" }, enabled ? t("an.ai_note") : t("an.ai_off")),
+      el("p", { class: "note" }, page.private ? t("an.ai_private") : enabled ? t("an.ai_note") : t("an.ai_off")),
       el("div", { class: "btnrow" }, run), form, out);
   }
 

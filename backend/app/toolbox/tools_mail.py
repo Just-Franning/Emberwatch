@@ -32,23 +32,30 @@ HTML_EXT = {"htm", "html", "shtml", "xhtml", "svg"}
 ARCHIVE_EXT = {"zip", "rar", "7z", "gz", "tar", "ace", "cab", "arj", "z", "xz", "bz2", "tgz"}
 IP_BRACKET = re.compile(r"\[(?:IPv6:)?([0-9A-Fa-f:.]{3,45})\]")
 IPV4_ANY = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
-# Links in HTML: opening tag and closing tag are searched separately and within bounded windows. A single pattern with
-# a lazy body (<a …>(.*?)</a>) needs quadratic time on mails with many unclosed <a> tags (crafted mail = the use case).
-ANCHOR_OPEN = re.compile(r"<a\s[^<>]{0,2000}?\bhref\s*=\s*[\"']([^\"'<>]{1,2000})[\"'][^<>]{0,2000}>", re.I)
+# Links in HTML, in one linear pass (crafted mails are the use case, so no pattern may backtrack over the whole body):
+# opening tags, their href (quoted or unquoted) and closing tags are found separately. Like a browser, a new <a> ends
+# the previous link. A single pattern with a lazy body (<a …>(.*?)</a>) needs quadratic time on unclosed tags.
+ANCHOR_TAG = re.compile(r"<a\s[^<>]*>", re.I)
+HREF = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+))""", re.I)
 ANCHOR_CLOSE = re.compile(r"</a\s*>", re.I)
-ANCHOR_WINDOW = 4000
-MAX_ANCHORS = 500
-TAG = re.compile(r"<[^>]+>")
+MAX_ANCHORS = 20000
+TAG = re.compile(r"<[^<>]*>")
 AR_RE = re.compile(r"\b(spf|dkim|dmarc|arc|compauth)\s*=\s*([a-z]+)", re.I)
 
 
+MAX_HEADER = 4000  # characters of a header value that are decoded
+
+
 def _dec(v: Any) -> str:
+    """Decoded header value (RFC 2047), at most 1000 characters. Cut before decoding: decode_header needs quadratic
+    time on headers made of many encoded words."""
     if v is None:
         return ""
+    raw = str(v)[:MAX_HEADER]
     try:
-        return str(make_header(decode_header(str(v))))[:1000]
-    except (ValueError, LookupError, UnicodeError):
-        return str(v)[:1000]
+        return str(make_header(decode_header(raw)))[:1000]
+    except Exception:  # malformed encoded words (email.errors.HeaderParseError is no ValueError)
+        return raw[:1000]
 
 
 def _domain_of(addr: str) -> str | None:
@@ -104,31 +111,56 @@ def _ext(name: str) -> list[str]:
 
 
 def anchors(html: str) -> list[tuple[str, str]]:
-    """(href, inner HTML) of the first MAX_ANCHORS closed links; linear in the length of the text."""
+    """(href, inner HTML) of the links in an HTML text, linear in its length. A link ends at its closing tag, at the
+    next opening <a> or at the end of the text; links without href are skipped."""
     out: list[tuple[str, str]] = []
-    for m in ANCHOR_OPEN.finditer(html):
-        end = ANCHOR_CLOSE.search(html, m.end(), m.end() + ANCHOR_WINDOW)
-        if end:
-            out.append((m.group(1), html[m.end():end.start()]))
+    closes = ANCHOR_CLOSE.finditer(html)
+    close = next(closes, None)
+    cur: tuple[str, int] | None = None  # (href, start of the inner HTML) of the open link
+
+    def finish(stop: int) -> None:
+        nonlocal close
+        assert cur is not None
+        while close is not None and close.start() < cur[1]:
+            close = next(closes, None)
+        end = min(close.start(), stop) if close is not None else stop
+        out.append((cur[0], html[cur[1]:end]))
+
+    for m in ANCHOR_TAG.finditer(html):
+        if cur is not None:
+            finish(m.start())
             if len(out) >= MAX_ANCHORS:
-                break
+                return out
+        h = HREF.search(m.group(0))
+        cur = (next(g for g in h.groups() if g is not None), m.end()) if h else None
+    if cur is not None:
+        finish(len(html))
     return out
 
 
 SCHEME = re.compile(r"^[a-z][a-z0-9+.-]{0,15}:(?://)?", re.I)
+ASCII_HOST = re.compile(r"(?=.{4,253}$)(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}", re.I)
 
 
-def shown_host(text: str) -> str | None:
-    """First domain in the visible text of a link ("www.bank.example", "https://bank.example/login", "x@bank.example").
-    Token by token instead of one search pattern: a pattern like (?:[\\w-]+\\.)+tld needs polynomial time on crafted
-    link texts such as "a.a.a.a…1"."""
-    for tok in text[:300].split():
+def shown_hosts(text: str, limit: int = 20) -> list[str]:
+    """Domains in the visible text of a link ("www.bank.example", "https://bank.example/login", "x@bank.example").
+    All of them, so hidden decoy text in front of the visible address does not hide a mismatch. Token by token instead
+    of one search pattern: a pattern like (?:[\\w-]+\\.)+tld needs polynomial time on texts such as "a.a.a.a…1"."""
+    out: list[str] = []
+    for tok in text.split():
+        if "." not in tok or len(tok) > 2100:  # no host in it; skip cheaply (long link texts are attacker-controlled)
+            continue
         tok = SCHEME.sub("", tok.strip(".,;:!?()[]{}<>\"'«»"))
         host = tok.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].rsplit("@", 1)[-1].strip(".,;:!?()[]{}<>\"'«»")
-        h = norm_host(host)
-        if h and is_domain(h):
-            return h
-    return None
+        if host.isascii():
+            h = host.lower() if ASCII_HOST.fullmatch(host) else None
+        else:
+            h = norm_host(host)
+        if h and is_domain(h) and h not in out:
+            out.append(h)
+            if len(out) >= limit:
+                break
+    return out
 
 
 def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], list[dict[str, Any]]]:
@@ -171,12 +203,32 @@ def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], lis
                     urls.setdefault(n, ctype)
             if ctype == "text/html":
                 for href, inner in anchors(body):
-                    shown = TAG.sub("", inner).strip()
                     hh = url_host(href.replace("&amp;", "&"))
-                    sh = shown_host(shown)
-                    if hh and sh and _org(sh) != _org(norm_host(hh) or hh):
-                        mismatches.append((shown[:80], hh))
+                    if not hh or len(mismatches) >= 50:
+                        continue
+                    real = _org(norm_host(hh) or hh)
+                    for sh in shown_hosts(TAG.sub("", inner)):
+                        if _org(sh) != real:
+                            mismatches.append((sh, hh))
+                            break
     return urls, mismatches, atts
+
+
+def _read(text: str) -> dict[str, Any]:
+    """Everything that only reads the mail: parsing, header values, Received hops, links and attachments. No lookups.
+    CPU-bound on large or crafted mails, so it runs in a worker thread."""
+    msg: Message = email.message_from_string(text)
+    h = {name: _dec(msg.get(name)) for name in ("Subject", "From", "Return-Path", "Reply-To", "To", "Date", "Message-ID")}
+    h["X-Mailer"] = _dec(msg.get("X-Mailer") or msg.get("User-Agent"))
+    urls, mismatches, atts = _scan_body(msg)
+    return {
+        "h": h,
+        "auth": [_dec(v) for v in (msg.get_all("Authentication-Results") or [])[:3]],
+        "spf": _dec((msg.get_all("Received-SPF") or [""])[0]),
+        "received": [parse_received(_dec(v)) for v in (msg.get_all("Received") or [])[:40]],
+        "urls": urls, "mismatches": mismatches, "atts": atts,
+        "has_body": msg.is_multipart() or bool(msg.get_payload()),
+    }
 
 
 async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -187,26 +239,27 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
     # (filename="Rechnung_März.pdf"); as bytes, Python returns such headers as Header objects with replacement characters.
     # Lone surrogates from the JSON input are replaced first. Parsing up to 15 MB is CPU work: off the event loop.
     text = text.encode("utf-8", errors="replace").decode("utf-8")
-    msg: Message = await asyncio.to_thread(email.message_from_string, text)
-    res = Result("mailhdr", ctx.lang, _dec(msg.get("Subject"))[:120] or "E-Mail")
+    mail = await asyncio.to_thread(_read, text)
+    hd = mail["h"]
+    res = Result("mailhdr", ctx.lang, hd["Subject"][:120] or "E-Mail")
     ctx.matcher.ensure()
     own_typos = {r["candidate"]: r["domain"] for r in ctx.db.query("SELECT candidate, domain FROM typo WHERE registered=1")}
 
     # --- sender ---------------------------------------------------------------------------------------------------
-    from_raw = _dec(msg.get("From"))
+    from_raw = hd["From"]
     from_name, from_addr = (getaddresses([from_raw]) or [("", "")])[0]
     from_dom = _domain_of(from_addr)
-    rp = getaddresses([_dec(msg.get("Return-Path"))])
+    rp = getaddresses([hd["Return-Path"]])
     rp_dom = _domain_of(rp[0][1]) if rp and rp[0][1] else None
-    rt = getaddresses([_dec(msg.get("Reply-To"))])
+    rt = getaddresses([hd["Reply-To"]])
     rt_dom = _domain_of(rt[0][1]) if rt and rt[0][1] else None
-    mid = _dec(msg.get("Message-ID"))
+    mid = hd["Message-ID"]
     mid_dom = norm_host(mid.strip("<> ").rsplit("@", 1)[1]) if "@" in mid else None
     res.kv(res.t("tb.sec.sender"), [
-        (res.t("tb.k.subject"), _dec(msg.get("Subject"))), ("From", from_raw), ("Return-Path", _dec(msg.get("Return-Path"))),
-        ("Reply-To", _dec(msg.get("Reply-To"))), ("To", _dec(msg.get("To"))[:300]), (res.t("tb.k.date"), _dec(msg.get("Date"))),
+        (res.t("tb.k.subject"), hd["Subject"]), ("From", from_raw), ("Return-Path", hd["Return-Path"]),
+        ("Reply-To", hd["Reply-To"]), ("To", hd["To"][:300]), (res.t("tb.k.date"), hd["Date"]),
         ("Message-ID", cell(mid, mono=True) if mid else None),
-        ("X-Mailer", _dec(msg.get("X-Mailer") or msg.get("User-Agent")) or None)])
+        ("X-Mailer", hd["X-Mailer"] or None)])
     if from_dom:
         res.rel("domain", from_dom)
         if from_dom in own_typos:
@@ -225,12 +278,12 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
         res.find("info", "tb.f.mail_msgid", mid=mid_dom)
 
     # --- authentication ---------------------------------------------------------------------------------------------
-    ars = [_dec(v) for v in msg.get_all("Authentication-Results", [])]
+    ars = mail["auth"]
     auth: dict[str, str] = {}
     for v in ars[:1]:  # the topmost header comes from the receiving system
         for k, val in AR_RE.findall(v):
             auth.setdefault(k.lower(), val.lower())
-    rspf = _dec((msg.get_all("Received-SPF", []) or [""])[0]).split(" ", 1)[0].lower()
+    rspf = mail["spf"].split(" ", 1)[0].lower()
     if "spf" not in auth and rspf:
         auth["spf"] = rspf
     arow = []
@@ -249,7 +302,7 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
         res.text(res.t("tb.sec.auth_raw"), "\n\n".join(ars[:3]), mono=True)
 
     # --- delivery path ----------------------------------------------------------------------------------------------
-    recv = [parse_received(_dec(v)) for v in msg.get_all("Received", [])][:40]
+    recv = mail["received"]
     hops = list(reversed(recv))
     rows = []
     coords = []
@@ -287,7 +340,7 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
         total = int((hops[-1]["ts"] - hops[0]["ts"]).total_seconds())
         if total > 6 * 3600:
             res.find("low", "tb.f.mail_slow", h=round(total / 3600, 1))
-    date_hdr = msg.get("Date")
+    date_hdr = hd["Date"]
     if date_hdr:
         try:
             dts = parsedate_to_datetime(str(date_hdr))
@@ -297,7 +350,7 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
             pass
 
     # --- body: links and attachments ----------------------------------------------------------------------------------
-    urls, mismatches, atts = await asyncio.to_thread(_scan_body, msg)
+    urls, mismatches, atts = mail["urls"], mail["mismatches"], mail["atts"]
     urows = []
     for u in list(urls)[:MAX_URLS]:
         host = url_host(u) or ""
@@ -321,7 +374,7 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
         if host and norm_host(host):
             res.rel("domain", host)
     res.table(res.t("tb.sec.links", n=len(urls)), ["URL", res.t("tb.c.host"), res.t("tb.c.note")], urows,
-              note=res.t("tb.n.links"), empty=res.t("tb.v.no_links") if msg.is_multipart() or msg.get_payload() else None)
+              note=res.t("tb.n.links"), empty=res.t("tb.v.no_links") if mail["has_body"] else None)
     for shown, hh in mismatches[:5]:
         res.find("medium", "tb.f.mail_mismatch", "tb.fd.mail_mismatch", shown=shown, host=hh)
     lookup = bool(params.get("lookup")) and bool(ctx.s.abusech_auth_key)

@@ -405,6 +405,9 @@ def test_globalping(m, fdns):
         ev = run(m, "globalping", target, {"mode": "ping"})
         assert ev[-1]["type"] == "error" and ev[-1]["key"] == "err.tb.third_private", (target, ev[-1])
         assert GP["body"] is None
+    # names this server cannot resolve (e.g. blocked by a DNS filter) are still measured
+    result(run(m, "globalping", "blocked.example.net", {"mode": "ping"}))
+    assert GP["body"]["target"] == "blocked.example.net"
     GP["status"] = 429
     assert run(m, "globalping", "rdap.org", {"mode": "http"})[-1]["key"] == "err.tb.gp_limit"
     assert GP["body"]["measurementOptions"] == {"request": {"method": "HEAD", "path": "/"}, "protocol": "HTTPS"}
@@ -571,17 +574,31 @@ def test_mailhdr(m):
 
 def test_mail_anchor_parsing_is_linear(m):
     from app.toolbox import tools_mail as tm
-    html = '<a class="x" href="https://a.example/1">A <b>bold</b></a> <A\nHREF=\'https://b.example\'>B</a >'
-    assert tm.anchors(html) == [("https://a.example/1", "A <b>bold</b>"), ("https://b.example", "B")]
-    assert tm.shown_host("https://www.Bank.example/login") == "www.bank.example"
-    assert tm.shown_host("Kontakt: service@bank.example.") == "bank.example"
-    assert tm.shown_host("Version 1.2.3") is None and tm.shown_host("http://203.0.113.9/p") is None
-    crafted = ("<a href='https://x.example/'>" * 40000) + ("<a " + "x" * 50) * 20000
+    html = '<a class="x" href="https://a.example/1">A <b>bold</b></a> <A\nHREF=\'https://b.example\'>B</a ><a href=https://c.example/>C'
+    assert tm.anchors(html) == [("https://a.example/1", "A <b>bold</b>"), ("https://b.example", "B"), ("https://c.example/", "C")]
+    assert tm.anchors('<a href="https://x.example">one<a name="n">two</a>') == [("https://x.example", "one")]  # <a> ends a link
+    assert tm.shown_hosts("https://www.Bank.example/login") == ["www.bank.example"]
+    assert tm.shown_hosts("Kontakt: service@bank.example.") == ["bank.example"]
+    assert tm.shown_hosts("Version 1.2.3") == [] and tm.shown_hosts("http://203.0.113.9/p") == []
+
+    def mismatch(body: str) -> list:
+        mail = f"From: a@b.example\nMIME-Version: 1.0\nContent-Type: text/html\n\n{body}\n"
+        return tm._read(mail)["mismatches"]
+    real = "https://login.evil.example/x"
+    assert mismatch(f'<a href="{real}">https://www.bank.example/</a>') == [("www.bank.example", "login.evil.example")]
+    # padding and decoys do not hide the mismatch: long hidden text, a decoy with the real domain first, unquoted href
+    pad = '<span style="display:none">' + "x " * 3000 + "</span>"
+    assert mismatch(f'<a href="{real}">{pad}https://www.bank.example/</a>')
+    assert mismatch(f'<a href="{real}"><span hidden>evil.example</span> www.bank.example</a>')
+    assert mismatch(f"<a href={real}>www.bank.example</a>")
+    assert mismatch(f'<a href="{real}">Jetzt anmelden</a>') == []
+
     started = time.perf_counter()
-    assert tm.anchors(crafted) == []
+    crafted = ("<a href='https://x.example/'>" * 40000) + ("<a " + "x" * 50) * 20000 + "<" * 200000
+    assert all(not tm.shown_hosts(tm.TAG.sub("", inner)) for _, inner in tm.anchors(crafted))
     crafted = ('<a href="https://x.example">' + "a." * 1990 + "1</a>") * 500
-    assert all(tm.shown_host(tm.TAG.sub("", inner)) is None for _, inner in tm.anchors(crafted))
-    assert time.perf_counter() - started < 2  # the former patterns needed minutes for these
+    assert all(not tm.shown_hosts(tm.TAG.sub("", inner)) for _, inner in tm.anchors(crafted))
+    assert time.perf_counter() - started < 3  # the former patterns needed minutes for these
 
 
 def test_recipes(m, fdns):
@@ -659,11 +676,20 @@ def test_gemini_object_context(m):
         fu = tc.post("/api/ai/followup", json={"report_id": r2["id"], "question": "Was tun?"}).json()
         assert fu["answer"] and "8.8.8.8" in GEMINI_PROMPTS[-1]
         assert [x["scope"] for x in tc.get("/api/ai/reports", params={"scope": "obj:ip:8.8.8.8"}).json()] == ["obj:ip:8.8.8.8"]
+        n = len(GEMINI_PROMPTS)
+        for typ, val in (("ip", "10.0.0.5"), ("domain", "nas.fritz.box"), ("cidr", "192.168.0.0/16"), ("url", "http://192.168.1.1/admin")):
+            assert tc.get("/api/obj", params={"type": typ, "value": val}).json()["private"] is True
+            r = tc.post("/api/ai/object", json={"type": typ, "value": val})
+            assert r.status_code == 400 and r.json()["key"] == "err.tb.third_private", (typ, val)
+        assert len(GEMINI_PROMPTS) == n and tc.get("/api/obj", params={"type": "ip", "value": "8.8.8.8"}).json()["private"] is False
 
 
 def test_object_alerts_whole_values_and_own_products(m):
     from app import alerts
     from app.objects import object_context
+    alerts.add(m.db, "syslog", "high", "syslog.hit", {"indicator": "client:1.2.3.4"}, "old")
+    for i in range(600):  # a noisy neighbour does not push the object's own (older) alert out
+        alerts.add(m.db, "syslog", "low", "syslog.hit", {"indicator": f"1.2.3.4{i % 10}"}, f"n{i}")
     for i, params in enumerate(({"indicator": "1.2.3.45"}, {"indicator": "11.2.3.4"}, {"indicator": "1.2.3.4", "line": "x"},
                                 {"asset": "AS13335 (Cloudflare)"}, {"asset": "AS1 (Level3)"}, {"origin": 1, "prefix": "4.0.0.0/9"},
                                 {"names": ["www.example.de"]}, {"names": ["www.example.de.evil.example"]})):
@@ -671,7 +697,7 @@ def test_object_alerts_whole_values_and_own_products(m):
 
     def page(t, v):
         return asyncio.run(m.objects.build(t, v, "en", client()))
-    assert len(page("ip", "1.2.3.4")["alerts"]) == 1  # not 1.2.3.45 or 11.2.3.4
+    assert len(page("ip", "1.2.3.4")["alerts"]) == 2  # not 1.2.3.45, 11.2.3.4 or 1.2.3.40-49
     assert len(page("asn", "AS1")["alerts"]) == 2  # asset label and numeric BGP origin, not AS13335
     assert len(page("domain", "example.de")["alerts"]) == 1  # subdomain yes, look-alike suffix no
     m.db.insert("INSERT INTO products(vendor, product, created_at) VALUES(?,?,?)", ("Sophos", "Firewall XG", m.utcnow()))
@@ -689,6 +715,16 @@ def test_request_body_limits(m):
         pub = tc.post("/api/myip/report", content=b"x" * (65 * 1024), headers={"Authorization": "Bearer x"})
         assert pub.status_code == 413
         assert tc.post("/api/myip/report", headers={"Authorization": "Bearer x"}).status_code in (400, 401)
+
+        def chunks(total: int):  # without Content-Length (chunked): counted while reading
+            yield b'{"tool": "ioc", "target": "8.8.8.8", "params": {"x": "'
+            for _ in range(total // 65536):
+                yield b"a" * 65536
+            yield b'"}}'
+        r = tc.post("/api/tb/run", content=chunks(25 * 1024 * 1024), headers={"Content-Type": "application/json"})
+        assert r.status_code == 413 and r.json()["key"] == "err.body_too_large"
+        r = tc.post("/api/tb/run", content=chunks(65536), headers={"Content-Type": "application/json"})
+        assert r.status_code == 200 and json.loads(r.text.strip().splitlines()[-1])["type"] == "result"
 
 
 def test_dns_resolver_privacy(m, fdns):

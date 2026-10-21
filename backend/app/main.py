@@ -328,6 +328,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         # Gemini analyses (one per object page analysis since 3.1): same retention as alerts, at most 2000
         db.execute("DELETE FROM ai_reports WHERE created_at < ?", (_cutoff(S.alert_retention_days),))
         db.execute("DELETE FROM ai_reports WHERE id NOT IN (SELECT id FROM ai_reports ORDER BY id DESC LIMIT 2000)")
+        db.execute("DELETE FROM ai_threads WHERE report_id NOT IN (SELECT id FROM ai_reports)")  # their follow-ups
 
     return {
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
@@ -372,6 +373,34 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Emberwatch", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+class BodyLimit:
+    """Counts the bytes of request bodies while they are read, so bodies without Content-Length (chunked) are limited
+    too; declared lengths are already refused in guard(). The log upload streams to a file with its own limit."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http" or scope.get("path") == "/api/logs/analyze":
+            await self.inner(scope, receive, send)
+            return
+        seen = 0
+
+        async def limited() -> dict[str, Any]:
+            nonlocal seen
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > MAX_BODY:
+                    raise StarletteHTTPException(413)  # FastAPI passes it through body parsing; see http_error()
+            return msg
+
+        await self.inner(scope, limited, send)
+
+
+app.add_middleware(BodyLimit)
 
 BASEMAP_HOST = "https://tiles.openfreemap.org"
 CSP = (
@@ -479,7 +508,8 @@ async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
     if not request.url.path.startswith("/api/"):
         return PlainTextResponse(str(exc.detail), exc.status_code)
-    key = {404: "err.not_found", 403: "err.forbidden", 405: "err.bad_request"}.get(exc.status_code, "err.bad_request")
+    key = {404: "err.not_found", 403: "err.forbidden", 405: "err.bad_request", 413: "err.body_too_large"}.get(
+        exc.status_code, "err.bad_request")
     return JSONResponse({"detail": t(_lang(request), key), "key": key}, exc.status_code)
 
 
@@ -1205,7 +1235,10 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     scope = rows[0]["scope"]
     if scope.startswith("obj:") and scope.count(":") >= 2:
         _, otype, value = scope.split(":", 2)
-        ctx = obj_ai_context(await object_page(request, otype, value), lang)
+        page = await object_page(request, otype, value)
+        if page.get("private"):
+            raise AppError("err.tb.third_private", addr=page["value"], party="Gemini (Google)")
+        ctx = obj_ai_context(page, lang)
     else:
         cc = scope.split(":", 1)[1] if ":" in scope else None
         country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
@@ -1341,6 +1374,8 @@ async def api_ai_object(request: Request, body: ObjAiIn) -> dict[str, Any]:
     """Gemini assessment of one object. The object value is sent to Google; own assets only as a flag (objects.object_context)."""
     lang = _lang(request)
     page = await object_page(request, body.type, body.value)
+    if page.get("private"):
+        raise AppError("err.tb.third_private", addr=page["value"], party="Gemini (Google)")
     q = (body.question or "").strip()
     task = TASKS[lang]["object_question"] + q if q else TASKS[lang]["object"]
     result = await ai.analyze(request.app.state.client, task, obj_ai_context(page, lang), lang)

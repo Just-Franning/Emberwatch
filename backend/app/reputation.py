@@ -23,6 +23,7 @@ import httpx
 from . import alerts, watchlist
 from .config import Settings
 from .db import DB, utcnow
+from .tools import is_public
 
 log = logging.getLogger("reputation")
 
@@ -193,7 +194,7 @@ class Reputation:
             addr = ipaddress.ip_address(ip)
         except ValueError:
             return {"status": "error"}
-        if not addr.is_global:
+        if not is_public(addr):  # also IPv6 wrappers of private IPv4 addresses (NAT64, 6to4)
             return {"status": "private"}
         ip = str(addr)
         rows = self.db.query("SELECT payload, fetched_at FROM abuseipdb_cache WHERE ip=?", (ip,))
