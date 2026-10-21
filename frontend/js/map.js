@@ -1,10 +1,29 @@
-// World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth),
-// country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
+// World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth).
+// Cyberlage: country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
+// Weltlage: country pairs and countries named in security reports, the selected report; borders and labels in indigo.
 import { t } from "./i18n.js";
 import { objLink } from "./router.js";
 import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
+// Weltlage colours (indigo; the land stays dark, only lines and marks change)
+export const WELT = { line: "#818cf8", dot: "#a5b4fc", ring: "#6366f1", sel: "#e0e7ff", border: "rgba(99, 102, 241, 0.72)", border2: "rgba(99, 102, 241, 0.85)",
+  state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff" };
+// basemap paint values that follow the mode: [layer, property, Weltlage value]
+const MODE_PAINT = [
+  ["boundary_country_z0-4", "line-color", WELT.border], ["boundary_country_z5-", "line-color", WELT.border2],
+  ["boundary_state", "line-color", WELT.state], ["ne-borders", "line-color", WELT.border],
+  ["place_country_other", "text-color", WELT.label], ["place_country_minor", "text-color", WELT.label],
+  ["place_country_major", "text-color", WELT.label], ["place_state", "text-color", WELT.labelState],
+  ["selected", "line-color", WELT.outline],
+];
+const CYBER_LAYERS = {
+  arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"], infra: ["infra"],
+  cables: ["cables", "cables-hl", "landing"], tool: ["tool-path", "tool-points", "tool-labels"],
+};
+const WELT_LAYERS = { pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], sel: ["welt-sel-line", "welt-sel-pt", "welt-sel-label"] };
+const PAIR_OPACITY = ["interpolate", ["linear"], ["get", "w"], 0, 0.4, 1, 0.9];
+const CHORO_OPACITY = ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7];
 const FONT = ["Noto Sans Regular"];
 const PREF_KEY = "emberwatch.basemap";
 
@@ -100,6 +119,10 @@ export class Emberwatch {
   constructor(container, { onCountry, onIp }) {
     this.onCountry = onCountry;
     this.onIp = onIp;
+    this.mode = "cyber";
+    this.vis = { arcs: true, c2: true, ransom: true, infra: true, cables: false, tool: true };
+    this.wvis = { pairs: true, dots: true, sel: true };
+    this.welt = { mentioned: {}, origins: {} };
     this.metric = "l7_target";
     this.countries = {};
     this.arcRows = [];
@@ -140,6 +163,8 @@ export class Emberwatch {
     if (!this.offline) this._watchBasemap(); // register before "load": TileJSON/sprite errors arrive early
     await new Promise((res) => this.map.on("load", res));
     for (const [id, draw] of Object.entries(ICONS)) this.map.addImage(id, icon(draw), { pixelRatio: 2 });
+    // the Cyberlage values of the mode-dependent paint properties, read from the style
+    this.cyberPaint = MODE_PAINT.filter(([id]) => this.map.getLayer(id)).map(([id, prop, w]) => [id, prop, this.map.getPaintProperty(id, prop), w]);
     this._bind();
   }
 
@@ -155,6 +180,9 @@ export class Emberwatch {
       infra: { type: "geojson", data: EMPTY },
       c2: { type: "geojson", data: EMPTY, cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },
       tool: { type: "geojson", data: EMPTY },
+      "welt-pairs": { type: "geojson", data: EMPTY },
+      "welt-dots": { type: "geojson", data: EMPTY },
+      "welt-sel": { type: "geojson", data: EMPTY },
     };
     const vis = (on) => ({ visibility: on ? "visible" : "none" });
     const under = [ // below the basemap's boundaries and labels
@@ -164,7 +192,7 @@ export class Emberwatch {
         paint: {
           "fill-color": ["interpolate", ["linear"], ["to-number", ["coalesce", ["feature-state", "v"], 0]],
             0, RAMP[0], 0.25, RAMP[1], 0.5, RAMP[2], 0.75, RAMP[3], 1, RAMP[4]],
-          "fill-opacity": ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7],
+          "fill-opacity": CHORO_OPACITY,
         },
       },
       { id: "ne-borders", type: "line", source: "countries", layout: vis(this.offline), paint: { "line-color": "rgba(170, 38, 38, 0.6)", "line-width": 0.6 } },
@@ -273,6 +301,51 @@ export class Emberwatch {
         layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 10.5, "text-offset": [0, -1.3], "text-allow-overlap": false },
         paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.4 },
       }] : []),
+      // Weltlage (hidden in the Cyberlage)
+      {
+        id: "welt-pairs", type: "line", source: "welt-pairs", layout: { ...vis(false), "line-cap": "round" },
+        paint: {
+          "line-color": WELT.line,
+          "line-width": ["interpolate", ["linear"], ["get", "w"], 0, 1, 1, 3.6],
+          "line-opacity": PAIR_OPACITY,
+        },
+      },
+      {
+        id: "welt-origins", type: "circle", source: "welt-dots", filter: [">", ["get", "o"], 0], layout: vis(false),
+        paint: {
+          "circle-radius": ["+", 7, ["*", 2.6, ["sqrt", ["get", "o"]]]], "circle-color": "rgba(99, 102, 241, 0.08)",
+          "circle-stroke-color": WELT.ring, "circle-stroke-width": 1.6,
+        },
+      },
+      {
+        id: "welt-dots", type: "circle", source: "welt-dots", filter: [">", ["get", "n"], 0], layout: vis(false),
+        paint: {
+          "circle-radius": ["+", 3, ["*", 2.2, ["sqrt", ["get", "n"]]]], "circle-color": WELT.dot, "circle-opacity": 0.92,
+          "circle-stroke-color": COLORS.water, "circle-stroke-width": 1.5,
+        },
+      },
+      ...(withText ? [{
+        id: "welt-count", type: "symbol", source: "welt-dots", filter: [">", ["get", "n"], 2], layout: {
+          ...vis(false), "text-field": ["to-string", ["get", "n"]], "text-font": FONT, "text-size": 9.5, "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#0b0d24" },
+      }] : []),
+      {
+        id: "welt-sel-line", type: "line", source: "welt-sel", filter: ["==", ["geometry-type"], "LineString"], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": WELT.sel, "line-width": 2.4, "line-opacity": 0.95 },
+      },
+      {
+        id: "welt-sel-pt", type: "circle", source: "welt-sel", filter: ["==", ["geometry-type"], "Point"], layout: vis(false),
+        paint: {
+          "circle-radius": ["match", ["get", "kind"], "origin", 7, 6], "circle-color": ["match", ["get", "kind"], "origin", "#060607", WELT.sel],
+          "circle-stroke-color": WELT.sel, "circle-stroke-width": 2,
+        },
+      },
+      ...(withText ? [{
+        id: "welt-sel-label", type: "symbol", source: "welt-sel", filter: ["has", "label"],
+        layout: { ...vis(false), "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1.4], "text-allow-overlap": true },
+        paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.5 },
+      }] : []),
     ];
     if (!base) {
       return {
@@ -326,7 +399,7 @@ export class Emberwatch {
   _bind() {
     const m = this.map;
     let hovered = null;
-    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "tool-points", "landing"];
+    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "tool-points", "landing", "welt-dots", "welt-origins"];
     m.on("mousemove", "choro", (e) => {
       const f = e.features?.[0];
       if (!f) return;
@@ -334,6 +407,11 @@ export class Emberwatch {
       hovered = f.id;
       m.setFeatureState({ source: "countries", id: hovered }, { hover: true });
       if (m.queryRenderedFeatures(e.point, { layers: pointLayers.filter((l) => m.getLayer(l)) }).length) return;
+      if (this.mode === "welt") {
+        this._tipShow(e, countryName(f.id) || f.properties.name, this._weltTip(f.id));
+        m.getCanvas().style.cursor = "pointer";
+        return;
+      }
       const v = this.countries[f.id]?.[this.metric];
       const meta = METRICS[this.metric];
       this._tipShow(e, countryName(f.id) || f.properties.name, meta ? `${meta.label}: ${v === undefined ? t("map.no_data") : meta.fmt(v)}` : null);
@@ -385,6 +463,16 @@ export class Emberwatch {
       this._tipShow(e, p.name, [p.rfs ? `RFS ${p.rfs}` : null, p.length, p.owners].filter(Boolean).join(", ").slice(0, 160));
     });
     m.on("mouseleave", "cables", () => this._tipHide());
+    for (const id of ["welt-dots", "welt-origins"]) {
+      m.on("click", id, (e) => { const cc = e.features[0].properties.cc; if (cc) this.onCountry(cc); });
+      m.on("mousemove", id, (e) => this._tipShow(e, countryName(e.features[0].properties.cc), this._weltTip(e.features[0].properties.cc)));
+      m.on("mouseleave", id, () => this._tipHide());
+    }
+    m.on("mousemove", "welt-pairs", (e) => {
+      const p = e.features[0].properties;
+      this._tipShow(e, `${countryName(p.o)} → ${countryName(p.t)}`, t("wl.map.pair_tip", { n: num(p.n) }));
+    });
+    m.on("mouseleave", "welt-pairs", () => this._tipHide());
     m.on("click", "tool-points", (e) => {
       const p = e.features[0].properties;
       if (p.ip) this.onIp?.(p.ip);
@@ -503,7 +591,7 @@ export class Emberwatch {
     let last = -1e9;
     const frame = (ts) => {
       if (this.paused) return;
-      if (!this.arcsVisible) { src.setData(EMPTY); return; }
+      if (!this.arcsVisible || this.mode !== "cyber") { src.setData(EMPTY); return; }
       if (ts - last >= 33 || reduceMotion) { // about 30 fps
         last = ts;
         const phase = (ts / 4200) % 1;
@@ -556,13 +644,95 @@ export class Emberwatch {
     this.map.getSource("infra").setData({ type: "FeatureCollection", features: feats });
   }
 
-  setVisible(layer, on) {
-    const ids = {
-      arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"],
-      infra: ["infra"], cables: ["cables", "cables-hl", "landing"],
-    }[layer];
+  _layers(ids, on) {
     for (const id of ids) if (this.map.getLayer(id)) this.map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  }
+
+  /** Layer switch of the Cyberlage (arcs, c2, ransom, infra, cables). Applies when the Cyberlage is shown. */
+  setVisible(layer, on) {
+    this.vis[layer] = on;
+    if (this.mode === "cyber") this._layers(CYBER_LAYERS[layer], on);
     if (layer === "arcs") { this.arcsVisible = on; this.animate(); }
+  }
+
+  /** Layer switch of the Weltlage (pairs, dots). */
+  setWeltVisible(layer, on) {
+    this.wvis[layer] = on;
+    if (this.mode === "welt") this._layers(WELT_LAYERS[layer], on);
+  }
+
+  /** Cyberlage (red) or Weltlage (indigo): swaps the data layers and recolours borders and country labels. */
+  setMode(mode) {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    const welt = mode === "welt";
+    const m = this.map;
+    for (const [id, prop, cyber, w] of this.cyberPaint) m.setPaintProperty(id, prop, welt ? w : cyber);
+    m.setPaintProperty("choro", "fill-opacity", welt ? 0 : CHORO_OPACITY); // stays for hover and clicks
+    for (const [k, ids] of Object.entries(CYBER_LAYERS)) this._layers(ids, !welt && this.vis[k]);
+    for (const [k, ids] of Object.entries(WELT_LAYERS)) this._layers(ids, welt && this.wvis[k]);
+    if (this._popup) this._popup.remove();
+    this._tipHide();
+    this.animate();
+  }
+
+  _weltTip(cc) {
+    const n = this.welt.mentioned[cc] || 0, o = this.welt.origins[cc] || 0;
+    if (!n && !o) return t("wl.map.none");
+    return [n ? t("wl.map.named", { n: num(n) }) : null, o ? t("wl.map.origin_n", { n: num(o) }) : null].filter(Boolean).join(" · ");
+  }
+
+  /** Weltlage data: pairs [{origin, target, n}], mentioned {cc: n}, origins {cc: n}. */
+  setWelt({ pairs = [], mentioned = {}, origins = {} }) {
+    this.welt = { mentioned, origins };
+    const valid = pairs.filter((r) => geo.centroids[r.origin] && geo.centroids[r.target] && r.origin !== r.target);
+    const maxN = valid.reduce((a, r) => Math.max(a, r.n), 0) || 1;
+    const path = this.projection === "globe" ? greatCircle : bezierArc;
+    this.map.getSource("welt-pairs").setData({
+      type: "FeatureCollection",
+      features: valid.map((r) => {
+        const o = geo.centroids[r.origin], tg = geo.centroids[r.target];
+        return { type: "Feature", geometry: { type: "LineString", coordinates: path([o.lon, o.lat], [tg.lon, tg.lat]) },
+          properties: { o: r.origin, t: r.target, n: r.n, w: r.n / maxN } };
+      }),
+    });
+    const ccs = new Set([...Object.keys(mentioned), ...Object.keys(origins)]);
+    const feats = [];
+    for (const cc of ccs) {
+      const c = geo.centroids[cc];
+      if (c) feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { cc, n: mentioned[cc] || 0, o: origins[cc] || 0 } });
+    }
+    this.map.getSource("welt-dots").setData({ type: "FeatureCollection", features: feats });
+    this._weltPairs = pairs;
+  }
+
+  /** One report on the map: origin (ring, label) to the named countries. Returns the number of countries shown. */
+  showWeltItem(it, { fit = true } = {}) {
+    const feats = [];
+    const pts = [];
+    const o = it?.origin && geo.centroids[it.origin];
+    const path = this.projection === "globe" ? greatCircle : bezierArc;
+    if (o) {
+      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [o.lon, o.lat] }, properties: { kind: "origin", label: t("wl.map.attributed", { cc: it.origin }) } });
+      pts.push([o.lon, o.lat]);
+    }
+    for (const cc of (it?.countries || []).slice(0, 6)) {
+      const c = geo.centroids[cc];
+      if (!c || cc === it.origin) continue;
+      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { kind: "target", label: t("wl.map.target", { name: countryName(cc) }) } });
+      if (o) feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: path([o.lon, o.lat], [c.lon, c.lat]) }, properties: {} });
+      pts.push([c.lon, c.lat]);
+    }
+    this.map.getSource("welt-sel").setData({ type: "FeatureCollection", features: feats });
+    this.map.setPaintProperty("welt-pairs", "line-opacity", 0.18); // the selected report stands out
+    if (fit && pts.length > 1) this.fitTo(pts, 4);
+    else if (fit && pts.length === 1) this.flyTo(pts[0][0], pts[0][1], 3);
+    return pts.length;
+  }
+
+  clearWeltItem() {
+    this.map.getSource("welt-sel")?.setData(EMPTY);
+    this.map.setPaintProperty("welt-pairs", "line-opacity", PAIR_OPACITY);
   }
 
   select(cc) {
@@ -577,17 +747,23 @@ export class Emberwatch {
 
   // Visible map area without docked panels (for centring and fitBounds)
   viewPadding() {
-    const b = document.body.classList;
     const small = window.innerWidth <= 900;
     const tools = document.getElementById("panel-tools");
     const toolsH = tools && !tools.hidden && !tools.classList.contains("floating") ? tools.getBoundingClientRect().height + 10 : 0;
-    const docked = (id) => !document.getElementById(id)?.classList.contains("floating");
-    const left = document.getElementById("panel-left"), right = document.getElementById("panel-right");
+    const top = document.getElementById("modebar")?.getBoundingClientRect().bottom || 100;
+    // the right edge: the open report (Weltlage) or the docked side panel
+    const drawer = document.getElementById("news-drawer");
+    const side = document.getElementById("side");
+    const panel = drawer && !drawer.hidden ? drawer : side && !side.classList.contains("collapsed") && !side.classList.contains("floating") ? side : null;
+    const shown = (n) => Boolean(n) && n.getClientRects().length > 0; // fixed elements have no offsetParent
+    const visible = shown(panel);
+    const dock = document.getElementById("kpidock");
+    const dockH = shown(dock) ? dock.getBoundingClientRect().height : 0;
     return {
-      top: (small ? 100 : 60) + 10,
-      bottom: Math.max(68, toolsH + 68),
-      left: small || b.contains("left-collapsed") || !docked("panel-left") ? 20 : Math.round(left.getBoundingClientRect().right + 20),
-      right: small || b.contains("right-collapsed") || !docked("panel-right") ? 20 : Math.round(window.innerWidth - right.getBoundingClientRect().left + 20),
+      top: Math.round(top + 10),
+      bottom: Math.max(40, toolsH + 40, small ? 40 : dockH + 24),
+      left: 20,
+      right: small || !visible ? 20 : Math.round(window.innerWidth - panel.getBoundingClientRect().left + 20),
     };
   }
 
@@ -611,6 +787,7 @@ export class Emberwatch {
     if (this.projection === "globe") this.map.easeTo({ center: [15, 28], zoom: 1.8, ...opts });
     else this.map.fitBounds([[-168, -52], [178, 76]], { padding: 20, ...opts });
     this.setArcs(this.arcRows);
+    if (this._weltPairs) this.setWelt({ pairs: this._weltPairs, ...this.welt });
     this.onProjection?.();
     return this.projection;
   }

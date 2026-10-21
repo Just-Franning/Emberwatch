@@ -6,7 +6,7 @@ import { go, routes } from "./router.js";
 import { el, kids } from "./util.js";
 
 const NAV = [
-  ["lage", "pal.nav.lage"], ["analyse", "pal.nav.analyse"], [routes.tools(), "pal.nav.tools"], ["analyse/history", "pal.nav.history"],
+  ["lage", "pal.nav.lage"], ["welt", "pal.nav.welt"], ["analyse", "pal.nav.analyse"], [routes.tools(), "pal.nav.tools"], ["analyse/history", "pal.nav.history"],
   [routes.view("kev"), "an.view.kev"], [routes.view("infra"), "an.view.infra"], [routes.view("c2"), "an.view.c2"], [routes.view("ransom"), "an.view.ransom"],
   ["netz", "pal.nav.netz"], ["netz/assets", "nz.nav.assets"], ["netz/products", "nz.nav.products"], ["netz/alerts", "nz.nav.alerts"],
   ["netz/logs", "nz.nav.logs"], ["netz/myip", "nz.nav.myip"],
@@ -98,7 +98,7 @@ export class Palette {
       }
     }
     if (det?.type === "text") {
-      for (const ty of ["malware", "group", "vendor"]) dyn.push({ label: `${t(`obj.type.${ty}`)}: ${q.slice(0, 80)}`, kind: t("pal.k.object"), run: () => go(routes.obj(ty, q.slice(0, 200))) });
+      for (const ty of ["actor", "malware", "group", "vendor"]) dyn.push({ label: `${t(`obj.type.${ty}`)}: ${q.slice(0, 80)}`, kind: t("pal.k.object"), run: () => go(routes.obj(ty, q.slice(0, 200))) });
     }
     this.items = [...dyn, ...nav];
     this.idx = 0;

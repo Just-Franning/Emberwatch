@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.2.0 – 2026-10-21
+
+The map has two views now: the **Cyberlage** (attack data, red) and the new **Weltlage** (security reports in their geopolitical context, indigo). The map view is tidier: one side panel, layer chips above the map, four key figures below it.
+
+### Added
+- Weltlage: reports of government CERTs and specialist media (NCSC UK, BSI, The Record, BleepingComputer, SecurityWeek, Krebs on Security, Golem.de; more via `NEWS_FEEDS`) with headline, teaser, preview image and a link to the original; reports on the same event are grouped
+- Automatic recognition from headline and teaser: countries and the named origin, threat actors (MISP Galaxy, loaded weekly), malware known from the C2 data, CVEs, kind of incident; attributions are labelled as statements of the sources
+- Weltlage map with country pairs and named countries; filters for corroborated events, law enforcement & sanctions, sources, focus country or home region, period; tabs for reports, actors, country pairs and a Gemini briefing with the status of every source
+- "Report in context": classification, the same event in other sources, KEV/EPSS of its CVEs, active C2 servers of its malware, Cloudflare data for the country pair, what concerns your products, CVEs and domains; Gemini assessment of a report with follow-up questions
+- Alerts for reports that name your domains (high) or watched products and their CVEs (medium); a plain product word ("Firewall") only counts together with its vendor, a vendor watched without a product is shown on the report but not alerted
+- Threat actor object pages (aliases, attributed country, sponsor, confidence, targets, references, reports); search and palette find actors and reports
+- "Today" in the Cyberlage: own alerts of the last 48 hours, detected patterns and widely reported events
+- Settings `NEWS_ENABLED`, `NEWS_INTERVAL_MIN`, `NEWS_IMAGES`, `NEWS_DISABLE`, `NEWS_FEEDS`, `NEWS_RETENTION_DAYS`
+
+### Changed
+- Four areas: Cyberlage, Weltlage, Analyse, Mein Netz (shortcuts `1`–`4`); the selected country and the period carry over between the two map views
+- One side panel with tabs (Today, Rankings, Patterns, Gemini) instead of two; `]` toggles it, `[` is gone
+- Layer switches as chips above the map; shading, timeline, map tool bar and globe in the same bar; timeline and tool bar open on demand
+- Four key figures below the map (your country as attack target, active C2, ransomware in your region, new KEV that concern you) with the map legend above them
+- Gemini system prompt: attributions in reports are statements of the sources; Cloudflare origins are still never attributed to states
+
+### Security
+- Feeds are parsed with defusedxml (no entity expansion, no external references), size-limited, with conditional requests; redirects must stay on HTTPS and public addresses
+- Preview images are only fetched from the source's own domain and public addresses; the browser loads them without a referrer; `NEWS_IMAGES=0` removes `https:` from the image policy
+- HTML from feeds and article pages is searched with bounded patterns (no quadratic run time on hostile input)
+
 ## 3.1.1 – 2026-10-21
 
 ### Fixed

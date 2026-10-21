@@ -1,0 +1,53 @@
+"""Texts of the Weltlage (news, actors) for alerts, status, errors and the actor pages. Merged into i18n.T."""
+from __future__ import annotations
+
+WT: dict[str, dict[str, str]] = {
+    "de": {
+        "alert.news.product.title": "In den Nachrichten: {match}",
+        "alert.news.product.detail": "{source}: {title}",
+        "alert.news.cve.title": "In den Nachrichten: {match} (überwachtes Produkt betroffen)",
+        "alert.news.cve.detail": "{source}: {title}",
+        "alert.news.domain.title": "Deine Domain {match} wird in einer Meldung genannt",
+        "alert.news.domain.detail": "{source}: {title}",
+        "status.news_partial": "nicht erreichbar: {failed}",
+        "err.news.not_found": "Meldung nicht gefunden.",
+        "err.news.disabled": "Die Weltlage ist ausgeschaltet (NEWS_ENABLED=0).",
+        "ob.k.actor": "Akteur", "ob.k.synonyms": "Weitere Namen", "ob.k.origin_country": "Zugeordnetes Land",
+        "ob.k.sponsor": "Vermuteter Auftraggeber", "ob.k.incident": "Art", "ob.k.confidence": "Konfidenz der Zuordnung",
+        "ob.k.target_cats": "Zielkategorien", "ob.k.sectors": "Branchen", "ob.k.victims": "Vermutete Opfer",
+        "ob.sec.actor_news": "Meldungen (90 Tage)", "ob.sec.actor_about": "Beschreibung (MISP Galaxy)",
+        "ob.sec.actor_refs": "Quellen", "ob.sec.actor_targets": "Genannte Länder in Meldungen",
+        "ob.n.actor": "Zuordnung, Decknamen und Ziele aus der MISP Galaxy (Community-Sammlung). Zuordnungen sind Einschätzungen der "
+                      "jeweiligen Quellen, keine Fakten.",
+        "ob.n.actor_news": "Automatisch erkannt: Meldungen, in denen der Akteur oder einer seiner Namen vorkommt.",
+        "ob.f.actor_news": "{n} {n|Meldung|Meldungen} in den letzten 30 Tagen",
+        "ob.f.actor_home": "In Meldungen zusammen mit {countries} genannt (Heimatregion)",
+        "ob.v.pct": "{v} %",
+        "ob.c.title": "Überschrift", "ob.c.reports": "Meldungen", "ob.v.none": "keine",
+        "err.obj.actor": "Akteur nicht gefunden.",
+    },
+    "en": {
+        "alert.news.product.title": "In the news: {match}",
+        "alert.news.product.detail": "{source}: {title}",
+        "alert.news.cve.title": "In the news: {match} (a watched product is affected)",
+        "alert.news.cve.detail": "{source}: {title}",
+        "alert.news.domain.title": "Your domain {match} is named in a report",
+        "alert.news.domain.detail": "{source}: {title}",
+        "status.news_partial": "not reachable: {failed}",
+        "err.news.not_found": "Report not found.",
+        "err.news.disabled": "The world view is switched off (NEWS_ENABLED=0).",
+        "ob.k.actor": "Actor", "ob.k.synonyms": "Other names", "ob.k.origin_country": "Attributed country",
+        "ob.k.sponsor": "Suspected sponsor", "ob.k.incident": "Type", "ob.k.confidence": "Attribution confidence",
+        "ob.k.target_cats": "Target categories", "ob.k.sectors": "Sectors", "ob.k.victims": "Suspected victims",
+        "ob.sec.actor_news": "Reports (90 days)", "ob.sec.actor_about": "Description (MISP Galaxy)",
+        "ob.sec.actor_refs": "References", "ob.sec.actor_targets": "Countries named in reports",
+        "ob.n.actor": "Attribution, aliases and targets from the MISP Galaxy (community collection). Attributions are assessments "
+                      "of the respective sources, not facts.",
+        "ob.n.actor_news": "Recognised automatically: reports in which the actor or one of its names appears.",
+        "ob.f.actor_news": "{n} {n|report|reports} in the last 30 days",
+        "ob.f.actor_home": "Named in reports together with {countries} (home region)",
+        "ob.v.pct": "{v} %",
+        "ob.c.title": "Headline", "ob.c.reports": "Reports", "ob.v.none": "none",
+        "err.obj.actor": "Actor not found.",
+    },
+}

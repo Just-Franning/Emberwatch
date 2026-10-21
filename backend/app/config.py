@@ -203,6 +203,14 @@ class Settings:
     globalping_token: str = ""
     cyberchef_url: str = "https://gchq.github.io/CyberChef/"
 
+    # Weltlage: IT security news from curated feeds
+    news_enabled: bool = True
+    news_interval: int = 30
+    news_images: bool = True
+    news_feeds: str = ""
+    news_disable: str = ""
+    news_retention_days: int = 90
+
     @property
     def matrix_enabled(self) -> bool:
         return bool(self.matrix_homeserver and self.matrix_token and self.matrix_room)
@@ -299,4 +307,10 @@ def load() -> Settings:
         greynoise_api_key=_str("GREYNOISE_API_KEY"),
         globalping_token=_str("GLOBALPING_TOKEN"),
         cyberchef_url=_cyberchef(_str("CYBERCHEF_URL", "https://gchq.github.io/CyberChef/")),
+        news_enabled=_bool("NEWS_ENABLED", True),
+        news_interval=_int("NEWS_INTERVAL_MIN", 30, 15),
+        news_images=_bool("NEWS_IMAGES", True),
+        news_feeds=_str("NEWS_FEEDS"),
+        news_disable=_str("NEWS_DISABLE"),
+        news_retention_days=_int("NEWS_RETENTION_DAYS", 90, 7, 365),
     )

@@ -1,27 +1,35 @@
 # Emberwatch
 
-Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware, exploited vulnerabilities and internet infrastructure from public sources, plus monitoring of your own assets, products and logs.
+Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware, exploited vulnerabilities and internet infrastructure from public sources, security reports of authorities and specialist media in their geopolitical context, plus monitoring of your own assets, products and logs.
 
 **English** · [Deutsch](README.de.md)
 
-![Emberwatch main view](docs/screenshot.webp)
+![Emberwatch: cyber view](docs/screenshot.webp)
 
 *Screenshots use synthetic demo data.*
 
 ## Features
 
-Emberwatch has three areas: **Situation** (the world map), **Analysis** (objects and tools) and **My network** (your own IPs, assets, products and logs). `Ctrl+K` opens a command palette for everything.
+Emberwatch has four areas: **Cyber** (the world map with attack data, red), **World** (security reports on the same map, indigo), **Analysis** (objects and tools) and **My network** (your own IPs, assets, products and logs). `Ctrl+K` opens a command palette for everything. The selected country and the period carry over between the two map views.
 
-**Situation – global threat picture**
-- World map with L7 attack flows (origin → target), country shading by attack share, reported C2 servers, ransomware victims per country, internet outages, BGP hijacks/route leaks, traffic anomalies and submarine cables
+**Cyber – global threat picture**
+- World map with L7 attack flows (origin → target), country shading by attack share, reported C2 servers, ransomware victims per country, internet outages, BGP hijacks/route leaks, traffic anomalies and submarine cables; layers are switched with the chips above the map
+- *Today*: the few things that matter now – your alerts of the last 48 hours, detected patterns and events many sources report; four key figures below the map (your country as attack target, active C2, ransomware in your region, new KEV that concern you)
 - Rankings: target and origin countries (24 h vs. 7 days), DDoS vectors, L7 attack categories, C2 families and hosting networks, ransomware groups and sectors, newly exploited vulnerabilities (CISA KEV with FIRST EPSS)
 - Rule-based pattern detection (rising countries and vectors, spikes, new C2 families, KEV clusters, critical outages, correlations) – deterministic and explained, no black box
-- Timeline with daily history (up to 90 days), compact country card with a link to the full country analysis
-- Map tool bar: ping, traceroute and IP info with live display on the map; under *More*: path quality (traceroute with several probes per hop), Globalping (measurements from probes worldwide) and mail hops (the delivery path of a mail header on the map)
+- Timeline with daily history (up to 90 days) on demand, compact country card with a link to the full country analysis
+- Map tool bar on demand: ping, traceroute and IP info with live display on the map; under *More*: path quality (traceroute with several probes per hop), Globalping (measurements from probes worldwide) and mail hops (the delivery path of a mail header on the map)
 - Optional Gemini reports (global, country, home region, free questions with follow-ups), exportable as Markdown or PDF. The model only receives aggregated figures.
 
+**World – security reports in context**
+- Reports of government CERTs and specialist media (RSS/Atom), with headline, teaser, preview image and a link to the original; reports on the same event are grouped
+- Recognised automatically from headline and teaser: countries, the named origin, threat actors (MISP Galaxy), malware, CVEs and the kind of incident (ransomware, DDoS, espionage, sabotage, breach, law enforcement, sanctions, …). Attributions are shown as statements of the sources, labelled as recognised automatically
+- Map: country pairs (origin → target according to the reports) and the countries named; filters for corroborated events (an authority or at least two sources), law enforcement & sanctions, sources, focus country or home region, period
+- *Report in context*: classification, the same event in other sources, what the local data say about it (KEV/EPSS of the CVEs, active C2 servers of the malware, Cloudflare data for the country pair) and whether it concerns your products, CVEs or domains – such reports also raise alerts
+- Actors with their aliases, attributed country and sponsor, confidence, references and the reports naming them; optional Gemini briefing of the period and Gemini assessment of a single report
+
 **Analysis – objects and tools**
-- Object pages for IPs, networks, AS numbers, domains, URLs, file hashes, CVEs, countries, malware families, ransomware groups and vendors: risk assessment with reasons, everything the local data knows, the relation to your own assets, related objects, your alerts about it, earlier tool runs and an optional Gemini assessment
+- Object pages for IPs, networks, AS numbers, domains, URLs, file hashes, CVEs, countries, malware families, ransomware groups, threat actors and vendors: risk assessment with reasons, everything the local data knows, the relation to your own assets, related objects, your alerts about it, earlier tool runs and an optional Gemini assessment
 - Tool box: paste any input (IP, network, AS, domain, URL, e-mail address, hash, CVE or a mail header); Emberwatch detects the type and shows which tools fit, grouped by question:
   - *Reachability:* ping, traceroute, path quality, Globalping
   - *Ownership:* IP info, RDAP/whois, BGP/RPKI (RIPEstat), passive DNS (mnemonic), certificates (Certificate Transparency)
@@ -41,7 +49,9 @@ Emberwatch has three areas: **Situation** (the world map), **Analysis** (objects
 - Log analysis (upload, also .gz) and optional syslog receiver
 - One alert feed with optional Matrix notifications and a daily report
 
-**Interface:** German and English, movable and resizable windows on the map, keyboard shortcuts, start animation, optional login.
+**Interface:** German and English, one side panel on the map (movable and resizable), keyboard shortcuts, start animation, optional login.
+
+![World view: a report in its context](docs/weltlage.webp)
 
 ![Object page of a country](docs/object.webp)
 
@@ -94,8 +104,8 @@ The image `ghcr.io/saturdaynetlab/emberwatch` is built for `linux/amd64` and `li
 | Tag | Content |
 |---|---|
 | `latest` | newest release |
-| `3`, `3.1` | newest release within this major / minor version |
-| `3.1.0` | exactly this release |
+| `3`, `3.2` | newest release within this major / minor version |
+| `3.2.0` | exactly this release |
 | `edge` | current `main` branch, changes between releases |
 | `feature-<name>` | test build of a feature branch before it is merged (unstable) |
 | `sha-<commit>` | a single build |
@@ -123,9 +133,10 @@ New releases are listed on the [releases page](https://github.com/SaturdayNetLab
 4. **Set up My IP.** *My network → My IP*: take over the address you are connected from, enter a DynDNS host name, or create a token for a reporter (see [My IP](#my-ip)).
 5. **Watch products.** Search for a vendor, e.g. `Sophos`, and choose *Watch as product*, or add it under *My network → Products*.
 6. **Analyse.** Enter an IP, domain, hash, CVE or a mail header under *Analysis*, or press `Ctrl+K` anywhere.
-7. **Notifications (optional).** Configure Matrix to receive alerts and the daily report.
+7. **Read the world view.** *World* fills within half an hour after the start. Click a country to focus on it, or a report to see it in context.
+8. **Notifications (optional).** Configure Matrix to receive alerts and the daily report.
 
-Keyboard shortcuts: `Ctrl+K` command palette, `1` `2` `3` switch areas, `/` search, `T` map tool bar (in the situation view: tool box elsewhere), `[` and `]` toggle the side panels, `Esc` close. Windows on the map can be moved by their title bar, resized at the bottom right corner and docked again with a double-click on the title bar. Language, window opacity and the start animation are under *Settings* (⚙).
+Keyboard shortcuts: `Ctrl+K` command palette, `1` `2` `3` `4` switch areas, `/` search, `T` map tool bar (in the cyber view; tool box elsewhere), `]` toggles the side panel, `Esc` close (also the report in the world view). The side panel can be moved by its title bar, resized at the bottom right corner and docked again with a double-click on the title bar. Language, window opacity and the start animation are under *Settings* (⚙).
 
 ### My IP
 
@@ -164,7 +175,13 @@ All settings are environment variables; [`.env.example`](.env.example) lists eve
 | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_ROOM_ID` | – | Optional Matrix notifications (bot account in an unencrypted room) |
 | `MATRIX_MIN_SEVERITY` | `high` | Minimum severity for notifications |
 | `DAILY_REPORT_TIME` | `07:00` | Daily report (local time, `TZ`), empty = off |
-| `HOME_REGION`, `HOME_REGION_NAME` | – | Optional home region, e.g. `DE,AT,CH` / `DACH`, adds a region analysis |
+| `HOME_REGION`, `HOME_REGION_NAME` | – | Optional home region, e.g. `DE,AT,CH` / `DACH`, adds a region analysis and the region focus of the world view |
+| `NEWS_ENABLED` | `1` | `0` switches the world view off (no feeds, no actor list) |
+| `NEWS_INTERVAL_MIN` | `30` | Minutes between feed checks (min. 15; conditional requests) |
+| `NEWS_IMAGES` | `1` | Preview images of reports; the browser loads them from the publisher (`0` = no images, no `https:` in the image policy) |
+| `NEWS_DISABLE` | – | Switch off built-in sources, e.g. `golem,krebs` |
+| `NEWS_FEEDS` | – | More feeds: `id\|Name\|https://feed-url[\|gov\|lang]`, several separated by `;` (`gov` = authority) |
+| `NEWS_RETENTION_DAYS` | `90` | Days reports are kept (7–365) |
 | `TOOLS_ENABLED` | `1` | `0` switches the network tools and the tool box off |
 | `TOOLS_ALLOW_PRIVATE` | `0` | `1` = tools and active scans may target private addresses |
 | `SCAN_ENABLED` | `1` | `0` disables active scans completely |
@@ -197,10 +214,11 @@ Where to get the keys:
 - Every tool shows whether it is passive, active or intrusive, whether the target sees the request and which third party receives the input. The zone transfer test needs a confirmation per run. Links from outside (bookmarks, other sites) open the tool box but never start a run by themselves.
 - **Active scans:** only scan systems you own or are authorised to test. Emberwatch scans an asset only after explicit confirmation and limits hosts, ports and parallelism. Scanning third-party systems can be illegal.
 - Uploaded logs are processed in a temporary file and deleted immediately; only the result goes back to the browser. Syslog lines are only kept as alerts for known indicators.
-- Gemini situation reports only receive aggregated figures and detected patterns: no victim names, no raw IOCs, no assets, no log contents. The Gemini assessment of an object (only on request) sends the object and the data of its page; your own assets, IPs and products are reduced to a flag and leak site victim names are left out.
+- Gemini situation reports only receive aggregated figures and detected patterns: no victim names, no raw IOCs, no assets, no log contents. The Gemini assessment of an object (only on request) sends the object and the data of its page; your own assets, IPs and products are reduced to a flag and leak site victim names are left out. World view briefings and report assessments send headlines, teasers, sources and the recognised public entities; whether a report concerns you is sent as a flag only.
+- World view: feeds are read with entity expansion and external references disabled (defusedxml), at most 5 MB each, with conditional requests; redirects must stay on HTTPS and public addresses. Preview images are taken from the feed or from the article page, which is only fetched from the source's own domain and public addresses (at most 400 KB, three redirects, each checked). Headlines and teasers are shown as text; links and images are HTTPS only, images are loaded without a referrer.
 - *My IP* stores the addresses the interface is opened from (90 days), the history of your home and server IPs and the hash of the reporter token. Tool runs are stored for 90 days (at most 3,000) and can be deleted in the history; Gemini analyses are kept as long as alerts (`ALERT_RETENTION_DAYS`, at most 2,000).
 - Request bodies are limited: 20 MB with a session (mail analysis up to 15 MB), 64 KB without one (login, reporter).
-- Outbound connections: the data sources listed below, the basemap tiles (OpenFreeMap, loaded by the browser), DB-IP downloads, the targets you choose in the tools or scans, and the third parties of the tools you run (labelled in the interface). CyberChef opens in the browser; the input stays in the URL fragment and is not sent to a server.
+- Outbound connections: the data sources listed below, the basemap tiles (OpenFreeMap, loaded by the browser), preview images of reports (loaded by the browser from the publishers, `NEWS_IMAGES=0` turns this off), DB-IP downloads, the targets you choose in the tools or scans, and the third parties of the tools you run (labelled in the interface). CyberChef opens in the browser; the input stays in the URL fragment and is not sent to a server.
 - Backups: everything lives in the `/data` volume (`emberwatch.sqlite`, login files, geolocation databases).
 
 ## Architecture
@@ -209,6 +227,7 @@ Where to get the keys:
 Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ──  Emberwatch container
                                                                           FastAPI + uvicorn (1 worker)
                                                                           ├─ collectors (asyncio loops) ── public sources
+                                                                          ├─ world view: feeds, recognition, actors (MISP Galaxy)
                                                                           ├─ asset monitors: InternetDB, scans, CT, typo, RIS Live
                                                                           ├─ own IP tracking (visits, DynDNS, reporter)
                                                                           ├─ tool box (NDJSON streams) and object pages
@@ -217,10 +236,10 @@ Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ─�
                                                                           └─ SQLite (/data)
 ```
 
-- Backend: `backend/app` (one module per concern: `sources/` collectors, `analytics.py` patterns, `surface.py` attack surface and scans, `domains.py` CT and lookalikes, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` log analysis and syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` object pages, `myip.py` own IPs).
+- Backend: `backend/app` (one module per concern: `sources/` collectors, `analytics.py` patterns, `surface.py` attack surface and scans, `domains.py` CT and lookalikes, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` log analysis and syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` object pages, `myip.py` own IPs, `news.py` feeds and reports, `nlp.py` recognition, `actors.py` threat actors).
 - Tool box: `backend/app/toolbox` – `registry.py` describes every tool (inputs, level, flags, parameters) and is the single source for the interface and the server-side validation; `detect.py` input detection; `result.py` the unified result format; `tools_*.py` the tools by question; `runner.py` runs, recipes and history.
 - Texts the backend produces (patterns, alerts, errors) are stored language-neutral and rendered per request in German or English.
-- Frontend: `frontend/` without a build step; all dynamic content is inserted as text, never as HTML. `router.js` (areas), `maptools.js` (map tool bar), `analyse.js` (objects, tool box, views), `netz.js` and `assets.js` (my network), `result.js` (renders every tool result), `palette.js` (`Ctrl+K`).
+- Frontend: `frontend/` without a build step; all dynamic content is inserted as text, never as HTML. `router.js` (areas), `maptools.js` (map tool bar), `welt.js` (world view), `analyse.js` (objects, tool box, views), `netz.js` and `assets.js` (my network), `result.js` (renders every tool result), `palette.js` (`Ctrl+K`).
 
 ## Data sources and licences
 
@@ -243,6 +262,8 @@ Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ─�
 | [GreyNoise Community API](https://www.greynoise.io) | internet scanners and benign services (tool, on request) | GreyNoise terms |
 | [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch) | file hashes (tool, on request) | abuse.ch terms of use |
 | [rdap.org](https://rdap.org) | RDAP bootstrap (whois tool) | public |
+| [MISP Galaxy](https://github.com/MISP/misp-galaxy) (threat-actor cluster) | threat actors, aliases, attributions | CC0 1.0 / BSD 2-Clause |
+| World view feeds: [NCSC UK](https://www.ncsc.gov.uk), [BSI](https://www.bsi.bund.de), [The Record](https://therecord.media), [BleepingComputer](https://www.bleepingcomputer.com), [SecurityWeek](https://www.securityweek.com), [Krebs on Security](https://krebsonsecurity.com), [Golem.de](https://www.golem.de) | headlines, teasers and preview images of security reports, linked to the original | rights stay with the publishers; Emberwatch shows what the feeds publish and links to the article |
 | [CyberChef](https://github.com/gchq/CyberChef) (GCHQ) | decoding in the browser (link) | Apache 2.0 |
 | [DB-IP Lite](https://db-ip.com) | IP geolocation and ASN | CC BY 4.0 |
 | [TeleGeography](https://www.submarinecablemap.com) | submarine cables (snapshot 2021) | CC BY-NC-SA 3.0 |
@@ -254,6 +275,7 @@ Several sources only allow non-commercial use. Emberwatch is meant for private a
 ## Limitations
 
 - Cloudflare values are shares of the traffic Cloudflare sees, not absolute attack counts. Origin is where the attacking IPs are, not who is behind them.
+- World view: recognition works on headline and teaser and is rule-based; it can miss or misread countries, actors and kinds (e.g. a name that is also an ordinary word). An origin is an attribution by a source or the country the MISP Galaxy gives for the recognised actor, not proof. The number of reports shows coverage, which depends on the sources and their languages, not the scale of attacks. Preview images come from the publishers and may be missing.
 - Geolocation (DB-IP Lite) is approximate.
 - InternetDB is updated about weekly; a port opened today may only appear days later. Use the active scan for current results.
 - The product watch matches NVD descriptions by keyword; generic names can produce false positives.

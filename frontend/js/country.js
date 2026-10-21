@@ -10,7 +10,7 @@ export async function renderCountry(cc, { onClose, onAnalyze }) {
   box.hidden = false;
   box.querySelectorAll("canvas").forEach(destroy);
   kids(box, el("p", { class: "empty" }, t("country.loading", { name: countryName(cc) })));
-  document.getElementById("right-body").scrollTop = 0;
+  document.getElementById("side-body").scrollTop = 0;
   let d, tr;
   try {
     [d, tr] = await Promise.all([api(`api/country/${encodeURIComponent(cc)}`), api(`api/trends/${encodeURIComponent(cc)}?days=30`)]);

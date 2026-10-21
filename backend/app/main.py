@@ -27,7 +27,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import alerts, analytics, i18n, watchlist
+from . import alerts, analytics, i18n, nlp, watchlist
+from .actors import Actors
 from .ai import TASKS, Gemini, build_context
 from .auth import COOKIE, Auth
 from .bgp import BgpMonitor
@@ -40,6 +41,7 @@ from .i18n import AppError, t
 from .logs import Matcher, SyslogServer, analyze_file
 from .myip import KINDS as MYIP_KINDS
 from .myip import MyIP
+from .news import News
 from .notify import Notifier
 from .objects import TYPES as OBJ_TYPES
 from .objects import Objects, object_context
@@ -74,7 +76,9 @@ matcher = Matcher(db, reputation)
 syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
 auth = Auth(S)
 myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
-objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip)
+actors = Actors(db)
+news = News(S, db, actors, S.static_dir / "data" / "centroids.json")
+objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -319,6 +323,14 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
             if myip.needs_check(kind):
                 await myip.check(client, kind)
 
+    async def news_job() -> None:
+        try:
+            await actors.collect(client, S.user_agent)
+        except Exception:  # the reports do not depend on a fresh actor list
+            log.exception("actor list")
+        await asyncio.to_thread(news.refresh_mine)  # new actor list, products or domains: recognise again
+        await news.collect(client)
+
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
@@ -334,7 +346,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
         "kev": kev_job, "epss": epss_job, "products": products_job, "reputation": reputation_job, "surface": surface_job,
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
-        "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job,
+        "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job, "news": news_job,
     }
 
 
@@ -353,6 +365,8 @@ async def lifespan(app: FastAPI):
             ("alerts", 2, 120), ("patterns", 10, 300), ("daily", 1, 90), ("maintenance", 24 * 60, 900),
             ("myip", 10, 45),
         ]
+        if news.enabled:
+            plan.append(("news", S.news_interval, 30))
         tasks = [asyncio.create_task(_loop(name, minutes, jobs[name], delay)) for name, minutes, delay in plan]
         if S.bgp_live:
             tasks.append(asyncio.create_task(bgp.run(_ClientRef())))
@@ -403,13 +417,15 @@ class BodyLimit:
 app.add_middleware(BodyLimit)
 
 BASEMAP_HOST = "https://tiles.openfreemap.org"
+# NEWS_IMAGES: preview images of news are loaded by the browser from the publisher (https only)
 CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    f"img-src 'self' data: blob:{' https:' if S.news_images else ''}; "
     f"worker-src 'self'; connect-src 'self' {BASEMAP_HOST}; font-src 'self'; "
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/boot.js",
+                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
@@ -593,6 +609,7 @@ def api_status(request: Request) -> dict[str, Any]:
         "history": {"radar_days_final": final_days, "backfill_target": S.backfill_days,
                     "ransomware_backfill": db.meta_get("ransomware_backfill") == "done"},
         "cables": cables.meta,
+        "news": {"enabled": news.enabled, "images": S.news_images, "sources": len(news.sources), "actors": actors.count()},
         "keys": {
             "cloudflare": bool(S.cf_api_token), "abusech": bool(S.abusech_auth_key),
             "ransomware_live": bool(S.ransomware_live_api_key), "gemini": bool(S.gemini_api_key),
@@ -739,7 +756,7 @@ def api_search(request: Request, q: str = Query(..., min_length=2, max_length=10
     lang = _lang(request)
     q = q.strip()
     out: dict[str, Any] = {"query": q, "type": "text", "c2": [], "iocs": [], "kev": [], "victims": [], "infra": [],
-                           "countries": [], "vendors": [], "products": [], "assets": []}
+                           "countries": [], "vendors": [], "products": [], "assets": [], "actors": [], "news": []}
     c2_cols = "id, source, ioc, ip, malware, country, asn, as_name, first_seen, lat, lon, reference"
     ioc_cols = "ioc, ioc_type, ip, host, threat_type, malware, confidence, first_seen, reference"
     try:
@@ -775,6 +792,7 @@ def api_search(request: Request, q: str = Query(..., min_length=2, max_length=10
         out["kev"] = db.query(f"SELECT {KEV_COLS} WHERE k.cve = ?", (cve,))
         out["nvd"] = db.query("SELECT n.cve, n.published, n.cvss, n.severity, n.summary, e.epss FROM nvd_cve n "
                               "LEFT JOIN epss e ON e.cve = n.cve WHERE n.cve = ?", (cve,))
+        out["news"] = _search_news(cve=cve)
         return out
     like = _like(q)
     host = q.lower().rstrip(".")
@@ -798,7 +816,23 @@ def api_search(request: Request, q: str = Query(..., min_length=2, max_length=10
     ql = q.lower()
     out["countries"] = [{"cc": cc, "name": geo.country_name(cc, lang)} for cc, c in geo.centroids.items()
                         if ql == cc.lower() or ql in c["name"].lower() or ql in (c.get("name_en") or "").lower()][:10]
+    out["actors"] = actors.search(q)
+    out["news"] = _search_news(q=q)
     return out
+
+
+def _search_news(*, q: str | None = None, cve: str | None = None) -> list[dict[str, Any]]:
+    if not news.enabled:
+        return []
+    if cve:
+        rows = db.query("SELECT id, source, title, published FROM news WHERE cves LIKE ? ORDER BY published DESC LIMIT 10",
+                        (f'%"{cve}"%',))
+    elif q and len(q) >= 3:
+        rows = news._rows(90, q=q, limit=10)
+    else:
+        return []
+    return [{"id": r["id"], "title": r["title"], "published": r["published"],
+             "source": news.by_id[r["source"]].name if r["source"] in news.by_id else r["source"]} for r in rows]
 
 
 @app.get("/api/search/nvd")
@@ -955,6 +989,8 @@ async def api_watch_add(request: Request, body: WatchIn) -> dict[str, Any]:
     new = watchlist.scan(db)
     _invalidate()
     _asset_jobs(request, _entry(wid))
+    if kind == "domain":
+        kick("news_mine", _news_mine)
     return {"id": wid, "kind": kind, "value": value, "new_alerts": len(new)}
 
 
@@ -993,6 +1029,8 @@ async def api_watch_delete(wid: int) -> dict[str, Any]:
     db.transaction(stmts)
     _invalidate()
     bgp.replan()
+    if w["kind"] == "domain":
+        kick("news_mine", _news_mine)
     return {"deleted": wid}
 
 
@@ -1072,19 +1110,31 @@ def api_products() -> dict[str, Any]:
     return {"products": products.listing(), "min_cvss": S.product_min_cvss, "nvd_key": bool(S.nvd_api_key)}
 
 
+async def _news_mine() -> None:
+    """Marks reports that concern the user's products and domains again (Weltlage: "concerns you")."""
+    if news.enabled:
+        await asyncio.to_thread(news.refresh_mine)
+
+
 @app.post("/api/products")
 async def api_product_add(request: Request, body: ProductIn) -> dict[str, Any]:
     pid = products.add(body.vendor, body.product)
     client = request.app.state.client
-    kick(f"product:{pid}", lambda: products.check(client, only=pid))
+
+    async def check_then_news() -> None:
+        await products.check(client, only=pid)
+        await _news_mine()
+
+    kick(f"product:{pid}", check_then_news)
     return {"id": pid}
 
 
 @app.delete("/api/products/{pid}")
-def api_product_delete(pid: int) -> dict[str, Any]:
+async def api_product_delete(pid: int) -> dict[str, Any]:
     if not products.delete(pid):
         raise AppError("err.not_found", 404)
     db.execute("DELETE FROM alerts WHERE product_id=?", (pid,))
+    kick("news_mine", _news_mine)
     return {"deleted": pid}
 
 
@@ -1243,6 +1293,10 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
         if page.get("private"):
             raise AppError("err.tb.third_private", addr=page["value"], party="Gemini (Google)")
         ctx = obj_ai_context(page, lang)
+    elif scope.startswith("news:"):
+        ctx = news_ai_context(_news_item(_int_or_404(scope[5:])))
+    elif scope.startswith("welt:"):
+        ctx = welt_ai_context(_int_or_404(scope[5:]))
     else:
         cc = scope.split(":", 1)[1] if ":" in scope else None
         country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
@@ -1251,6 +1305,172 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     tid = db.insert("INSERT INTO ai_threads(report_id, created_at, question, payload) VALUES(?,?,?,?)",
                     (body.report_id, utcnow(), body.question.strip(), json.dumps(ans)))
     return {"id": tid, "question": body.question.strip(), **ans}
+
+
+# --- Weltlage (news) --------------------------------------------------------------------------------------------------
+WELT_DAYS = (1, 7, 30, 90)
+
+
+def _int_or_404(v: str) -> int:
+    if not v.isdigit() or len(v) > 12:
+        raise AppError("err.report_not_found", 404)
+    return int(v)
+
+
+def _welt_filters(tier: str | None, source: str | None, kind: str | None, country: str | None, origin: str | None,
+                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False) -> dict[str, Any]:
+    if not news.enabled:
+        raise AppError("err.news.disabled", 404)
+    kinds = [k for k in (kind or "").split(",") if k]
+    if any(k not in nlp.KINDS for k in kinds) or len(kinds) > 5:
+        raise AppError("err.bad_request")
+    if source and source not in news.by_id:
+        raise AppError("err.bad_request")
+    ccs = [_cc(c) for c in (country or "").split(",") if c.strip()][:12]  # a country or a region ("DE,AT,CH")
+    return {"tier": tier, "source": source, "kind": ",".join(kinds) or None, "country": ",".join(ccs) or None, "confirmed": confirmed,
+            "origin": _cc(origin) if origin else None, "target": _cc(target) if target else None,
+            "actor": (actor or "").strip() or None, "mine": mine, "q": (q or "").strip() or None}
+
+
+_welt_cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
+
+
+def welt_overview(days: int, flt: dict[str, Any]) -> dict[str, Any]:
+    """Overview of the reports (cached 60 s per filter set; new items arrive at most every 15 minutes)."""
+    key = (days, *sorted(flt.items()), db.meta_get("news_rev"))
+    hit = _welt_cache.get(key)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    data = news.overview(days, list(S.home_region), **dict(flt))
+    if len(_welt_cache) > 64:
+        _welt_cache.clear()
+    _welt_cache[key] = (time.time(), data)
+    return data
+
+
+@app.get("/api/welt")
+def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press)$"),
+             source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=80),
+             country: str | None = Query(None, max_length=40), origin: str | None = Query(None, max_length=2),
+             target: str | None = Query(None, max_length=2), actor: str | None = Query(None, max_length=120),
+             mine: bool = False, confirmed: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+    if days not in WELT_DAYS:
+        raise AppError("err.bad_request")
+    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed))
+
+
+@app.get("/api/news")
+def api_news(days: int = Query(7), offset: int = Query(0, ge=0, le=20000), limit: int = Query(40, ge=1, le=100),
+             tier: str | None = Query(None, pattern="^(gov|press)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
+             kind: str | None = Query(None, max_length=80), country: str | None = Query(None, max_length=40),
+             origin: str | None = Query(None, max_length=2), target: str | None = Query(None, max_length=2),
+             actor: str | None = Query(None, max_length=120), mine: bool = False, confirmed: bool = False,
+             q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+    if days not in WELT_DAYS:
+        raise AppError("err.bad_request")
+    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed)
+    return news.listing(days, offset, limit, **flt)
+
+
+def _news_item(item_id: int) -> dict[str, Any]:
+    if not news.enabled:
+        raise AppError("err.news.disabled", 404)
+    it = news.detail(item_id)
+    if it is None:
+        raise AppError("err.news.not_found", 404)
+    return it
+
+
+@app.get("/api/news/{item_id}")
+def api_news_item(item_id: int) -> dict[str, Any]:
+    return _news_item(item_id)
+
+
+def news_ai_context(it: dict[str, Any]) -> dict[str, Any]:
+    ctx = news.ai_item(it)
+    ctx["as_of_utc"] = utcnow()[:15] + "0:00Z"
+    return ctx
+
+
+def welt_ai_context(days: int) -> dict[str, Any]:
+    if days not in WELT_DAYS:
+        raise AppError("err.bad_request")
+    ctx = news.ai_overview(welt_overview(days, _welt_filters(None, None, None, None, None, None, None, False, None)))
+    ctx["as_of_utc"] = utcnow()[:15] + "0:00Z"
+    return ctx
+
+
+class NewsAiIn(BaseModel):
+    id: int = Field(..., ge=1)
+    question: str | None = Field(None, max_length=600)
+
+
+class WeltAiIn(BaseModel):
+    days: int = 7
+    question: str | None = Field(None, max_length=600)
+
+
+async def _ai_report(request: Request, task: str, ctx: dict[str, Any], scope_label: str, q: str, lang: str) -> dict[str, Any]:
+    result = await ai.analyze(request.app.state.client, task, ctx, lang)
+    if not result.get("cached"):
+        result["id"] = db.insert("INSERT INTO ai_reports(created_at, scope, model, payload) VALUES(?,?,?,?)",
+                                 (utcnow(), scope_label, result["model"], json.dumps({**result, "question": q or None})))
+    return {**result, "scope": scope_label, "question": q or None}
+
+
+@app.post("/api/ai/news")
+async def api_ai_news(request: Request, body: NewsAiIn) -> dict[str, Any]:
+    """Gemini assessment of one report in its context. Sends headline, teaser, sources and the recognised public
+    entities; own products and domains only as a flag."""
+    lang = _lang(request)
+    it = _news_item(body.id)
+    q = (body.question or "").strip()
+    task = TASKS[lang]["news_question"] + q if q else TASKS[lang]["news"]
+    return await _ai_report(request, task, news_ai_context(it), f"news:{it['id']}", q, lang)
+
+
+@app.post("/api/ai/welt")
+async def api_ai_welt(request: Request, body: WeltAiIn) -> dict[str, Any]:
+    lang = _lang(request)
+    ctx = welt_ai_context(body.days)
+    q = (body.question or "").strip()
+    task = TASKS[lang]["welt_question"] + q if q else TASKS[lang]["welt"]
+    return await _ai_report(request, task, ctx, f"welt:{body.days}", q, lang)
+
+
+# --- "today": the few things that matter most right now ----------------------------------------------------------
+SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+
+
+@app.get("/api/today")
+def api_today(request: Request, limit: int = Query(5, ge=1, le=12)) -> dict[str, Any]:
+    """Own alerts (48 h), detected patterns and big reports of the last 24 h, ranked by severity, then kind, then time."""
+    lang = _lang(request)
+    out: list[dict[str, Any]] = []
+    since = _cutoff(2)
+    for a in alerts.listing(db, lang, limit=40, min_severity="medium"):
+        if a["created_at"] < since:
+            break
+        out.append({"kind": "alert", "severity": a["severity"], "title": a["title"], "detail": a["detail"], "time": a["created_at"],
+                    "ref": {"alert": a["id"], "source": a["source"], "asset_id": a["asset_id"], "product_id": a["product_id"],
+                            "url": a["url"]}})
+    for p in localized(overview(), lang)["patterns"]:
+        if p["severity"] in ("high", "medium") and p["category"] != "alerts":  # the alerts themselves are listed above
+            out.append({"kind": "pattern", "severity": p["severity"], "title": p["title"], "detail": p["detail"], "time": None,
+                        "ref": {"country": p.get("country"), "category": p["category"]}})
+    if news.enabled:
+        home = set(S.home_region) or {"DE"}
+        for it in welt_overview(1, _welt_filters(None, None, None, None, None, None, None, False, None))["items"]:
+            # three independent sources, or an authority about the home region
+            big = len(it["sources"]) >= 3 or (it["source"]["tier"] == "gov" and bool(home & ({it["origin"]} | set(it["countries"]))))
+            if big:
+                out.append({"kind": "news", "severity": "info", "title": it["title"],
+                            "detail": " · ".join(it["sources"][:3]), "time": it["latest"],
+                            "ref": {"news": it["id"], "n": it["n"], "url": it["url"]}})
+    rank = {"alert": 0, "pattern": 1, "news": 2}
+    out.sort(key=lambda x: x["time"] or "", reverse=True)  # newest first; the sort below is stable
+    out.sort(key=lambda x: (SEV_ORDER[x["severity"]], rank[x["kind"]]))
+    return {"items": out[:limit], "total": len(out)}
 
 
 # --- tool box ------------------------------------------------------------------------------------------------------------

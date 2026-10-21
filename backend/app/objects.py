@@ -26,7 +26,7 @@ from .toolbox.common import cache_get
 from .toolbox.detect import detect
 from .toolbox.result import Result, cell, max_sev
 
-TYPES = ("ip", "cidr", "asn", "domain", "url", "hash", "cve", "country", "malware", "group", "vendor")
+TYPES = ("ip", "cidr", "asn", "domain", "url", "hash", "cve", "country", "malware", "group", "vendor", "actor")
 
 
 def _cutoff(days: int) -> str:
@@ -78,7 +78,7 @@ def normalize(otype: str, value: str) -> str:
 
 class Objects:
     def __init__(self, s: Settings, db: DB, geo: Geo, rep: Any, matcher: Any, products: Any, domains: Any, surface: Any,
-                 myip: Any = None) -> None:
+                 myip: Any = None, actors: Any = None, news: Any = None) -> None:
         self.s = s
         self.db = db
         self.geo = geo
@@ -88,6 +88,8 @@ class Objects:
         self.domains = domains
         self.surface = surface
         self.myip = myip
+        self.actors = actors
+        self.news = news
 
     # --- shared ------------------------------------------------------------------------------------------------
     def _alerts_with(self, needle: str, lang: str, kind: str = "other", limit: int = 30) -> list[dict[str, Any]]:
@@ -606,6 +608,64 @@ class Objects:
                 if c:
                     r.point({"lat": c[0], "lon": c[1]}, "ransom", self.geo.country_name(k, lang))
         return self._page(r, "group", grp, grp, None, {"assets": [], "myip": None}, [])
+
+    # --- threat actor (MISP Galaxy) ---------------------------------------------------------------------------------------------------
+    def _actor(self, name: str, lang: str) -> dict[str, Any]:
+        a = self.actors.get(name) if self.actors else None
+        if not a:
+            raise AppError("err.obj.actor", 404)
+        name = a["name"]
+        r = Result("obj", lang, name, ("actor", name))
+        cname = self.geo.country_name(a["country"], lang) if a["country"] else None
+        r.kv(r.t("ob.sec.facts"), [
+            (r.t("ob.k.actor"), name), (r.t("ob.k.synonyms"), ", ".join(a["synonyms"][:14]) or None),
+            (r.t("ob.k.origin_country"), cell(cname, obj=("country", a["country"])) if cname else None),
+            (r.t("ob.k.sponsor"), a["sponsor"]), (r.t("ob.k.incident"), a["incident"]),
+            (r.t("ob.k.confidence"), r.t("ob.v.pct", v=a["confidence"]) if a["confidence"] else None),
+            (r.t("ob.k.target_cats"), ", ".join(a["targets"]) or None), (r.t("ob.k.sectors"), ", ".join(a["sectors"]) or None),
+            (r.t("ob.k.victims"), ", ".join(a["victims"][:15]) or None)])
+        r.sections[-1]["note"] = r.t("ob.n.actor")
+        if a["description"]:
+            r.text(r.t("ob.sec.actor_about"), a["description"])
+        reports = []
+        if self.news:
+            items = [x for x in self.news.clusters(self.news._rows(90))
+                     if any(self.actors.canonical(a) == name for a in x["actors"])]
+            reports = items
+            r.table(r.t("ob.sec.actor_news"), [r.t("ob.c.date"), r.t("ob.c.title"), r.t("ob.c.source")],
+                    [[_d(x["latest"]), cell(x["title"], href=x["url"]), ", ".join(x["sources"][:3])] for x in items[:40]],
+                    note=r.t("ob.n.actor_news"), empty=r.t("ob.v.none"))
+            d30 = _cutoff(30)
+            n30 = sum(1 for x in items if x["latest"] >= d30)
+            if n30:
+                r.find("info", "ob.f.actor_news", n=n30)
+            named: dict[str, int] = {}
+            for x in items:
+                for c in x["countries"]:
+                    named[c] = named.get(c, 0) + 1
+            if named:
+                r.table(r.t("ob.sec.actor_targets"), [r.t("ob.c.country"), r.t("ob.c.reports")],
+                        [[cell(self.geo.country_name(c, lang), obj=("country", c)), n] for c, n in sorted(named.items(), key=lambda x: -x[1])[:15]])
+            home = [c for c in (self.s.home_region or []) if c in named]
+            if home:
+                r.find("medium", "ob.f.actor_home", countries=", ".join(self.geo.country_name(c, lang) for c in home))
+            src = self.geo.centroid(a["country"]) if a["country"] else None
+            if src:
+                r.point({"lat": src[0], "lon": src[1]}, "origin", cname)
+            for c, _ in sorted(named.items(), key=lambda x: -x[1])[:6]:
+                cen = self.geo.centroid(c)
+                if cen:
+                    r.point({"lat": cen[0], "lon": cen[1]}, "target", self.geo.country_name(c, lang))
+                    if src:
+                        r.path([(src[1], src[0]), (cen[1], cen[0])])
+                r.rel("country", c)
+        if a["refs"]:
+            r.items(r.t("ob.sec.actor_refs"), [cell(u.split("/")[2], href=u) for u in a["refs"][:15]])
+        if a["country"]:
+            r.rel("country", a["country"])
+        page = self._page(r, "actor", name, name, cname, {"assets": [], "myip": None}, [])
+        page["reports"] = [{"id": x["id"], "title": x["title"], "latest": x["latest"]} for x in reports[:10]]
+        return page
 
     # --- vendor -----------------------------------------------------------------------------------------------------------------------
     def _vendor(self, vendor: str, lang: str) -> dict[str, Any]:

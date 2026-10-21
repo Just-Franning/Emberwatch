@@ -30,10 +30,9 @@ export function setCollapsed(id, collapsed, persist = true) {
   panel.classList.toggle("collapsed", collapsed);
   btn.setAttribute("aria-expanded", String(!collapsed));
   btn.querySelector("[aria-hidden]").textContent = collapsed ? "+" : "–";
-  const key = id === "panel-left" ? "[" : "]";
-  btn.title = `${t(collapsed ? "panel.expand" : "panel.collapse")} ( ${key} )`;
+  btn.title = `${t(collapsed ? "panel.expand" : "panel.collapse")} ( ] )`;
   btn.querySelector(".sr-only").textContent = t(collapsed ? "panel.expand" : "panel.collapse");
-  document.body.classList.toggle(id === "panel-left" ? "left-collapsed" : "right-collapsed", collapsed);
+  document.body.classList.toggle(`${id}-collapsed`, collapsed);
   if (persist) {
     const s = saved();
     s[id] = collapsed;
@@ -45,7 +44,7 @@ export function toggle(id) {
   setCollapsed(id, !document.getElementById(id).classList.contains("collapsed"));
 }
 
-export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, isLage }) {
+export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, isMap }) {
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) { onPalette(); e.preventDefault(); return; }
     const tgt = e.target;
@@ -54,9 +53,8 @@ export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, 
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "1" || e.key === "2" || e.key === "3") { onArea(["lage", "analyse", "netz"][Number(e.key) - 1]); e.preventDefault(); }
-    else if (e.key === "[" && isLage()) { toggle("panel-left"); e.preventDefault(); }
-    else if (e.key === "]" && isLage()) { toggle("panel-right"); e.preventDefault(); }
+    if (["1", "2", "3", "4"].includes(e.key)) { onArea(["lage", "welt", "analyse", "netz"][Number(e.key) - 1]); e.preventDefault(); }
+    else if (e.key === "]" && isMap()) { toggle("side"); e.preventDefault(); }
     else if (e.key === "t" || e.key === "T") { onTools(); e.preventDefault(); }
     else if (e.key === "/") { onSearch(); e.preventDefault(); }
     else if (e.key === "Escape") onEscape();
@@ -67,7 +65,7 @@ export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, 
 const SRC = {
   cloudflare_radar: "Cloudflare Radar", radar_infra: null, feodo: "Feodo Tracker", threatfox: "ThreatFox", threatfox_iocs: null,
   ransomware_live: "Ransomware.live", cisa_kev: "CISA KEV", epss: "FIRST EPSS", spamhaus_drop: null, tor_exits: null,
-  internetdb: null, nvd: null, certspotter: null, typosquatting: null, ris_live: null,
+  internetdb: null, nvd: null, certspotter: null, typosquatting: null, ris_live: null, news: null, misp_actors: "MISP Galaxy",
 };
 const CORE = ["cloudflare_radar", "radar_infra", "feodo", "threatfox", "ransomware_live", "cisa_kev", "epss"];
 const srcName = (k) => SRC[k] || t(`src_name.${k}`);
@@ -78,7 +76,7 @@ export function renderStatusDots(status) {
   kids(dots, ...CORE.map((k) => el("i", { class: !by[k] ? "" : by[k].ok ? "ok" : "fail", title: srcName(k) })));
 }
 
-export function renderStatusPanel(status, { basemapFailed }) {
+export function renderStatusPanel(status, { basemapFailed, stampText = "–" }) {
   const panel = document.getElementById("status-panel");
   const by = Object.fromEntries((status.sources || []).map((s) => [s.source, s]));
   const keys = [...CORE, ...Object.keys(SRC).filter((k) => !CORE.includes(k) && by[k])];
@@ -121,7 +119,10 @@ export function renderStatusPanel(status, { basemapFailed }) {
       row(t("st.geo"), status.geo?.available ? `DB-IP ${status.geo.city_db}${status.geo.asn_db ? ", ASN " + status.geo.asn_db : ""}` : t("common.missing")),
       row(t("st.history"), t("st.history_txt", { n: num(status.history?.radar_days_final || 0), target: num(status.history?.backfill_target || 0),
         rw: t(status.history?.ransomware_backfill ? "st.done" : "st.pending") })),
-      row(t("st.cables"), status.cables?.snapshot ? `TeleGeography ${status.cables.snapshot}` : t("common.missing")))),
+      row(t("st.cables"), status.cables?.snapshot ? `TeleGeography ${status.cables.snapshot}` : t("common.missing")),
+      row(t("st.news"), status.news?.enabled ? t("st.news_on", { n: num(status.news.sources), a: num(status.news.actors),
+        img: t(status.news.images ? "st.news_img_on" : "st.news_img_off") }) : t("common.off")),
+      row(t("st.stamp"), stampText))),
     el("div", { class: "row" }, testBtn, notifyMsg),
     el("h3", {}, t("st.map")),
     el("p", { class: "note" }, basemapFailed ? t("st.map_failed") : basemapPref() === "offline" ? t("st.map_offline") : t("st.map_online")),
@@ -159,7 +160,7 @@ export function renderSettings(status) {
     ...logout,
     el("h3", {}, t("st.shortcuts")),
     el("table", {}, el("tbody", {},
-      ...[[t("st.kbd_palette"), "st.k_palette"], ["1 · 2 · 3", "st.k_areas"], ["/", "st.k_search"], ["T", "st.k_tools"], ["[", "st.k_left"], ["]", "st.k_right"], ["Esc", "st.k_esc"]]
+      ...[[t("st.kbd_palette"), "st.k_palette"], ["1 · 2 · 3 · 4", "st.k_areas"], ["/", "st.k_search"], ["T", "st.k_tools"], ["]", "st.k_side"], ["Esc", "st.k_esc"]]
         .map(([a, b]) => el("tr", {}, el("td", {}, el("kbd", {}, a)), el("td", {}, t(b)))))),
   );
 }
