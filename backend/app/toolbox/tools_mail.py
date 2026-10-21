@@ -3,6 +3,7 @@ sender consistency, links and attachments against the threat data. Nothing is ex
 hashed. Optional: attachment hashes against MalwareBazaar (third party)."""
 from __future__ import annotations
 
+import asyncio
 import email
 import hashlib
 import ipaddress
@@ -31,7 +32,12 @@ HTML_EXT = {"htm", "html", "shtml", "xhtml", "svg"}
 ARCHIVE_EXT = {"zip", "rar", "7z", "gz", "tar", "ace", "cab", "arj", "z", "xz", "bz2", "tgz"}
 IP_BRACKET = re.compile(r"\[(?:IPv6:)?([0-9A-Fa-f:.]{3,45})\]")
 IPV4_ANY = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
-ANCHOR = re.compile(r"<a\s[^>]*?href\s*=\s*[\"']([^\"']{1,2000})[\"'][^>]*>(.*?)</a\s*>", re.I | re.S)
+# Links in HTML: opening tag and closing tag are searched separately and within bounded windows. A single pattern with
+# a lazy body (<a …>(.*?)</a>) needs quadratic time on mails with many unclosed <a> tags (crafted mail = the use case).
+ANCHOR_OPEN = re.compile(r"<a\s[^<>]{0,2000}?\bhref\s*=\s*[\"']([^\"'<>]{1,2000})[\"'][^<>]{0,2000}>", re.I)
+ANCHOR_CLOSE = re.compile(r"</a\s*>", re.I)
+ANCHOR_WINDOW = 4000
+MAX_ANCHORS = 500
 TAG = re.compile(r"<[^>]+>")
 AR_RE = re.compile(r"\b(spf|dkim|dmarc|arc|compauth)\s*=\s*([a-z]+)", re.I)
 
@@ -97,11 +103,67 @@ def _ext(name: str) -> list[str]:
     return parts[1:] if len(parts) > 1 else []
 
 
+def anchors(html: str) -> list[tuple[str, str]]:
+    """(href, inner HTML) of the first MAX_ANCHORS closed links; linear in the length of the text."""
+    out: list[tuple[str, str]] = []
+    for m in ANCHOR_OPEN.finditer(html):
+        end = ANCHOR_CLOSE.search(html, m.end(), m.end() + ANCHOR_WINDOW)
+        if end:
+            out.append((m.group(1), html[m.end():end.start()]))
+            if len(out) >= MAX_ANCHORS:
+                break
+    return out
+
+
+def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], list[dict[str, Any]]]:
+    """Links, shown-vs-real link mismatches and attachment hashes. CPU-bound on large mails: runs in a worker thread."""
+    urls: dict[str, str] = {}
+    mismatches: list[tuple[str, str]] = []
+    atts: list[dict[str, Any]] = []
+    budget = 15 * 1024 * 1024
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        fname = _dec(part.get_filename()) if part.get_filename() else None
+        disp = (part.get("Content-Disposition") or "").lower()
+        ctype = part.get_content_type()
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except (ValueError, TypeError, AssertionError):
+            payload = b""
+        if budget <= 0:
+            break
+        payload = payload[:MAX_PART]
+        budget -= len(payload)
+        if fname or disp.startswith("attachment"):
+            atts.append({"name": fname or "?", "type": ctype, "size": len(payload),
+                         "sha256": hashlib.sha256(payload).hexdigest(), "md5": hashlib.md5(payload, usedforsecurity=False).hexdigest()})
+            continue
+        if ctype in ("text/plain", "text/html"):
+            try:
+                body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            except LookupError:  # unknown charset name in the mail
+                body = payload.decode("utf-8", errors="replace")
+            for u in URL_RE.findall(body):
+                n = _norm_url(u.replace("&amp;", "&"))
+                if n and len(urls) < MAX_URLS:
+                    urls.setdefault(n, ctype)
+            if ctype == "text/html":
+                for href, inner in anchors(body):
+                    shown = TAG.sub("", inner).strip()
+                    hh = url_host(href.replace("&amp;", "&"))
+                    m = re.search(r"(?:https?://)?((?:[\w-]+\.)+[a-z]{2,})", shown, re.I)
+                    if hh and m and _org(norm_host(m.group(1)) or m.group(1)) != _org(norm_host(hh) or hh):
+                        mismatches.append((shown[:80], hh))
+    return urls, mismatches, atts
+
+
 async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any]) -> dict[str, Any]:
     text = params.get("text") or ""
     if not text.strip():
         raise ToolError("err.tb.mail_empty")
-    msg: Message = email.message_from_bytes(text.encode("utf-8", errors="replace"))
+    # parsing up to 15 MB is CPU work: off the event loop, so other requests and the collectors keep running
+    msg: Message = await asyncio.to_thread(email.message_from_bytes, text.encode("utf-8", errors="replace"))
     res = Result("mailhdr", ctx.lang, _dec(msg.get("Subject"))[:120] or "E-Mail")
     ctx.matcher.ensure()
     own_typos = {r["candidate"]: r["domain"] for r in ctx.db.query("SELECT candidate, domain FROM typo WHERE registered=1")}
@@ -211,41 +273,7 @@ async def mailhdr(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, Any])
             pass
 
     # --- body: links and attachments ----------------------------------------------------------------------------------
-    urls: dict[str, str] = {}
-    mismatches: list[tuple[str, str]] = []
-    atts = []
-    budget = 15 * 1024 * 1024
-    for part in msg.walk():
-        if part.is_multipart():
-            continue
-        fname = _dec(part.get_filename()) if part.get_filename() else None
-        disp = (part.get("Content-Disposition") or "").lower()
-        ctype = part.get_content_type()
-        try:
-            payload = part.get_payload(decode=True) or b""
-        except (ValueError, TypeError, AssertionError):
-            payload = b""
-        if budget <= 0:
-            break
-        payload = payload[:MAX_PART]
-        budget -= len(payload)
-        if fname or disp.startswith("attachment"):
-            atts.append({"name": fname or "?", "type": ctype, "size": len(payload),
-                         "sha256": hashlib.sha256(payload).hexdigest(), "md5": hashlib.md5(payload, usedforsecurity=False).hexdigest()})
-            continue
-        if ctype in ("text/plain", "text/html"):
-            body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-            for u in URL_RE.findall(body):
-                n = _norm_url(u.replace("&amp;", "&"))
-                if n and len(urls) < MAX_URLS:
-                    urls.setdefault(n, ctype)
-            if ctype == "text/html":
-                for href, inner in ANCHOR.findall(body)[:500]:
-                    shown = TAG.sub("", inner).strip()
-                    hh = url_host(href.replace("&amp;", "&"))
-                    m = re.search(r"(?:https?://)?((?:[\w-]+\.)+[a-z]{2,})", shown, re.I)
-                    if hh and m and _org(norm_host(m.group(1)) or m.group(1)) != _org(norm_host(hh) or hh):
-                        mismatches.append((shown[:80], hh))
+    urls, mismatches, atts = await asyncio.to_thread(_scan_body, msg)
     urows = []
     for u in list(urls)[:MAX_URLS]:
         host = url_host(u) or ""

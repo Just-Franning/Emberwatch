@@ -16,6 +16,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 from pathlib import Path
 
 import dns.asyncresolver
@@ -473,6 +474,58 @@ def test_mailsec(m, fdns):
     assert "4" in rows["SPF"][2]  # include + include + a + mx (RFC 7208 4.6.4)
     assert "DKIM (selector1)" in rows and rows["TLS-RPT"][1]["sev"] == "info"
     assert res["object"] == {"type": "domain", "value": "example.test"}
+
+
+MAIL = """Received: from mx.recv.example (mx.recv.example [192.0.2.10]) by inbox.recv.example with ESMTPS; Tue, 20 Oct 2026 10:00:05 +0000
+Received: from out.sender.example (out.sender.example [198.51.100.7]) by mx.recv.example with ESMTP; Tue, 20 Oct 2026 10:00:01 +0000
+Authentication-Results: inbox.recv.example; spf=pass smtp.mailfrom=bank.example; dkim=none; dmarc=fail header.from=bank.example
+From: "Bank" <service@bank.example>
+Reply-To: help@collector.example
+To: you@recv.example
+Subject: Konto gesperrt
+Date: Tue, 20 Oct 2026 10:00:00 +0000
+Message-ID: <1@bank.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: text/html; charset="x-unknown-charset"
+
+<p>Bitte <a class="btn" href="https://login.evil.example/x?a=1&amp;b=2">https://www.bank.example/login</a> pr&uuml;fen.</p>
+<a href='http://203.0.113.9/p'>hier</a>
+--b1
+Content-Type: application/octet-stream; name="rechnung.pdf.exe"
+Content-Disposition: attachment; filename="rechnung.pdf.exe"
+Content-Transfer-Encoding: base64
+
+TVqQAAMAAAAEAAAA
+--b1--
+"""
+
+
+def test_mailhdr(m):
+    res = result(run(m, "mailhdr", MAIL))
+    k = keys(res)
+    assert sorted(f["sev"] for f in res["findings"] if f["key"] == "tb.f.mail_auth") == ["high", "low"]  # dmarc=fail, dkim=none
+    assert k["tb.f.mail_replyto"] == "medium" and k["tb.f.mail_mismatch"] == "medium"
+    assert k["tb.f.mail_att"] == "high" and res["verdict"]["sev"] == "high"
+    path = section(res, "path")["rows"]
+    assert [r[2]["t"] if isinstance(r[2], dict) else r[2] for r in path] == ["198.51.100.7", "192.0.2.10"]  # oldest hop first
+    links = {r[0]["t"]: r for r in section(res, "links")["rows"]}
+    assert "https://login.evil.example/x?a=1&b=2" in links and "http://203.0.113.9/p" in links
+    att = section(res, "attachments")["rows"][0]
+    assert att[0]["t"] == "rechnung.pdf.exe" and att[3]["obj"]["type"] == "hash"
+    assert res["target_sees"] is False and res["third_party"] is None  # lookup off: nothing leaves the server
+
+
+def test_mail_anchor_parsing_is_linear(m):
+    from app.toolbox import tools_mail as tm
+    html = '<a class="x" href="https://a.example/1">A <b>bold</b></a> <A\nHREF=\'https://b.example\'>B</a >'
+    assert tm.anchors(html) == [("https://a.example/1", "A <b>bold</b>"), ("https://b.example", "B")]
+    crafted = ("<a href='https://x.example/'>" * 40000) + ("<a " + "x" * 50) * 20000
+    started = time.perf_counter()
+    assert tm.anchors(crafted) == []
+    assert time.perf_counter() - started < 2  # the former single regex needed minutes for this
 
 
 def test_recipes(m, fdns):
