@@ -1,7 +1,9 @@
 // Search across C2, ThreatFox IOCs, KEV, NVD, ransomware victims, infrastructure events, countries,
 // your assets and watched products. Vendor/product queries (e.g. "Sophos") can be watched directly.
 import { t } from "./i18n.js";
-import { api, countryName, dateOnly, dateTime, dec1, dec2, el, num } from "./util.js";
+import { detect, objectOf } from "./registry.js";
+import { go, routes } from "./router.js";
+import { api, countryName, dateOnly, dateTime, dec1, dec2, el, kids, num } from "./util.js";
 
 function splitProduct(q) {
   const words = q.trim().split(/\s+/);
@@ -33,22 +35,22 @@ export class Search {
     if (q.length < 2) return;
     const seq = ++this.seq;
     this.box.hidden = false;
-    this.box.replaceChildren(el("div", { class: "empty" }, t("s.searching")));
+    kids(this.box, el("div", { class: "empty" }, t("s.searching")));
     let r;
+    let det = null;
     try {
-      r = await api(`api/search?q=${encodeURIComponent(q)}`);
+      [r, det] = await Promise.all([api(`api/search?q=${encodeURIComponent(q)}`), detect(q).catch(() => null)]);
     } catch (e) {
-      this.box.replaceChildren(el("div", { class: "empty" }, t("common.error", { msg: e.message })));
+      kids(this.box, el("div", { class: "empty" }, t("common.error", { msg: e.message })));
       return;
     }
     if (seq !== this.seq) return;
     const g = [];
     const item = this.item.bind(this);
-    if (r.type === "ip") {
-      g.push(el("h4", {}, t("s.tools")), item(t("s.ipinfo", { q }), t("s.ipinfo_sub"), () => this.cb.onIp(q)));
-    }
-    if (r.type === "asn") {
-      g.push(el("h4", {}, t("s.tools")), item(t("s.whois", { q: q.toUpperCase() }), "RDAP", () => this.cb.onAsn(q)));
+    const o = objectOf(det);
+    if (o) {
+      g.push(el("h4", {}, t("s.analyse")), item(t("s.open_object", { type: t(`obj.type.${o.type}`), value: o.value }), t("s.open_object_sub"), () => go(routes.obj(o.type, o.value)), "action"));
+      if (r.type === "ip") g.push(item(t("s.ipinfo", { q }), t("s.ipinfo_sub"), () => this.cb.onIp(q), "action"));
     }
     if (r.reputation && (r.reputation.drop || r.reputation.tor)) {
       g.push(el("h4", {}, t("s.reputation")));
@@ -81,6 +83,12 @@ export class Search {
     if (r.countries?.length) {
       g.push(el("h4", {}, t("s.countries")), ...r.countries.map((c) => item(c.name, c.cc, () => this.cb.onCountry(c.cc))));
     }
+    const fams = [...new Set((r.c2 || []).map((c) => c.malware).filter(Boolean))].slice(0, 6);
+    const groups = [...new Set((r.victims || []).map((v) => v.grp).filter(Boolean))].filter((x) => x.toLowerCase().includes(q.toLowerCase())).slice(0, 6);
+    if (fams.length || groups.length) {
+      g.push(el("h4", {}, t("s.families")), ...fams.map((f) => item(f, t("obj.type.malware"), () => go(routes.obj("malware", f)))),
+        ...groups.map((x) => item(x, t("obj.type.group"), () => go(routes.obj("group", x)))));
+    }
     if (r.c2?.length) {
       g.push(el("h4", {}, t("s.c2", { n: r.c2.length })), ...r.c2.slice(0, 20).map((c) =>
         item(`${c.malware}: ${c.ioc}`, `${countryName(c.country)}${c.asn ? ", AS" + c.asn : ""}`, () => this.cb.onC2(c))));
@@ -108,32 +116,32 @@ export class Search {
     const nvdBox = el("div");
     if (r.type === "text" && q.length >= 3) {
       g.push(el("h4", {}, t("s.nvd")), nvdBox);
-      nvdBox.replaceChildren(el("div", { class: "empty" }, t("s.nvd_loading")));
+      kids(nvdBox, el("div", { class: "empty" }, t("s.nvd_loading")));
       this.loadNvd(q, nvdBox, seq);
     }
     const hasResults = g.some((n) => n.tagName === "BUTTON" && !n.classList.contains("action")) || nvdBox.isConnected || g.includes(nvdBox);
     if (!hasResults) g.unshift(el("div", { class: "empty" }, t("s.none")));
-    this.box.replaceChildren(...g);
+    kids(this.box, ...g);
   }
 
   async loadNvd(q, box, seq) {
     try {
       const r = await api(`api/search/nvd?q=${encodeURIComponent(q)}`);
       if (seq !== this.seq) return;
-      if (!r.cves.length) { box.replaceChildren(el("div", { class: "empty" }, t("s.nvd_none"))); return; }
-      box.replaceChildren(...r.cves.slice(0, 25).map((c) => this.item(
+      if (!r.cves.length) { kids(box, el("div", { class: "empty" }, t("s.nvd_none"))); return; }
+      kids(box, ...r.cves.slice(0, 25).map((c) => this.item(
         el("span", {}, c.cve, c.kev ? el("span", { class: "tag warn" }, "KEV") : null),
         [c.cvss !== null && c.cvss !== undefined ? `CVSS ${dec1(c.cvss)}` : null, c.epss !== null && c.epss !== undefined ? `EPSS ${dec2(c.epss)}` : null,
           dateOnly(c.published), (c.summary || "").slice(0, 90)].filter(Boolean).join(" · "),
         () => this.cb.onCve(c.cve))));
     } catch (e) {
-      if (seq === this.seq) box.replaceChildren(el("div", { class: "empty" }, e.message));
+      if (seq === this.seq) kids(box, el("div", { class: "empty" }, e.message));
     }
   }
 
   notice(text) {
     this.box.hidden = false;
-    this.box.replaceChildren(el("div", { class: "empty ok-txt" }, text));
+    kids(this.box, el("div", { class: "empty ok-txt" }, text));
     setTimeout(() => this.hide(), 3500);
   }
 }

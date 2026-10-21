@@ -336,6 +336,58 @@ class Domains:
         self.db.status("typosquatting", True, "", checked)
         return new
 
+    # --- on demand (tools) ---------------------------------------------------------------------------------
+    async def issuances(self, client: httpx.AsyncClient, domain: str, pages: int = 2) -> list[dict[str, Any]] | None:
+        """Unexpired certificate issuances for any domain (up to `pages` pages). None while rate limited."""
+        if asyncio.get_running_loop().time() < self._ct_blocked_until:
+            return None
+        out: list[dict[str, Any]] = []
+        after: str | None = None
+        for _ in range(pages):
+            page = await self._ct_page(client, domain, after)
+            if page is None:
+                return out or None
+            items = [it for it in page if isinstance(it, dict) and it.get("id")]
+            if not items:
+                break
+            out += items
+            after = str(items[-1]["id"])[:64]
+        return out
+
+    async def lookalikes(self, domain: str, limit: int) -> dict[str, Any]:
+        """Registered look-alike domains for any domain (DNS lookups only, nothing is stored)."""
+        name, suffix = registrable(domain)
+        base = f"{name}.{suffix}"
+        if not suffix:
+            return {"base": base, "checked": 0, "registered": [], "wildcard": []}
+        res = dns.asyncresolver.Resolver()
+        res.lifetime = 4.0
+        sem = asyncio.Semaphore(16)
+        cands = permutations(base, limit)
+        wildcard: dict[str, bool] = {}
+        for sfx in {c.split(".", 1)[1] for c, _ in cands}:
+            wildcard[sfx] = bool(await self._exists(res, f"ew-{secrets.token_hex(6)}.{sfx}"))
+        found: list[dict[str, Any]] = []
+        checked = 0
+
+        async def one(cand: str, tech: str) -> None:
+            nonlocal checked
+            if wildcard.get(cand.split(".", 1)[1]):
+                return
+            async with sem:
+                ex = await self._exists(res, cand)
+                if ex is None:
+                    return
+                checked += 1
+                if ex:
+                    mx, ips = await self._details(res, cand)
+                    found.append({"candidate": cand, "technique": tech, "mx": mx, "ips": ips})
+
+        await asyncio.gather(*(one(c, t) for c, t in cands))
+        found.sort(key=lambda x: (not x["mx"], x["candidate"]))
+        return {"base": base, "checked": checked, "registered": found,
+                "wildcard": sorted(s for s, w in wildcard.items() if w)}
+
     def listing(self, domain: str) -> dict[str, Any]:
         name, suffix = registrable(domain)
         base = f"{name}.{suffix}"

@@ -273,6 +273,50 @@ CREATE TABLE IF NOT EXISTS typo (
     last_checked TEXT NOT NULL,
     PRIMARY KEY (domain, candidate)
 );
+CREATE TABLE IF NOT EXISTS tool_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    recipe TEXT,
+    obj_type TEXT,
+    obj_value TEXT,
+    target TEXT,
+    sev TEXT,
+    payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tool_runs_obj ON tool_runs(obj_type, obj_value, id);
+CREATE TABLE IF NOT EXISTS myip (
+    kind TEXT PRIMARY KEY,
+    ip TEXT,
+    ip6 TEXT,
+    source TEXT,
+    updated_at TEXT,
+    checked_at TEXT,
+    check_payload TEXT,
+    config TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS myip_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    family INTEGER NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    source TEXT,
+    asn INTEGER,
+    as_name TEXT,
+    country TEXT
+);
+CREATE INDEX IF NOT EXISTS myip_history_ip ON myip_history(kind, ip);
+CREATE TABLE IF NOT EXISTS myip_sightings (
+    ip TEXT PRIMARY KEY,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    asn INTEGER,
+    as_name TEXT,
+    country TEXT
+);
 """
 
 # (table, column, declaration) – applied with ALTER TABLE if the column is missing

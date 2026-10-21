@@ -373,24 +373,28 @@ def test_tools_live_localhost(m, tmp_path):
         assert pc["results"][0]["label"] == "offen" and pc["results"][1]["label"] == "geschlossen"
     finally:
         stop.set()
+    def run(tc, body, **kw):
+        r = tc.post("/api/tb/run", json=body, headers={"Sec-Fetch-Site": "same-origin", **kw.get("headers", {})})
+        return r, [json.loads(line) for line in r.text.splitlines() if line.startswith("{")]
+
     with TestClient(m.app) as tc:
-        assert tc.get("/api/tools/ports?target=127.0.0.1&ports=1,2,a").status_code == 400
-        assert tc.get("/api/tools/http?target=ftp://x.example").status_code == 400
+        r, _ = run(tc, {"tool": "ports", "target": "127.0.0.1", "params": {"ports": "1,2,a"}})
+        assert r.status_code == 400 and r.json()["key"] == "err.tool.port"
+        r, _ = run(tc, {"tool": "http", "target": "ftp://x.example"})
+        assert r.status_code == 400 and r.json()["key"] == "err.tb.input"
         if Path(m.S.ping_bin).exists():
-            body = tc.get("/api/tools/ping?target=127.0.0.1&count=2").text
-            events = [json.loads(b.split("data: ", 1)[1]) for b in body.strip().split("\n\n") if "data: {" in b]
-            kinds = [e.get("type") for e in events]
-            assert kinds[0] == "start" and "done" in kinds
-            done = next(e for e in events if e.get("type") == "done")
-            assert done["received"] == 2 and done["loss_pct"] == 0
+            r, events = run(tc, {"tool": "ping", "target": "127.0.0.1", "params": {"count": 2}})
+            kinds = [e["type"] for e in events]
+            assert r.status_code == 200 and kinds == ["start", "row", "row", "result"]
+            res = events[-1]["result"]
+            assert res["tool"] == "ping" and res["verdict"]["sev"] == "ok" and res["run_id"] > 0
+            assert [row[0] for row in next(s for s in res["sections"] if s["kind"] == "table")["rows"]] == [1, 2]
         if Path(m.S.traceroute_bin).exists():
-            body = tc.get("/api/tools/traceroute?target=127.0.0.1&max_hops=3").text
-            hops = [json.loads(b.split("data: ", 1)[1]) for b in body.strip().split("\n\n") if "event: hop" in b]
+            r, events = run(tc, {"tool": "traceroute", "target": "127.0.0.1", "params": {"max_hops": 3}})
+            hops = [e for e in events if e["type"] == "row" and e["kind"] == "hop"]
             assert hops and hops[0]["ip"] == "127.0.0.1" and hops[0]["private"] is True
-            assert '"reached": true' in body
-        err = tc.get("/api/tools/ping?target=bad%20host").text
-        assert "event: error" in err and "Ungültiges Ziel." in err
-        err_en = tc.get("/api/tools/ping?target=bad%20host", headers={"Cookie": "ew_lang=en"}).text
-        assert "event: error" in err_en and "Invalid target." in err_en
-        bad = tc.get("/api/tools/dns?target=a%20b", headers={"Cookie": "ew_lang=en"})
-        assert bad.status_code == 400 and bad.json()["detail"] == "Invalid target."
+            assert events[-1]["type"] == "result" and events[-1]["result"]["verdict"]["sev"] == "ok"
+        r, _ = run(tc, {"tool": "ping", "target": "bad host"})
+        assert r.status_code == 400 and r.json()["detail"].startswith("Dieses Werkzeug passt nicht")
+        r, _ = run(tc, {"tool": "dns", "target": "a b"}, headers={"Cookie": "ew_lang=en"})
+        assert r.status_code == 400 and r.json()["detail"].startswith("This tool does not fit the input")

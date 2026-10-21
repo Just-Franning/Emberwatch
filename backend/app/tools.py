@@ -42,6 +42,10 @@ SECURITY_HEADERS = ("strict-transport-security", "content-security-policy", "x-f
 _proc_sem = asyncio.Semaphore(3)
 
 
+class _Skip(Exception):
+    """Internal: a lookup is left out on purpose."""
+
+
 class ToolError(AppError):
     def __init__(self, key: str, **params: Any) -> None:
         super().__init__(key, 400, **params)
@@ -69,6 +73,8 @@ def check_ip(ip: str, allow_private: bool) -> str:
         addr = ipaddress.ip_address(ip)
     except ValueError as exc:
         raise ToolError("err.tool.ip") from exc
+    if getattr(addr, "scope_id", None) is not None:  # fe80::1%eth0
+        raise ToolError("err.tool.ip")
     if addr.is_multicast or addr.is_unspecified:
         raise ToolError("err.tool.multicast")
     if not allow_private and not is_public(addr):
@@ -82,6 +88,8 @@ def parse_host(raw: str) -> tuple[str, bool]:
     if not s or len(s) > 253 or any(c.isspace() for c in s) or s.startswith("-"):
         raise ToolError("err.tool.target")
     s = s.strip("[]")
+    if "%" in s:  # IPv6 zone ID
+        raise ToolError("err.tool.target")
     try:
         return str(ipaddress.ip_address(s)), True
     except ValueError:
@@ -140,8 +148,9 @@ class ToolKit:
         self._rdap_calls: list[float] = []
 
     # --- server location (start of the traceroute) --------------------------------
-    async def origin(self, client: httpx.AsyncClient) -> dict[str, Any]:
-        if self._origin and time.time() - self._origin[0] < 6 * 3600:
+    async def origin(self, client: httpx.AsyncClient, max_age: float = 6 * 3600) -> dict[str, Any]:
+        """Public egress address of this server (via Cloudflare's trace endpoint), cached for max_age seconds."""
+        if self._origin and time.time() - self._origin[0] < (max_age if self._origin[1].get("ip") else 600):
             return self._origin[1]
         info: dict[str, Any] = {"ip": None}
         try:
@@ -387,6 +396,8 @@ class ToolKit:
         ip = ips[0]
         out: dict[str, Any] = {"target": target, "ip": ip, "geo": geo_of(self.geo, ip), "ptr": await ptr(ip)}
         try:
+            if not is_public(ipaddress.ip_address(ip)):  # private addresses are not sent to RIPEstat
+                raise _Skip
             r = await client.get("https://stat.ripe.net/data/prefix-overview/data.json",
                                  params={"resource": ip, "sourceapp": "emberwatch"}, timeout=15)
             d = (r.json() or {}).get("data") or {}
@@ -395,6 +406,8 @@ class ToolKit:
                 "asns": [{"asn": a.get("asn"), "holder": a.get("holder")} for a in d.get("asns") or []],
                 "is_less_specific": d.get("is_less_specific"),
             }
+        except _Skip:
+            out["routing"] = {"error": i18n.t(lang, "ob.v.private")}
         except Exception as exc:
             out["routing"] = {"error": i18n.t(lang, "tool.ripestat_failed", detail=exc.__class__.__name__)}
         out["c2"] = self.db.query(

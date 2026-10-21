@@ -104,6 +104,15 @@ def _origins(raw: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _cyberchef(raw: str) -> str:
+    """Base URL of a CyberChef instance (http/https only, no fragment). Empty or invalid -> the public GCHQ instance."""
+    default = "https://gchq.github.io/CyberChef/"
+    v = raw.strip()
+    if not re.fullmatch(r"https?://[^\s\"'<>#]{3,300}", v):
+        return default
+    return v
+
+
 def _region(raw: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(c.strip().upper() for c in raw.split(",") if re.fullmatch(r"\s*[A-Za-z]{2}\s*", c)))
 
@@ -188,6 +197,11 @@ class Settings:
     syslog_allow: tuple = field(default_factory=tuple)
     syslog_max_rate: int = 2000
     trusted_origins: tuple[str, ...] = ()  # extra host[:port] values accepted in the Origin header
+
+    # Tool box: optional third-party keys and the CyberChef instance used by the browser
+    greynoise_api_key: str = ""
+    globalping_token: str = ""
+    cyberchef_url: str = "https://gchq.github.io/CyberChef/"
 
     @property
     def matrix_enabled(self) -> bool:
@@ -282,4 +296,7 @@ def load() -> Settings:
         syslog_allow=_nets(_str("SYSLOG_ALLOW", DEFAULT_SYSLOG_ALLOW)),
         syslog_max_rate=_int("SYSLOG_MAX_RATE", 2000, 10, 100000),
         trusted_origins=_origins(_str("TRUSTED_ORIGINS", "")),
+        greynoise_api_key=_str("GREYNOISE_API_KEY"),
+        globalping_token=_str("GLOBALPING_TOKEN"),
+        cyberchef_url=_cyberchef(_str("CYBERCHEF_URL", "https://gchq.github.io/CyberChef/")),
     )

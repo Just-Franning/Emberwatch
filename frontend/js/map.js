@@ -1,7 +1,8 @@
 // World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth),
 // country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
 import { t } from "./i18n.js";
-import { COLORS, RAMP, countryName, dateTime, el, geo, num, pct, reduceMotion } from "./util.js";
+import { objLink } from "./router.js";
+import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 const FONT = ["Noto Sans Regular"];
@@ -245,13 +246,24 @@ export class Emberwatch {
       },
       {
         id: "tool-path", type: "line", source: "tool", filter: ["==", ["get", "kind"], "path"], layout: { "line-cap": "round" },
-        paint: { "line-color": COLORS.tool, "line-width": 1.6, "line-dasharray": [2, 1.5], "line-opacity": 0.9 },
+        paint: {
+          "line-color": ["match", ["coalesce", ["get", "sev"], ""], "high", COLORS.high, "medium", COLORS.medium, COLORS.tool],
+          "line-width": 1.6, "line-dasharray": [2, 1.5], "line-opacity": 0.9,
+        },
       },
       {
+        // tool and object results: kind = origin | target | hop | probe | mail | c2 | ransom; sev colours findings
         id: "tool-points", type: "circle", source: "tool", filter: ["!=", ["get", "kind"], "path"],
         paint: {
-          "circle-color": ["match", ["get", "kind"], "origin", "#060607", "target", COLORS.tool, COLORS.tool],
-          "circle-radius": ["match", ["get", "kind"], "target", 6.5, "origin", 6, 4.5],
+          "circle-color": ["case",
+            ["==", ["get", "kind"], "origin"], "#060607",
+            ["==", ["coalesce", ["get", "sev"], ""], "high"], COLORS.high,
+            ["==", ["coalesce", ["get", "sev"], ""], "medium"], COLORS.medium,
+            ["==", ["get", "kind"], "c2"], COLORS.c2,
+            ["==", ["get", "kind"], "ransom"], COLORS.ransom,
+            ["==", ["get", "kind"], "mail"], COLORS.attackLight,
+            COLORS.tool],
+          "circle-radius": ["match", ["get", "kind"], "target", 6.5, "origin", 6, "probe", 5, 4.5],
           "circle-stroke-color": ["match", ["get", "kind"], "origin", COLORS.tool, "#060607"],
           "circle-stroke-width": ["match", ["get", "kind"], "origin", 2, 1.5],
         },
@@ -302,7 +314,7 @@ export class Emberwatch {
   }
 
   _tipShow(e, title, sub) {
-    this.tip.replaceChildren(el("strong", {}, title), ...(sub ? [el("small", {}, sub)] : []));
+    kids(this.tip, el("strong", {}, title), ...(sub ? [el("small", {}, sub)] : []));
     this.tip.hidden = false;
     const x = e.originalEvent.clientX, y = e.originalEvent.clientY;
     this.tip.style.left = `${Math.min(x + 14, window.innerWidth - 290)}px`;
@@ -358,7 +370,8 @@ export class Emberwatch {
         el("h4", {}, `${t(`map.group.${p.group}`)}: ${countryName(p.cc)}`),
         el("ul", {}, evs.slice(0, 8).map((x) => el("li", {}, `${x.title}${x.ongoing ? t("map.ongoing") : ""}, ${x.start ? dateTime(x.start) : "?"}`))),
         evs.length > 8 ? el("div", { class: "note" }, t("common.more", { n: evs.length - 8 })) : null,
-        el("div", { class: "row" }, el("button", { type: "button", onclick: () => this.onCountry(p.cc) }, t("map.open_country")))));
+        el("div", { class: "row" }, el("button", { type: "button", onclick: () => this.onCountry(p.cc) }, t("map.open_country")),
+          objLink("country", p.cc, t("country.deep"), "btn"))));
     });
     m.on("click", "landing", (e) => {
       const p = e.features[0].properties;
@@ -400,6 +413,8 @@ export class Emberwatch {
       el("h4", {}, `C2: ${p.malware}`),
       el("dl", {}, rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v ?? "–")])),
       el("div", { class: "row" },
+        p.ip ? objLink("ip", p.ip, t("c2.open_ip"), "btn") : null,
+        p.malware ? objLink("malware", p.malware, t("c2.open_family"), "btn") : null,
         p.ip ? el("button", { type: "button", onclick: () => this.onIp?.(p.ip) }, t("c2.ipinfo")) : null,
         p.reference && /^https:\/\/(threatfox|feodotracker)\.abuse\.ch\//.test(p.reference)
           ? el("a", { class: "btn", href: p.reference, target: "_blank", rel: "noopener noreferrer" }, "abuse.ch") : null)));
@@ -487,6 +502,7 @@ export class Emberwatch {
     const src = this.map.getSource("heads");
     let last = -1e9;
     const frame = (ts) => {
+      if (this.paused) return;
       if (!this.arcsVisible) { src.setData(EMPTY); return; }
       if (ts - last >= 33 || reduceMotion) { // about 30 fps
         last = ts;
@@ -602,6 +618,40 @@ export class Emberwatch {
   // --- tool results -----------------------------------------------------------------
   setTool(features) {
     this.map.getSource("tool").setData({ type: "FeatureCollection", features: features || [] });
+  }
+
+  /** Draws the map part of a tool or object result: {points: [{lon, lat, kind, label, ip, sev}], paths: [{coords, sev}]}. */
+  showResult(m, { fit = true } = {}) {
+    const points = (m?.points || []).filter((p) => Number.isFinite(p.lon) && Number.isFinite(p.lat));
+    const feats = [];
+    for (const p of m?.paths || []) {
+      for (const f of this.toolPath(p.coords || [])) {
+        if (p.sev) f.properties.sev = p.sev;
+        feats.push(f);
+      }
+    }
+    for (const p of points) {
+      const props = { kind: p.kind || "target" };
+      for (const k of ["label", "ip", "sev"]) if (p[k] !== undefined && p[k] !== null) props[k] = p[k];
+      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: props });
+    }
+    this.setTool(feats);
+    const coords = points.map((p) => [p.lon, p.lat]);
+    if (fit && coords.length > 1) this.fitTo(coords, 6);
+    else if (fit && coords.length === 1) this.flyTo(coords[0][0], coords[0][1], 4);
+    return points.length;
+  }
+
+  /** Stops the arc animation while the map is covered by a page (analysis, my network). */
+  pause(on) {
+    this.paused = on;
+    if (on) {
+      if (this._raf) cancelAnimationFrame(this._raf);
+      this._raf = null;
+    } else {
+      this.animate();
+      this.map.resize();
+    }
   }
 
   clearTool() { this.setTool([]); }

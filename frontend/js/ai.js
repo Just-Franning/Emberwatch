@@ -2,7 +2,7 @@
 import { barChart, destroy, lineChart, valueTable } from "./charts.js";
 import { t } from "./i18n.js";
 import { renderMarkdown, toMarkdown, toPlainText } from "./md.js";
-import { api, countryName, dateTime, download, el, reduceMotion, sevTag } from "./util.js";
+import { api, countryName, dateTime, download, el, kids, reduceMotion, sevTag } from "./util.js";
 
 function charts(list) {
   return (list || []).map((c) => {
@@ -54,8 +54,8 @@ export class AIPanel {
   }
 
   async loadHistory() {
-    try { this.reports = await api("api/ai/reports?limit=30"); } catch { this.reports = []; }
-    this.history.replaceChildren(
+    try { this.reports = (await api("api/ai/reports?limit=40")).filter((r) => !String(r.scope || "").startsWith("obj:")); } catch { this.reports = []; }
+    kids(this.history,
       el("option", { value: "" }, this.reports.length ? t("ai.history") : t("ai.history_none")),
       ...this.reports.map((r) => el("option", { value: r.id }, `${dateTime(r.created_at)} ${r.scope === "daily" ? t("ai.daily") : ""} ${r.title || r.scope}`.replace(/\s+/g, " "))),
     );
@@ -72,7 +72,7 @@ export class AIPanel {
     document.getElementById("sect-ai").open = true;
     this.setBusy(true);
     this.out.querySelectorAll("canvas").forEach(destroy);
-    this.out.replaceChildren(el("p", { class: "state" }, t("ai.running")));
+    kids(this.out, el("p", { class: "state" }, t("ai.running")));
     this.out.scrollIntoView({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
     try {
       const r = await api("api/ai/analyze", { json: body });
@@ -80,7 +80,7 @@ export class AIPanel {
       this.out.scrollIntoView({ block: "start", behavior: reduceMotion ? "auto" : "smooth" });
       if (!r.cached) this.loadHistory();
     } catch (e) {
-      this.out.replaceChildren(el("p", { class: "state err" }, t("ai.failed", { msg: e.message })));
+      kids(this.out, el("p", { class: "state err" }, t("ai.failed", { msg: e.message })));
     } finally {
       this.setBusy(false);
     }
@@ -96,42 +96,9 @@ export class AIPanel {
   }
 
   render() {
-    const r = this.current;
-    if (!r) return;
-    const copy = el("button", { type: "button" }, t("ai.copy"));
-    copy.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(toPlainText(r)); copy.textContent = t("ai.copied"); } catch { copy.textContent = t("ai.copy_failed"); }
-      setTimeout(() => (copy.textContent = t("ai.copy")), 2000);
-    });
-    const md = el("button", { type: "button", onclick: () => download(`${t("ai.file")}-${(r.generated_at || "").slice(0, 10)}.md`, toMarkdown(r, this.thread), "text/markdown;charset=utf-8") }, t("ai.markdown"));
-    const pdf = el("button", { type: "button", onclick: () => this.print() }, t("ai.print"));
-
-    const followForm = el("form", { class: "followup" },
-      el("label", { class: "sr-only", for: "fu-q" }, t("ai.followup_label")),
-      el("input", { id: "fu-q", type: "text", maxlength: 600, placeholder: t("ai.followup_ph") }),
-      el("button", { type: "submit", disabled: !r.id }, t("ai.send")));
-    followForm.addEventListener("submit", (e) => { e.preventDefault(); this.followup(followForm); });
-
+    if (!this.current) return;
     this.out.querySelectorAll("canvas").forEach(destroy);
-    this.out.replaceChildren(el("article", { class: "report" },
-      el("h3", {}, r.title || t("ai.analysis")),
-      el("div", { class: "rmeta" }, t("ai.meta", { q: r.question ? t("ai.meta_q", { q: r.question }) : "", model: r.model, t: dateTime(r.generated_at),
-        cached: r.cached ? t("ai.meta_cached") : "" })),
-      el("div", { class: "ractions" }, copy, md, pdf),
-      renderMarkdown(r.summary),
-      r.findings?.length ? el("h5", {}, t("ai.findings")) : null,
-      r.findings?.length ? el("ul", { class: "findings" }, r.findings.map((f) =>
-        el("li", {}, sevTag(f.severity), el("strong", {}, f.title), el("div", { class: "fdetail" }, f.detail)))) : null,
-      ...charts(r.charts),
-      r.recommendations?.length ? el("h5", {}, t("ai.recommendations")) : null,
-      r.recommendations?.length ? el("ul", { class: "plain" }, r.recommendations.map((x) => el("li", {}, x))) : null,
-      r.caveats?.length ? el("h5", {}, t("ai.caveats")) : null,
-      r.caveats?.length ? el("ul", { class: "plain caveats" }, r.caveats.map((x) => el("li", {}, x))) : null,
-      el("p", { class: "aiflag" }, t("ai.flag")),
-      el("div", { class: "thread" },
-        ...this.thread.flatMap((th) => [el("div", { class: "q" }, t("ai.followup_q", { q: th.question })), renderMarkdown(th.answer), ...charts(th.charts)]),
-        r.id ? followForm : el("p", { class: "note" }, t("ai.followup_na"))),
-    ));
+    kids(this.out, reportArticle(this.current, this.thread, { onFollowup: (form) => this.followup(form) }));
   }
 
   async followup(form) {
@@ -154,23 +121,58 @@ export class AIPanel {
     }
   }
 
-  print() {
-    const r = this.current;
-    const area = document.getElementById("print-area");
-    area.replaceChildren(...[
-      el("h1", {}, r.title || t("ai.analysis")),
-      el("div", { class: "meta" }, t("ai.print_meta", { model: r.model, t: dateTime(r.generated_at) })),
-      renderMarkdown(r.summary),
-      r.findings?.length ? el("h2", {}, t("ai.findings")) : null,
-      r.findings?.length ? el("ul", {}, r.findings.map((f) => el("li", {}, el("strong", {}, `${t(`sev.${f.severity}`)}: ${f.title}. `), f.detail))) : null,
-      ...(r.charts || []).flatMap((c) => [el("h2", {}, c.title), valueTable(c)]),
-      r.recommendations?.length ? el("h2", {}, t("ai.recommendations")) : null,
-      r.recommendations?.length ? el("ul", {}, r.recommendations.map((x) => el("li", {}, x))) : null,
-      r.caveats?.length ? el("h2", {}, t("ai.caveats")) : null,
-      r.caveats?.length ? el("ul", {}, r.caveats.map((x) => el("li", {}, x))) : null,
-      ...this.thread.flatMap((th) => [el("h2", {}, t("ai.followup_q", { q: th.question })), renderMarkdown(th.answer)]),
-    ].filter(Boolean));
-    area.querySelectorAll("details").forEach((d) => (d.open = true));
-    window.print();
-  }
+  print() { printReport(this.current, this.thread); }
+}
+
+/** Report article (Gemini analysis) with copy/Markdown/print actions, findings, charts and the follow-up thread. */
+export function reportArticle(r, thread, { onFollowup }) {
+  const copy = el("button", { type: "button" }, t("ai.copy"));
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(toPlainText(r)); copy.textContent = t("ai.copied"); } catch { copy.textContent = t("ai.copy_failed"); }
+    setTimeout(() => (copy.textContent = t("ai.copy")), 2000);
+  });
+  const md = el("button", { type: "button", onclick: () => download(`${t("ai.file")}-${(r.generated_at || "").slice(0, 10)}.md`, toMarkdown(r, thread), "text/markdown;charset=utf-8") }, t("ai.markdown"));
+  const pdf = el("button", { type: "button", onclick: () => printReport(r, thread) }, t("ai.print"));
+  const followForm = el("form", { class: "followup" },
+    el("label", { class: "sr-only" }, t("ai.followup_label")),
+    el("input", { type: "text", maxlength: 600, placeholder: t("ai.followup_ph"), "aria-label": t("ai.followup_label") }),
+    el("button", { type: "submit", disabled: !r.id }, t("ai.send")));
+  followForm.addEventListener("submit", (e) => { e.preventDefault(); onFollowup?.(followForm); });
+  return el("article", { class: "report" },
+    el("h3", {}, r.title || t("ai.analysis")),
+    el("div", { class: "rmeta" }, t("ai.meta", { q: r.question ? t("ai.meta_q", { q: r.question }) : "", model: r.model, t: dateTime(r.generated_at),
+      cached: r.cached ? t("ai.meta_cached") : "" })),
+    el("div", { class: "ractions" }, copy, md, pdf),
+    renderMarkdown(r.summary),
+    r.findings?.length ? el("h5", {}, t("ai.findings")) : null,
+    r.findings?.length ? el("ul", { class: "findings" }, r.findings.map((f) =>
+      el("li", {}, sevTag(f.severity), el("strong", {}, f.title), el("div", { class: "fdetail" }, f.detail)))) : null,
+    ...charts(r.charts),
+    r.recommendations?.length ? el("h5", {}, t("ai.recommendations")) : null,
+    r.recommendations?.length ? el("ul", { class: "plain" }, r.recommendations.map((x) => el("li", {}, x))) : null,
+    r.caveats?.length ? el("h5", {}, t("ai.caveats")) : null,
+    r.caveats?.length ? el("ul", { class: "plain caveats" }, r.caveats.map((x) => el("li", {}, x))) : null,
+    el("p", { class: "aiflag" }, t("ai.flag")),
+    el("div", { class: "thread" },
+      ...thread.flatMap((th) => [el("div", { class: "q" }, t("ai.followup_q", { q: th.question })), renderMarkdown(th.answer), ...charts(th.charts)]),
+      r.id ? followForm : el("p", { class: "note" }, t("ai.followup_na"))));
+}
+
+export function printReport(r, thread) {
+  const area = document.getElementById("print-area");
+  kids(area, ...[
+    el("h1", {}, r.title || t("ai.analysis")),
+    el("div", { class: "meta" }, t("ai.print_meta", { model: r.model, t: dateTime(r.generated_at) })),
+    renderMarkdown(r.summary),
+    r.findings?.length ? el("h2", {}, t("ai.findings")) : null,
+    r.findings?.length ? el("ul", {}, r.findings.map((f) => el("li", {}, el("strong", {}, `${t(`sev.${f.severity}`)}: ${f.title}. `), f.detail))) : null,
+    ...(r.charts || []).flatMap((c) => [el("h2", {}, c.title), valueTable(c)]),
+    r.recommendations?.length ? el("h2", {}, t("ai.recommendations")) : null,
+    r.recommendations?.length ? el("ul", {}, r.recommendations.map((x) => el("li", {}, x))) : null,
+    r.caveats?.length ? el("h2", {}, t("ai.caveats")) : null,
+    r.caveats?.length ? el("ul", {}, r.caveats.map((x) => el("li", {}, x))) : null,
+    ...thread.flatMap((th) => [el("h2", {}, t("ai.followup_q", { q: th.question })), renderMarkdown(th.answer)]),
+  ].filter(Boolean));
+  area.querySelectorAll("details").forEach((d) => (d.open = true));
+  window.print();
 }

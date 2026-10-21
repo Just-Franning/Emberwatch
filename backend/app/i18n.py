@@ -6,6 +6,7 @@ is stored language-neutral as a key plus parameters and rendered here per reques
 from __future__ import annotations
 
 import json
+import re
 import string
 from typing import Any, Callable
 
@@ -179,6 +180,7 @@ T: dict[str, dict[str, str]] = {
         "err.timeout": "Zeitlimit überschritten.",
         "err.busy": "Läuft bereits, bitte warten.",
         "err.too_large": "Datei zu groß (maximal {mb} MB).",
+        "err.body_too_large": "Anfrage zu groß.",
         "err.empty": "Keine Daten erhalten.",
         "err.ai": "Gemini: {detail}",
         "err.ai_disabled": "GEMINI_API_KEY ist nicht gesetzt.",
@@ -407,6 +409,7 @@ T: dict[str, dict[str, str]] = {
         "err.timeout": "Time limit exceeded.",
         "err.busy": "Already running, please wait.",
         "err.too_large": "File too large (maximum {mb} MB).",
+        "err.body_too_large": "Request too large.",
         "err.empty": "No data received.",
         "err.ai": "Gemini: {detail}",
         "err.ai_disabled": "GEMINI_API_KEY is not set.",
@@ -507,9 +510,20 @@ class _Safe(dict):
 _FMT = string.Formatter()
 
 
+_PLURAL = re.compile(r"\{(\w+)\|([^{}|]*)\|([^{}|]*)\}")
+
+
+def _plural(tpl: str, params: dict[str, Any]) -> str:
+    """{n|one|many}: the singular form if the parameter is exactly 1, else the plural form."""
+    if "|" not in tpl:
+        return tpl
+    return _PLURAL.sub(lambda m: m.group(2) if str(params.get(m.group(1))).strip() in ("1", "1.0") else m.group(3), tpl)
+
+
 def t(lang: str, key: str, **params: Any) -> str:
-    """Translate key; unknown keys fall back to English, then to the key itself. Missing params stay visible."""
-    tpl = T.get(lang, T[DEFAULT_LANG]).get(key) or T[DEFAULT_LANG].get(key) or key
+    """Translate key; unknown keys fall back to English, then to the key itself. Missing params stay visible.
+    {n|one|many} picks the singular or plural form by the parameter n."""
+    tpl = _plural(T.get(lang, T[DEFAULT_LANG]).get(key) or T[DEFAULT_LANG].get(key) or key, params)
     try:
         return _FMT.vformat(tpl, (), _Safe({k: ("" if v is None else v) for k, v in params.items()}))
     except (ValueError, IndexError):
@@ -520,17 +534,22 @@ def has(key: str) -> bool:
     return key in T[DEFAULT_LANG]
 
 
+class Key(str):
+    """A text key used as a parameter value; it is translated when the message is rendered."""
+
+
 class AppError(Exception):
     """Error with a translatable message. status is the HTTP status when it reaches the API."""
 
-    def __init__(self, key: str, status: int = 400, **params: Any) -> None:
+    def __init__(self, key: str, status: int = 400, /, **params: Any) -> None:
+        # positional-only, so "status" can also be a text placeholder (e.g. an upstream HTTP status)
         super().__init__(key)
         self.key = key
         self.status = status
         self.params = params
 
     def render(self, lang: str) -> str:
-        return t(lang, self.key, **self.params)
+        return t(lang, self.key, **{k: t(lang, v) if isinstance(v, Key) else v for k, v in self.params.items()})
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -668,6 +687,11 @@ def render_alert(row: dict[str, Any], params: dict[str, Any], lang: str) -> tupl
         args["expected"] = ", ".join(f"AS{a}" for a in args["expected"]) or t(lang, "none")
     if "count" in args:
         args["count"] = fint(args["count"], lang)
+    if key.startswith("myip."):
+        if args.get("kind") in ("home", "server"):
+            args["kind"] = t(lang, f"myip.kind.{args['kind']}")
+        if args.get("source") in ("visit", "confirmed", "report", "dyndns", "egress"):
+            args["source"] = t(lang, f"myip.src.{args['source']}")
     title = t(lang, f"alert.{key}.title", **args)
     detail = t(lang, f"alert.{key}.detail", **args)
     return title[:300], detail[:800]
@@ -700,3 +724,20 @@ def render_status(row: dict[str, Any], lang: str) -> str:
     msg = t(lang, f"status.{code}", **params)
     extra = row.get("message") or ""
     return f"{msg}; {extra}" if extra else msg
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Texts of other modules (tool box, own IPs) are kept next to their code and merged here.
+
+def _merge(extra: dict[str, dict[str, str]]) -> None:
+    for lang in LANGS:
+        T[lang].update(extra.get(lang, {}))
+
+
+from .toolbox.texts import TT as _TB  # noqa: E402
+
+_merge(_TB)
+
+from .texts_more import OT as _OT  # noqa: E402
+
+_merge(_OT)

@@ -1,7 +1,7 @@
 // Collapsible panels (click, shortcuts, stored), status popover and settings popover.
 import { LANGS, lang, setLang, t } from "./i18n.js";
 import { basemapPref, setBasemapPref } from "./map.js";
-import { ago, api, el, num } from "./util.js";
+import { ago, api, el, kids, num } from "./util.js";
 import { getOpacity, resetLayout, setOpacity } from "./windows.js";
 
 const KEY = "emberwatch.panels";
@@ -45,18 +45,19 @@ export function toggle(id) {
   setCollapsed(id, !document.getElementById(id).classList.contains("collapsed"));
 }
 
-export function initShortcuts({ onTools, onAssets, onSearch, onEscape }) {
+export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, isLage }) {
   document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) { onPalette(); e.preventDefault(); return; }
     const tgt = e.target;
     if (tgt instanceof HTMLInputElement || tgt instanceof HTMLTextAreaElement || tgt instanceof HTMLSelectElement || tgt.isContentEditable) {
       if (e.key === "Escape") tgt.blur();
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "[") { toggle("panel-left"); e.preventDefault(); }
-    else if (e.key === "]") { toggle("panel-right"); e.preventDefault(); }
+    if (e.key === "1" || e.key === "2" || e.key === "3") { onArea(["lage", "analyse", "netz"][Number(e.key) - 1]); e.preventDefault(); }
+    else if (e.key === "[" && isLage()) { toggle("panel-left"); e.preventDefault(); }
+    else if (e.key === "]" && isLage()) { toggle("panel-right"); e.preventDefault(); }
     else if (e.key === "t" || e.key === "T") { onTools(); e.preventDefault(); }
-    else if (e.key === "a" || e.key === "A") { onAssets(); e.preventDefault(); }
     else if (e.key === "/") { onSearch(); e.preventDefault(); }
     else if (e.key === "Escape") onEscape();
   });
@@ -74,7 +75,7 @@ const srcName = (k) => SRC[k] || t(`src_name.${k}`);
 export function renderStatusDots(status) {
   const dots = document.getElementById("status-dots");
   const by = Object.fromEntries((status.sources || []).map((s) => [s.source, s]));
-  dots.replaceChildren(...CORE.map((k) => el("i", { class: !by[k] ? "" : by[k].ok ? "ok" : "fail", title: srcName(k) })));
+  kids(dots, ...CORE.map((k) => el("i", { class: !by[k] ? "" : by[k].ok ? "ok" : "fail", title: srcName(k) })));
 }
 
 export function renderStatusPanel(status, { basemapFailed }) {
@@ -99,7 +100,7 @@ export function renderStatusPanel(status, { basemapFailed }) {
   const row = (a, b) => el("tr", {}, el("td", {}, a), el("td", {}, b));
   const sl = status.syslog || {};
   const bgp = status.bgp || {};
-  panel.replaceChildren(
+  kids(panel,
     el("h3", {}, t("st.sources")), el("table", {}, el("tbody", {}, rows)),
     el("h3", {}, t("st.config")),
     el("table", {}, el("tbody", {},
@@ -147,7 +148,7 @@ export function renderSettings(status) {
         try { await api("api/auth/logout", { method: "POST" }); } finally { window.location.assign("login"); }
       } }, t("set.logout")))]
     : [];
-  panel.replaceChildren(
+  kids(panel,
     el("h3", {}, t("set.language")), el("div", { class: "row" }, langSel),
     el("h3", {}, t("set.opacity")), el("div", { class: "row" }, op, opVal),
     el("h3", {}, t("set.layout")), el("p", { class: "note" }, t("set.layout_note")),
@@ -156,7 +157,7 @@ export function renderSettings(status) {
     ...logout,
     el("h3", {}, t("st.shortcuts")),
     el("table", {}, el("tbody", {},
-      ...[["[", "st.k_left"], ["]", "st.k_right"], ["T", "st.k_tools"], ["A", "st.k_assets"], ["/", "st.k_search"], ["Esc", "st.k_esc"]]
+      ...[[t("st.kbd_palette"), "st.k_palette"], ["1 · 2 · 3", "st.k_areas"], ["/", "st.k_search"], ["T", "st.k_tools"], ["[", "st.k_left"], ["]", "st.k_right"], ["Esc", "st.k_esc"]]
         .map(([a, b]) => el("tr", {}, el("td", {}, el("kbd", {}, a)), el("td", {}, t(b)))))),
   );
 }

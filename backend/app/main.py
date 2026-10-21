@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import csv
 import io
 import ipaddress
@@ -36,12 +38,20 @@ from .domains import Domains
 from .geo import Geo
 from .i18n import AppError, t
 from .logs import Matcher, SyslogServer, analyze_file
+from .myip import KINDS as MYIP_KINDS
+from .myip import MyIP
 from .notify import Notifier
+from .objects import TYPES as OBJ_TYPES
+from .objects import Objects, object_context
 from .products import Products
 from .reputation import Reputation
 from .sources import abusech, epss, infra, kev, radar, ransomware
 from .surface import Surface
-from .tools import ToolKit, parse_ports
+from .tools import ToolKit
+from .toolbox import registry as tbreg
+from .toolbox import runner as tbrun
+from .toolbox.common import Ctx, cache_prune
+from .toolbox.detect import detect as tb_detect
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -63,6 +73,8 @@ bgp = BgpMonitor(S, db)
 matcher = Matcher(db, reputation)
 syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
 auth = Auth(S)
+myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
+objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -301,16 +313,28 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def daily_job() -> None:
         await _daily_report(client)
 
+    async def myip_job() -> None:
+        await myip.refresh(client)
+        for kind in MYIP_KINDS:
+            if myip.needs_check(kind):
+                await myip.check(client, kind)
+
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
+        tbrun.prune(db)
+        cache_prune(db)
+        # Gemini analyses (one per object page analysis since 3.1): same retention as alerts, at most 2000
+        db.execute("DELETE FROM ai_reports WHERE created_at < ?", (_cutoff(S.alert_retention_days),))
+        db.execute("DELETE FROM ai_reports WHERE id NOT IN (SELECT id FROM ai_reports ORDER BY id DESC LIMIT 2000)")
+        db.execute("DELETE FROM ai_threads WHERE report_id NOT IN (SELECT id FROM ai_reports)")  # their follow-ups
 
     return {
         "c2": c2_job, "radar": radar_job, "backfill": backfill_job, "infra": infra_job, "ransomware": ransomware_job,
         "kev": kev_job, "epss": epss_job, "products": products_job, "reputation": reputation_job, "surface": surface_job,
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
-        "daily": daily_job, "maintenance": maintenance_job,
+        "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job,
     }
 
 
@@ -327,6 +351,7 @@ async def lifespan(app: FastAPI):
             ("epss", S.epss_interval, 120), ("products", 60, 180), ("reputation", 30, 40), ("surface", 60, 90),
             ("scan", 60, 600), ("ct", S.ct_interval_h * 60, 150), ("typo", S.typo_interval_h * 60, 240),
             ("alerts", 2, 120), ("patterns", 10, 300), ("daily", 1, 90), ("maintenance", 24 * 60, 900),
+            ("myip", 10, 45),
         ]
         tasks = [asyncio.create_task(_loop(name, minutes, jobs[name], delay)) for name, minutes, delay in plan]
         if S.bgp_live:
@@ -349,6 +374,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Emberwatch", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
+
+class BodyLimit:
+    """Counts the bytes of request bodies while they are read, so bodies without Content-Length (chunked) are limited
+    too; declared lengths are already refused in guard(). The log upload streams to a file with its own limit."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "http" or scope.get("path") == "/api/logs/analyze":
+            await self.inner(scope, receive, send)
+            return
+        seen = 0
+
+        async def limited() -> dict[str, Any]:
+            nonlocal seen
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > MAX_BODY:
+                    raise StarletteHTTPException(413)  # FastAPI passes it through body parsing; see http_error()
+            return msg
+
+        await self.inner(scope, limited, send)
+
+
+app.add_middleware(BodyLimit)
+
 BASEMAP_HOST = "https://tiles.openfreemap.org"
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
@@ -356,8 +409,11 @@ CSP = (
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/boot.js"}
+                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/boot.js",
+                "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
+MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
+MAX_BODY_PUBLIC = 64 * 1024  # requests without a session (login, reporter)
 
 
 def _hostport(v: str) -> str:
@@ -396,13 +452,23 @@ async def guard(request: Request, call_next):
     request.state.lang = lang
     path = request.url.path
     resp: Response
-    if path.startswith("/api/") and (
+    public = ".." not in path and (path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES))
+    too_large = False
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and path != "/api/logs/analyze":  # the upload checks itself
+        limit = MAX_BODY_PUBLIC if public else MAX_BODY
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            too_large = not declared.isdigit() or int(declared) > limit
+        elif public:  # without a session only bodies of declared length (no unbounded chunked uploads)
+            too_large = "chunked" in request.headers.get("transfer-encoding", "").lower()
+    if too_large:
+        resp = JSONResponse({"detail": t(lang, "err.body_too_large"), "key": "err.body_too_large"}, 413)
+    elif path.startswith("/api/") and (
         request.headers.get("sec-fetch-site") not in (None, "same-origin", "none")
         or (request.method not in ("GET", "HEAD", "OPTIONS") and not origin_ok(request))
     ):
         resp = JSONResponse({"detail": t(lang, "err.csrf"), "key": "err.csrf"}, 403)
-    elif auth.enabled and not (".." not in path and (path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES))) \
-            and not auth.valid(request.cookies.get(COOKIE)):
+    elif auth.enabled and not public and not auth.valid(request.cookies.get(COOKIE)):
         if path.startswith("/api/"):
             resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
         elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
@@ -442,7 +508,8 @@ async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
     if not request.url.path.startswith("/api/"):
         return PlainTextResponse(str(exc.detail), exc.status_code)
-    key = {404: "err.not_found", 403: "err.forbidden", 405: "err.bad_request"}.get(exc.status_code, "err.bad_request")
+    key = {404: "err.not_found", 403: "err.forbidden", 405: "err.bad_request", 413: "err.body_too_large"}.get(
+        exc.status_code, "err.bad_request")
     return JSONResponse({"detail": t(_lang(request), key), "key": key}, exc.status_code)
 
 
@@ -1136,8 +1203,12 @@ async def api_analyze(request: Request, body: AnalyzeIn) -> dict[str, Any]:
 
 
 @app.get("/api/ai/reports")
-def api_reports(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]]:
-    rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports ORDER BY id DESC LIMIT ?", (limit,))
+def api_reports(limit: int = Query(20, ge=1, le=100), scope: str | None = Query(None, max_length=320)) -> list[dict[str, Any]]:
+    if scope:
+        rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports WHERE scope=? ORDER BY id DESC LIMIT ?",
+                        (scope, limit))
+    else:
+        rows = db.query("SELECT id, created_at, scope, model, payload FROM ai_reports ORDER BY id DESC LIMIT ?", (limit,))
     return [{**json.loads(r["payload"]), "id": r["id"], "created_at": r["created_at"], "scope": r["scope"], "model": r["model"]}
             for r in rows]
 
@@ -1162,97 +1233,407 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     report = json.loads(rows[0]["payload"])
     thread = api_thread(body.report_id)
     scope = rows[0]["scope"]
-    cc = scope.split(":", 1)[1] if ":" in scope else None
-    country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
-    ctx = build_context(overview(), geo.country_name, lang, cc, country, S.home_region)
+    if scope.startswith("obj:") and scope.count(":") >= 2:
+        _, otype, value = scope.split(":", 2)
+        page = await object_page(request, otype, value)
+        if page.get("private"):
+            raise AppError("err.tb.third_private", addr=page["value"], party="Gemini (Google)")
+        ctx = obj_ai_context(page, lang)
+    else:
+        cc = scope.split(":", 1)[1] if ":" in scope else None
+        country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
+        ctx = build_context(overview(), geo.country_name, lang, cc, country, S.home_region)
     ans = await ai.followup(request.app.state.client, report, thread, body.question.strip(), ctx, lang)
     tid = db.insert("INSERT INTO ai_threads(report_id, created_at, question, payload) VALUES(?,?,?,?)",
                     (body.report_id, utcnow(), body.question.strip(), json.dumps(ans)))
     return {"id": tid, "question": body.question.strip(), **ans}
 
 
-# --- network tools -------------------------------------------------------------------------------------------------------
-def _tools_on() -> None:
-    if not S.tools_enabled:
-        raise AppError("err.tools_disabled", 403)
+# --- tool box ------------------------------------------------------------------------------------------------------------
+def tb_ctx(request: Request) -> Ctx:
+    return Ctx(S, db, geo, reputation, toolkit, matcher, domains, surface, request.app.state.client, _lang(request))
 
 
-def _sse(request: Request, gen: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
-    lang = _lang(request)
-
-    def enc(ev: dict[str, Any]) -> bytes:
-        if "key" in ev and ev.get("type") == "info":
-            ev = {**ev, "text": t(lang, ev["key"], **(ev.get("params") or {}))}
-        return f"event: {ev.get('type', 'message')}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n".encode()
-
+def _ndjson(request: Request, gen: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
     async def body() -> AsyncIterator[bytes]:
         try:
             async for ev in gen:
+                yield tbrun.ndjson(ev)
                 if await request.is_disconnected():
                     break
-                yield enc(ev)
-        except AppError as exc:
-            yield enc({"type": "error", "text": exc.render(lang)})
-        except Exception as exc:  # unexpected: report briefly, do not crash
-            log.exception("tool stream failed")
-            yield enc({"type": "error", "text": t(lang, "err.internal", detail=exc.__class__.__name__)})
         finally:
             await gen.aclose()
-        yield b"event: end\ndata: {}\n\n"
 
-    return StreamingResponse(body(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-async def _tool(coro: Awaitable[dict[str, Any]]) -> dict[str, Any]:
-    try:
-        return await asyncio.wait_for(coro, timeout=60)
-    except asyncio.TimeoutError as exc:
-        raise AppError("err.timeout", 504) from exc
+    return StreamingResponse(body(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.get("/api/tools/ping")
-async def api_ping(request: Request, target: str = Query(..., min_length=1, max_length=253), count: int = Query(5, ge=1, le=20)):
-    _tools_on()
-    return _sse(request, toolkit.ping(target, count))
+@app.get("/api/tb/registry")
+def api_tb_registry(request: Request) -> dict[str, Any]:
+    lang = _lang(request)
+    return {"tools": [tbreg.describe(t, S, lang) for t in tbreg.TOOLS],
+            "recipes": [tbreg.recipe_info(r, lang) for r in tbreg.RECIPES],
+            "groups": list(tbreg.GROUPS), "cyberchef_url": S.cyberchef_url, "enabled": S.tools_enabled}
 
 
-@app.get("/api/tools/traceroute")
-async def api_traceroute(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                         max_hops: int = Query(30, ge=1, le=40)):
-    _tools_on()
-    return _sse(request, toolkit.traceroute(request.app.state.client, target, max_hops))
+@app.get("/api/tb/detect")
+def api_tb_detect(q: str = Query("", max_length=4096)) -> dict[str, Any]:
+    d = tb_detect(q)
+    if d["type"] == "empty":
+        return {**d, "tools": [], "recipes": []}
+    # tools that would refuse the target (private address or internal name for a third party) are not suggested
+    return {**d, "tools": tbrun.fitting_tools(d), "recipes": tbreg.recipes_for(d)}
 
 
-@app.get("/api/tools/dns")
-async def api_dns(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                  resolver: str = Query("cloudflare", pattern="^(system|cloudflare|google|quad9)$")) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.dns_lookup(target, resolver, _lang(request)))
+class RunIn(BaseModel):
+    tool: str = Field(..., min_length=1, max_length=40)
+    target: str = Field("", max_length=4096)
+    params: dict[str, Any] = Field(default_factory=dict)
+    consent: bool = False
 
 
-@app.get("/api/tools/rdap")
-async def api_rdap(request: Request, target: str = Query(..., min_length=1, max_length=253)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.rdap(request.app.state.client, target))
+@app.post("/api/tb/run")
+async def api_tb_run(request: Request, body: RunIn) -> StreamingResponse:
+    spec = tbreg.BY_ID.get(body.tool)
+    if spec is None:
+        raise AppError("err.not_found", 404)
+    ctx = tb_ctx(request)
+    tbrun.check_available(spec, ctx)
+    target, kind, params = tbrun.prepare(spec, body.target, body.params, body.consent)
+    return _ndjson(request, tbrun.run_tool(ctx, spec, target, kind, params))
 
 
-@app.get("/api/tools/ipinfo")
-async def api_ipinfo(request: Request, target: str = Query(..., min_length=1, max_length=253)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.ipinfo(request.app.state.client, target, _lang(request)))
+class RecipeIn(BaseModel):
+    recipe: str = Field(..., min_length=1, max_length=20)
+    target: str = Field(..., min_length=1, max_length=15 * 1024 * 1024)
 
 
-@app.get("/api/tools/ports")
-async def api_ports(request: Request, target: str = Query(..., min_length=1, max_length=253),
-                    ports: str = Query(..., max_length=80)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.portcheck(target, parse_ports(ports), _lang(request)))
+@app.post("/api/tb/recipe")
+async def api_tb_recipe(request: Request, body: RecipeIn) -> StreamingResponse:
+    if not S.tools_enabled:
+        raise AppError("err.tools_disabled", 403)
+    target, kind = tbrun.prepare_recipe(body.recipe, body.target)
+    return _ndjson(request, tbrun.run_recipe(tb_ctx(request), body.recipe, target, kind))
 
 
-@app.get("/api/tools/http")
-async def api_http(request: Request, target: str = Query(..., min_length=1, max_length=500)) -> dict[str, Any]:
-    _tools_on()
-    return await _tool(toolkit.http_tls(target, _lang(request)))
+@app.get("/api/tb/history")
+def api_tb_history(type: str | None = Query(None, max_length=20), value: str | None = Query(None, max_length=2048),
+                   limit: int = Query(50, ge=1, le=500)) -> dict[str, Any]:
+    return {"runs": tbrun.history(db, type, value, limit)}
+
+
+@app.get("/api/tb/history/{rid}")
+def api_tb_history_get(rid: int) -> dict[str, Any]:
+    r = tbrun.get_run(db, rid)
+    if r is None:
+        raise AppError("err.not_found", 404)
+    return r
+
+
+@app.delete("/api/tb/history/{rid}")
+def api_tb_history_delete(rid: int) -> dict[str, Any]:
+    if not db.execute("DELETE FROM tool_runs WHERE id=?", (rid,)):
+        raise AppError("err.not_found", 404)
+    return {"deleted": rid}
+
+
+# --- objects (analysis area) -------------------------------------------------------------------------------------------
+async def object_page(request: Request, otype: str, value: str) -> dict[str, Any]:
+    lang = _lang(request)
+    if otype not in OBJ_TYPES:
+        raise AppError("err.obj.invalid")
+    client = request.app.state.client
+    if otype == "country":
+        cc = _cc(value)
+        country = country_localized(await country_data(request, cc), lang)
+        return await objects.build("country", cc, lang, client, country=country, trends=analytics.trends(db, cc, 30))
+    return await objects.build(otype, value, lang, client)
+
+
+def obj_ai_context(page: dict[str, Any], lang: str) -> dict[str, Any]:
+    ctx = object_context(page)
+    ctx["as_of_utc"] = utcnow()[:15] + "0:00Z"  # 10-minute steps: repeated questions hit the answer cache (ai.py, 600 s)
+    ctx["available_tools"] = [i18n.t(lang, f"tb.tool.{tid}") for tid in page.get("tools") or [] if tid != "cyberchef"]
+    return ctx
+
+
+@app.get("/api/obj")
+async def api_obj(request: Request, type: str = Query(..., max_length=10),
+                  value: str = Query(..., min_length=1, max_length=2048)) -> dict[str, Any]:
+    return await object_page(request, type, value)  # URLs up to 2048 characters, other types up to 300 (objects.normalize)
+
+
+class ObjAiIn(BaseModel):
+    type: str = Field(..., max_length=10)
+    value: str = Field(..., min_length=1, max_length=2048)
+    question: str | None = Field(None, max_length=600)
+
+
+@app.post("/api/ai/object")
+async def api_ai_object(request: Request, body: ObjAiIn) -> dict[str, Any]:
+    """Gemini assessment of one object. The object value is sent to Google; own assets only as a flag (objects.object_context)."""
+    lang = _lang(request)
+    page = await object_page(request, body.type, body.value)
+    if page.get("private"):
+        raise AppError("err.tb.third_private", addr=page["value"], party="Gemini (Google)")
+    q = (body.question or "").strip()
+    task = TASKS[lang]["object_question"] + q if q else TASKS[lang]["object"]
+    result = await ai.analyze(request.app.state.client, task, obj_ai_context(page, lang), lang)
+    scope_label = f"obj:{page['type']}:{page['value']}"
+    if not result.get("cached"):
+        result["id"] = db.insert("INSERT INTO ai_reports(created_at, scope, model, payload) VALUES(?,?,?,?)",
+                                 (utcnow(), scope_label, result["model"], json.dumps({**result, "question": q or None})))
+    return {**result, "scope": scope_label, "question": q or None}
+
+
+# --- deep views ---------------------------------------------------------------------------------------------------------
+@app.get("/api/kev")
+def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Query(None, max_length=80),
+            days: int = Query(0, ge=0, le=3650), ransomware: bool = False, min_epss: float = Query(0.0, ge=0.0, le=1.0),
+            mine: bool = False, sort: str = Query("date", pattern="^(date|epss)$"),
+            limit: int = Query(300, ge=1, le=2000)) -> dict[str, Any]:
+    """CISA KEV with EPSS, filterable. 'mine' = only CVEs of watched products or seen on own IPs (InternetDB)."""
+    exposed: set[str] = set()
+    for r in db.query("SELECT vulns FROM surface"):
+        try:
+            exposed.update(json.loads(r["vulns"] or "[]"))
+        except ValueError:
+            continue
+    watched = {r["cve"] for r in db.query("SELECT DISTINCT cve FROM product_cves")}
+    sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile "
+           "FROM kev k LEFT JOIN epss e ON e.cve = k.cve WHERE 1=1")
+    params: list[Any] = []
+    if q and q.strip():
+        sql += " AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
+        params += [_like(q.strip())] * 4
+    if vendor:
+        sql += " AND k.vendor = ? COLLATE NOCASE"
+        params.append(vendor.strip())
+    if days:
+        sql += " AND k.date_added >= ?"
+        params.append(_cutoff(days)[:10])
+    if ransomware:
+        sql += " AND lower(k.ransomware) = 'known'"
+    if min_epss > 0:
+        sql += " AND e.epss >= ?"
+        params.append(min_epss)
+    sql += " ORDER BY " + ("COALESCE(e.epss, -1) DESC, k.date_added DESC" if sort == "epss" else "k.date_added DESC, k.cve DESC")
+    rows = db.query(sql, params)
+    for r in rows:
+        r["watched"] = r["cve"] in watched
+        r["exposed"] = r["cve"] in exposed
+    if mine:
+        rows = [r for r in rows if r["watched"] or r["exposed"]]
+    vendors: dict[str, int] = {}
+    for r in rows:
+        vendors[r["vendor"] or "?"] = vendors.get(r["vendor"] or "?", 0) + 1
+    return {"total": len(rows), "rows": rows[:limit],
+            "vendors": [{"key": k, "count": v} for k, v in sorted(vendors.items(), key=lambda x: -x[1])[:25]],
+            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"]}
+
+
+@app.get("/api/infra")
+def api_infra(request: Request, days: int = Query(30, ge=1, le=60),
+              kind: str | None = Query(None, pattern="^(outage|hijack|leak|anomaly)$"),
+              cc: str | None = Query(None, max_length=2), limit: int = Query(500, ge=1, le=2000)) -> dict[str, Any]:
+    """Infrastructure events (Cloudflare Radar: outages, BGP hijacks and leaks, traffic anomalies); stored for 60 days."""
+    lang = _lang(request)
+    sql = ("SELECT id, kind, start_ts, end_ts, countries, asns, prefixes, cause, scope, confidence, url, meta FROM infra_events "
+           "WHERE COALESCE(end_ts, start_ts, updated_at) >= ?")
+    params: list[Any] = [_cutoff(days)]
+    if kind:
+        sql += " AND kind = ?"
+        params.append(kind)
+    rows = db.query(sql + " ORDER BY start_ts DESC", params)
+    want = _cc(cc) if cc else None
+    out = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            r["countries"] = json.loads(r["countries"] or "[]")
+            r["asns"] = json.loads(r["asns"] or "[]")
+            r["prefixes"] = json.loads(r["prefixes"] or "[]")
+            r["meta"] = json.loads(r["meta"] or "{}")
+        except ValueError:
+            continue
+        if want and want not in r["countries"]:
+            continue
+        r["meta"]["kind"] = r["kind"]
+        r["ongoing"] = r["end_ts"] is None and r["kind"] in ("outage", "leak", "anomaly")
+        counts[r["kind"]] = counts.get(r["kind"], 0) + 1
+        out.append(_event(r, lang))
+    return {"total": len(out), "counts": counts, "events": out[:limit]}
+
+
+# --- own IP and "my network" ----------------------------------------------------------------------------------------------
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _myip_kick(request: Request) -> None:
+    kick("myip", request.app.state.jobs["myip"])
+
+
+async def _myip_check_all(client: Any) -> None:
+    for kind in MYIP_KINDS:
+        if myip.current()[kind]:
+            await myip.check(client, kind)
+
+
+@app.get("/api/myip")
+def api_myip(request: Request) -> dict[str, Any]:
+    return {**myip.state(), "you": myip.peek(_client_ip(request)), "sightings": myip.sightings()}
+
+
+@app.post("/api/myip/visit")
+async def api_myip_visit(request: Request) -> dict[str, Any]:
+    res = myip.visit(_client_ip(request))
+    if res.get("auto_applied"):
+        _myip_kick(request)
+    return res
+
+
+class MyIPConfirmIn(BaseModel):
+    auto: bool = False
+
+
+@app.post("/api/myip/confirm")
+async def api_myip_confirm(request: Request, body: MyIPConfirmIn) -> dict[str, Any]:
+    res = myip.confirm(_client_ip(request), body.auto)
+    _myip_kick(request)
+    return res
+
+
+class MyIPConfigIn(BaseModel):
+    dyndns: str | None = Field(None, max_length=253)
+    auto_asn: bool | None = None
+
+
+@app.post("/api/myip/config")
+async def api_myip_config(request: Request, body: MyIPConfigIn) -> dict[str, Any]:
+    cfg = myip.configure(body.dyndns, body.auto_asn)
+    if body.dyndns:
+        _myip_kick(request)
+    return cfg
+
+
+@app.post("/api/myip/token")
+def api_myip_token() -> dict[str, Any]:
+    """Creates a new reporter token (replaces the old one). It is shown once; only its hash is stored."""
+    return {"token": myip.new_token()}
+
+
+@app.delete("/api/myip/token")
+def api_myip_token_delete() -> dict[str, Any]:
+    myip.revoke_token()
+    return {"ok": True}
+
+
+class MyIPKindIn(BaseModel):
+    kind: str = Field(..., pattern="^(home|server)$")
+
+
+@app.post("/api/myip/clear")
+def api_myip_clear(body: MyIPKindIn) -> dict[str, Any]:
+    myip.clear(body.kind)
+    return {"ok": True}
+
+
+@app.post("/api/myip/check")
+async def api_myip_check(request: Request) -> dict[str, Any]:
+    _throttle("myip-check", 60)
+    client = request.app.state.client
+    kick("myip-check", lambda: _myip_check_all(client))
+    return {"ok": True}
+
+
+def _report_token(request: Request) -> str | None:
+    """Bearer token, or the password of HTTP Basic auth (dyndns2 clients); the user name is ignored."""
+    scheme, _, cred = (request.headers.get("authorization") or "").partition(" ")
+    if scheme.lower() == "bearer":
+        return cred.strip() or None
+    if scheme.lower() == "basic":
+        try:
+            dec = base64.b64decode(cred.strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return None
+        return dec.partition(":")[2] or None
+    return None
+
+
+def _claimed(*vals: str | None) -> list[str] | None:
+    out = [x.strip() for v in vals if v for x in v.split(",") if x.strip()]
+    return out[:4] or None
+
+
+@app.post("/api/myip/report")
+async def api_myip_report(request: Request, ip: str | None = Query(None, max_length=100)) -> JSONResponse:
+    """Reporter for the home IP: a device at home calls this with the token (Authorization: Bearer).
+    Without ?ip= the connecting address is used (requires a reverse proxy that sets X-Forwarded-For)."""
+    status, ips = myip.report(_report_token(request), _client_ip(request), _claimed(ip))
+    if status == "ok":
+        _myip_kick(request)
+    code = {"ok": 200, "nochg": 200, "badauth": 401, "locked": 429, "noip": 400, "wait": 429}[status]
+    return JSONResponse({"status": status, "ips": ips}, code)
+
+
+@app.get("/nic/update")
+async def nic_update(request: Request, myip_q: str | None = Query(None, alias="myip", max_length=100),
+                     myipv6: str | None = Query(None, max_length=60)) -> PlainTextResponse:
+    """dyndns2-compatible update for routers and DynDNS clients (HTTP Basic auth, password = reporter token)."""
+    challenge = {"WWW-Authenticate": 'Basic realm="Emberwatch"'}
+    token = _report_token(request)
+    if not token:
+        return PlainTextResponse("badauth", 401, headers=challenge)
+    status, ips = myip.report(token, _client_ip(request), _claimed(myip_q, myipv6))
+    if status == "ok":
+        _myip_kick(request)
+        return PlainTextResponse("good " + " ".join(ips))
+    if status == "nochg":
+        return PlainTextResponse("nochg " + " ".join(ips))
+    if status in ("badauth", "locked"):
+        return PlainTextResponse("badauth", 401, headers=challenge)
+    return PlainTextResponse("911")  # noip / wait: the client retries later
+
+
+def _asset_risk(a: dict[str, Any]) -> str:
+    sf = a.get("surface") or {}
+    rep = a.get("reputation") or {}
+    if a.get("high_7d") or rep.get("drop") or sf.get("kev"):
+        return "high"
+    if a.get("alerts_7d") or sf.get("vulns") or rep.get("tor"):
+        return "medium"
+    return "ok"
+
+
+@app.get("/api/netz/overview")
+def api_netz_overview(request: Request) -> dict[str, Any]:
+    lang = _lang(request)
+    st = myip.state()
+    entries = []
+    for w in db.query("SELECT id, kind, value, label, created_at, scan, scan_ack FROM watchlist ORDER BY id DESC"):
+        a = asset_summary(w)
+        a["risk"] = _asset_risk(a)
+        entries.append(a)
+    rank = {"high": 0, "medium": 1, "ok": 2}
+    entries.sort(key=lambda a: (rank[a["risk"]], -(a.get("alerts_7d") or 0)))
+    prods = products.listing()
+    return {
+        "myip": {k: {f: st[k].get(f) for f in ("ip", "ip6", "source", "updated_at", "checked_at", "checks", "geo")}
+                 for k in MYIP_KINDS},
+        "myip_configured": bool(st["home"]["config"].get("dyndns") or st["home"]["config"].get("token_set")
+                                or st["home"]["config"].get("auto_asn")),
+        "you": myip.peek(_client_ip(request)),
+        "assets": {"total": len(entries), "by_risk": {k: sum(1 for a in entries if a["risk"] == k) for k in rank},
+                   "top": [{k: a.get(k) for k in ("id", "kind", "value", "label", "risk", "alerts_7d", "high_7d", "surface",
+                                                  "reputation")} for a in entries[:8]],
+                   "max": watchlist.MAX_ENTRIES},
+        "products": {"total": len(prods), "with_kev": sum(1 for p in prods if p["kev"]),
+                     "with_critical": sum(1 for p in prods if p["critical"])},
+        "alerts": {"stats": alerts.stats(db), "latest": alerts.listing(db, lang, limit=10)},
+        "scan": {"enabled": S.scan_enabled, "running": surface.current},
+        "syslog": syslog.info() if syslog else {"enabled": False},
+    }
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")
