@@ -304,6 +304,7 @@ def test_collect_store_cluster_alerts_images(m):
     st = {r["source"]: r for r in m.db.statuses()}
     assert st["news"]["ok"] and st["news"]["code"] == "news_partial"
     assert "Krebs" in json.loads(st["news"]["params"])["failed"] and "CERT-X" in json.loads(st["news"]["params"])["failed"]
+    assert st["news"]["message"] == "" and m.i18n.render_status(st["news"], "de").startswith("nicht erreichbar: ")
     srcs = {s["id"]: s for s in m.news.source_list()}
     assert set(srcs) == {"bsi", "therecord", "bleepingcomputer", "krebs", "certx"}
     assert srcs["certx"]["ok"] is False and "redirect refused" in srcs["certx"]["message"]

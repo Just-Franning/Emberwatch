@@ -359,8 +359,9 @@ class News:
         ok = len(self.sources) - len(failed)
         total = self.db.query("SELECT COUNT(*) AS n FROM news")[0]["n"]
         self.db.meta_set("news_rev", utcnow())  # invalidates cached overviews (main.welt_overview)
-        self.db.status("news", ok > 0, ", ".join(failed)[:300] if failed else "", total,
-                       code="news_partial" if failed and ok else None, params={"failed": ", ".join(failed)} if failed and ok else None)
+        partial = bool(failed) and ok > 0
+        self.db.status("news", ok > 0, "" if partial else ", ".join(failed)[:300], total,
+                       code="news_partial" if partial else None, params={"failed": ", ".join(failed)[:300]} if partial else None)
         return new_total
 
     def _source_status(self, src: Source, ok: bool, message: str, new: int = 0) -> None:
@@ -463,6 +464,8 @@ class News:
             pub = now
         if pub < now - timedelta(days=KEEP_DAYS_ON_FETCH):
             return False
+        if self.db.query("SELECT 1 FROM news WHERE url = ?", (link,)):
+            return False  # known item: no need to recognise it again
         text = strip_html(raw.get("desc") or raw.get("content") or "")
         if text.lower().startswith(title.lower()):
             text = text[len(title):].lstrip(" .:-–")

@@ -1,27 +1,35 @@
 # Emberwatch
 
-Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ransomware, ausgenutzte Schwachstellen und Internet-Infrastruktur aus öffentlichen Quellen, dazu Überwachung eigener Assets, Produkte und Logs.
+Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ransomware, ausgenutzte Schwachstellen und Internet-Infrastruktur aus öffentlichen Quellen, Sicherheitsmeldungen von Behörden und Fachmedien im geopolitischen Zusammenhang, dazu Überwachung eigener Assets, Produkte und Logs.
 
 [English](README.md) · **Deutsch**
 
-![Emberwatch Hauptansicht](docs/screenshot.webp)
+![Emberwatch: Cyberlage](docs/screenshot.webp)
 
 *Die Screenshots zeigen synthetische Demodaten.*
 
 ## Funktionen
 
-Emberwatch hat drei Bereiche: **Lage** (die Weltkarte), **Analyse** (Objekte und Werkzeuge) und **Mein Netz** (eigene IPs, Assets, Produkte und Logs). `Strg+K` öffnet eine Befehlspalette für alles.
+Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, rot), **Weltlage** (Sicherheitsmeldungen auf derselben Karte, indigo), **Analyse** (Objekte und Werkzeuge) und **Mein Netz** (eigene IPs, Assets, Produkte und Logs). `Strg+K` öffnet eine Befehlspalette für alles. Das gewählte Land und der Zeitraum gelten in beiden Kartenansichten.
 
-**Lage – globales Lagebild**
-- Weltkarte mit L7-Angriffsflüssen (Ursprung → Ziel), Länderflächen nach Angriffsanteil, gemeldeten C2-Servern, Ransomware-Opfern je Land, Internet-Ausfällen, BGP-Hijacks/Route-Leaks, Traffic-Anomalien und Seekabeln
+**Cyberlage – globales Lagebild**
+- Weltkarte mit L7-Angriffsflüssen (Ursprung → Ziel), Länderflächen nach Angriffsanteil, gemeldeten C2-Servern, Ransomware-Opfern je Land, Internet-Ausfällen, BGP-Hijacks/Route-Leaks, Traffic-Anomalien und Seekabeln; die Ebenen schalten die Chips über der Karte
+- *Heute wichtig*: das Wenige, das jetzt zählt – deine Alarme der letzten 48 Stunden, erkannte Muster und Ereignisse, über die viele Quellen berichten; vier Kennzahlen unter der Karte (dein Land als Angriffsziel, aktive C2, Ransomware in deiner Region, neue KEV, die dich betreffen)
 - Ranglisten: Ziel- und Ursprungsländer (24 h gegenüber 7 Tagen), DDoS-Vektoren, L7-Angriffskategorien, C2-Familien und Hosting-Netze, Ransomware-Gruppen und Branchen, neu ausgenutzte Schwachstellen (CISA KEV mit FIRST EPSS)
 - Regelbasierte Mustererkennung (steigende Länder und Vektoren, Spikes, neue C2-Familien, KEV-Häufungen, kritische Ausfälle, Korrelationen), deterministisch und nachvollziehbar
-- Zeitachse mit Tageshistorie (bis 90 Tage), kompakte Länderkarte mit Sprung zur vollständigen Länderanalyse
-- Karten-Werkzeugleiste: Ping, Traceroute und IP-Info mit Live-Anzeige auf der Karte; unter *Mehr*: Pfad-Qualität (Traceroute mit mehreren Paketen pro Hop), Globalping (Messungen von Messpunkten weltweit) und Mail-Hops (der Zustellweg eines Mail-Headers auf der Karte)
+- Zeitachse mit Tageshistorie (bis 90 Tage) bei Bedarf, kompakte Länderkarte mit Sprung zur vollständigen Länderanalyse
+- Karten-Werkzeugleiste bei Bedarf: Ping, Traceroute und IP-Info mit Live-Anzeige auf der Karte; unter *Mehr*: Pfad-Qualität (Traceroute mit mehreren Paketen pro Hop), Globalping (Messungen von Messpunkten weltweit) und Mail-Hops (der Zustellweg eines Mail-Headers auf der Karte)
 - Optionale Gemini-Berichte (global, Land, Heimatregion, freie Fragen mit Rückfragen), exportierbar als Markdown oder PDF. Das Modell erhält nur aggregierte Kennzahlen.
 
+**Weltlage – Sicherheitsmeldungen im Kontext**
+- Meldungen von Behörden-CERTs und Fachmedien (RSS/Atom) mit Überschrift, Anreißer, Vorschaubild und Link zum Original; Meldungen zum selben Ereignis werden zusammengefasst
+- Automatisch aus Überschrift und Anreißer erkannt: Länder, die genannte Herkunft, Akteure (MISP Galaxy), Schadsoftware, CVEs und die Art des Vorfalls (Ransomware, DDoS, Spionage, Sabotage, Datenabfluss, Strafverfolgung, Sanktionen, …). Zuschreibungen erscheinen als Aussagen der Quellen und sind als automatisch erkannt gekennzeichnet
+- Karte: Länderpaare (Herkunft → Ziel laut Meldungen) und genannte Länder; Filter für belegte Vorfälle (eine Behörde oder mindestens zwei Quellen), Strafverfolgung & Sanktionen, Quellen, Fokusland oder Heimatregion, Zeitraum
+- *Meldung im Kontext*: Einordnung, dasselbe Ereignis in anderen Quellen, was die lokalen Daten dazu sagen (KEV/EPSS der CVEs, aktive C2-Server der Schadsoftware, Cloudflare-Daten zum Länderpaar) und ob sie deine Produkte, CVEs oder Domains betrifft – solche Meldungen lösen auch Alarme aus
+- Akteure mit Decknamen, zugeordnetem Land und Auftraggeber, Konfidenz, Quellen und den Meldungen, die sie nennen; optionaler Gemini-Lagebrief für den Zeitraum und Gemini-Einordnung einer einzelnen Meldung
+
 **Analyse – Objekte und Werkzeuge**
-- Objektseiten für IPs, Netze, AS-Nummern, Domains, URLs, Datei-Hashes, CVEs, Länder, Malware-Familien, Ransomware-Gruppen und Hersteller: Risikobewertung mit Begründung, alles, was die lokalen Daten wissen, Bezug zu den eigenen Assets, Zusammenhänge, deine Alarme dazu, frühere Werkzeug-Läufe und eine optionale Gemini-Bewertung
+- Objektseiten für IPs, Netze, AS-Nummern, Domains, URLs, Datei-Hashes, CVEs, Länder, Malware-Familien, Ransomware-Gruppen, Akteure und Hersteller: Risikobewertung mit Begründung, alles, was die lokalen Daten wissen, Bezug zu den eigenen Assets, Zusammenhänge, deine Alarme dazu, frühere Werkzeug-Läufe und eine optionale Gemini-Bewertung
 - Werkzeugkasten: beliebige Eingabe einfügen (IP, Netz, AS, Domain, URL, E-Mail-Adresse, Hash, CVE oder Mail-Header); Emberwatch erkennt den Typ und zeigt, welche Werkzeuge passen, gruppiert nach Fragestellung:
   - *Erreichbarkeit:* Ping, Traceroute, Pfad-Qualität, Globalping
   - *Herkunft:* IP-Info, RDAP/Whois, BGP/RPKI (RIPEstat), Passive DNS (mnemonic), Zertifikate (Certificate Transparency)
@@ -41,7 +49,9 @@ Emberwatch hat drei Bereiche: **Lage** (die Weltkarte), **Analyse** (Objekte und
 - Log-Analyse (Upload, auch .gz) und optionaler Syslog-Empfang
 - Ein Alarm-Feed mit optionaler Matrix-Benachrichtigung und Tagesbericht
 
-**Oberfläche:** Deutsch und Englisch, verschiebbare und skalierbare Fenster auf der Karte, Tastenkürzel, Start-Animation, optionale Anmeldung.
+**Oberfläche:** Deutsch und Englisch, eine Seitenleiste auf der Karte (verschiebbar und skalierbar), Tastenkürzel, Start-Animation, optionale Anmeldung.
+
+![Weltlage: eine Meldung im Kontext](docs/weltlage.webp)
 
 ![Objektseite eines Landes](docs/object.webp)
 
@@ -94,8 +104,8 @@ Das Image `ghcr.io/saturdaynetlab/emberwatch` wird für `linux/amd64` und `linux
 | Tag | Inhalt |
 |---|---|
 | `latest` | neuestes Release |
-| `3`, `3.1` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
-| `3.1.0` | genau dieses Release |
+| `3`, `3.2` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
+| `3.2.0` | genau dieses Release |
 | `edge` | aktueller Stand von `main`, Änderungen zwischen den Releases |
 | `feature-<name>` | Test-Build eines Feature-Branches vor dem Zusammenführen (instabil) |
 | `sha-<commit>` | ein einzelner Build |
@@ -123,9 +133,10 @@ Neue Versionen stehen auf der [Releases-Seite](https://github.com/SaturdayNetLab
 4. **Meine IP einrichten.** *Mein Netz → Meine IP*: die Adresse übernehmen, von der du verbunden bist, einen DynDNS-Hostnamen eintragen oder ein Token für einen Melder erzeugen (siehe [Meine IP](#meine-ip)).
 5. **Produkte beobachten.** Nach einem Hersteller suchen, z. B. `Sophos`, und *Als Produkt beobachten* wählen, oder unter *Mein Netz → Produkte* anlegen.
 6. **Analysieren.** Unter *Analyse* eine IP, Domain, einen Hash, eine CVE oder einen Mail-Header eingeben, oder überall `Strg+K` drücken.
-7. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
+7. **Weltlage lesen.** Die *Weltlage* füllt sich innerhalb einer halben Stunde nach dem Start. Ein Klick auf ein Land setzt den Fokus, ein Klick auf eine Meldung zeigt sie im Kontext.
+8. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
 
-Tastenkürzel: `Strg+K` Befehlspalette, `1` `2` `3` Bereiche wechseln, `/` Suche, `T` Karten-Werkzeugleiste (in der Lage; sonst Werkzeugkasten), `[` und `]` Seitenpanels ein/aus, `Esc` schließen. Fenster auf der Karte lassen sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft und Start-Animation stehen unter *Einstellungen* (⚙).
+Tastenkürzel: `Strg+K` Befehlspalette, `1` `2` `3` `4` Bereiche wechseln, `/` Suche, `T` Karten-Werkzeugleiste (in der Cyberlage; sonst Werkzeugkasten), `]` Seitenleiste ein/aus, `Esc` schließen (auch die Meldung in der Weltlage). Die Seitenleiste lässt sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft und Start-Animation stehen unter *Einstellungen* (⚙).
 
 ### Meine IP
 
@@ -164,7 +175,13 @@ Alle Einstellungen sind Umgebungsvariablen; [`.env.example`](.env.example) enth�
 | `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_ROOM_ID` | – | Optionale Matrix-Benachrichtigung (Bot-Konto in einem unverschlüsselten Raum) |
 | `MATRIX_MIN_SEVERITY` | `high` | Mindest-Schwere für Benachrichtigungen |
 | `DAILY_REPORT_TIME` | `07:00` | Tagesbericht (Ortszeit, `TZ`), leer = aus |
-| `HOME_REGION`, `HOME_REGION_NAME` | – | Optionale Heimatregion, z. B. `DE,AT,CH` / `DACH`, ergänzt eine Regionsanalyse |
+| `HOME_REGION`, `HOME_REGION_NAME` | – | Optionale Heimatregion, z. B. `DE,AT,CH` / `DACH`, ergänzt eine Regionsanalyse und den Regionsfokus der Weltlage |
+| `NEWS_ENABLED` | `1` | `0` schaltet die Weltlage ab (keine Feeds, keine Akteursliste) |
+| `NEWS_INTERVAL_MIN` | `30` | Minuten zwischen den Feed-Abrufen (mind. 15; bedingte Anfragen) |
+| `NEWS_IMAGES` | `1` | Vorschaubilder der Meldungen; der Browser lädt sie vom Verlag (`0` = keine Bilder, kein `https:` in der Bild-Richtlinie) |
+| `NEWS_DISABLE` | – | Eingebaute Quellen abschalten, z. B. `golem,krebs` |
+| `NEWS_FEEDS` | – | Weitere Feeds: `id\|Name\|https://feed-url[\|gov\|sprache]`, mehrere mit `;` getrennt (`gov` = Behörde) |
+| `NEWS_RETENTION_DAYS` | `90` | Aufbewahrung der Meldungen in Tagen (7–365) |
 | `TOOLS_ENABLED` | `1` | `0` schaltet die Netzwerk-Tools und den Werkzeugkasten ab |
 | `TOOLS_ALLOW_PRIVATE` | `0` | `1` = Tools und aktive Scans dürfen private Adressen ansprechen |
 | `SCAN_ENABLED` | `1` | `0` schaltet aktive Scans vollständig ab |
@@ -197,10 +214,11 @@ Woher die Keys kommen:
 - Jedes Werkzeug zeigt, ob es passiv, aktiv oder ein Eingriff ist, ob das Ziel die Anfrage sieht und welcher Dritte die Eingabe erhält. Der Zonentransfer-Test braucht pro Lauf eine Bestätigung. Links von außen (Lesezeichen, andere Seiten) öffnen den Werkzeugkasten, starten aber nie selbst einen Lauf.
 - **Aktive Scans:** nur Systeme scannen, die dir gehören oder für die du eine Freigabe hast. Emberwatch scannt ein Asset erst nach ausdrücklicher Bestätigung und begrenzt Hosts, Ports und Parallelität. Das Scannen fremder Systeme kann strafbar sein.
 - Hochgeladene Logs werden in einer temporären Datei verarbeitet und sofort gelöscht; nur das Ergebnis geht an den Browser. Syslog-Zeilen werden nur als Alarm zu bekannten Indikatoren gespeichert.
-- Gemini-Lageberichte erhalten nur aggregierte Kennzahlen und erkannte Muster: keine Opfernamen, keine Roh-IOCs, keine Assets, keine Log-Inhalte. Die Gemini-Bewertung eines Objekts (nur auf Anforderung) sendet das Objekt und die Daten seiner Seite; eigene Assets, IPs und Produkte gehen nur als Hinweis mit, Opfernamen von Leak-Sites gar nicht.
+- Gemini-Lageberichte erhalten nur aggregierte Kennzahlen und erkannte Muster: keine Opfernamen, keine Roh-IOCs, keine Assets, keine Log-Inhalte. Die Gemini-Bewertung eines Objekts (nur auf Anforderung) sendet das Objekt und die Daten seiner Seite; eigene Assets, IPs und Produkte gehen nur als Hinweis mit, Opfernamen von Leak-Sites gar nicht. Lagebriefe und Einordnungen der Weltlage senden Überschriften, Anreißer, Quellen und die erkannten öffentlichen Angaben; ob eine Meldung dich betrifft, geht nur als Hinweis mit.
+- Weltlage: Feeds werden ohne Entity-Auflösung und externe Verweise gelesen (defusedxml), höchstens 5 MB je Feed, mit bedingten Anfragen; Weiterleitungen müssen auf HTTPS und öffentlichen Adressen bleiben. Vorschaubilder kommen aus dem Feed oder von der Artikelseite, die nur von der eigenen Domain der Quelle und von öffentlichen Adressen geholt wird (höchstens 400 KB, drei Weiterleitungen, jede geprüft). Überschriften und Anreißer werden als Text angezeigt; Links und Bilder nur über HTTPS, Bilder ohne Referrer.
 - *Meine IP* speichert die Adressen, von denen die Oberfläche aufgerufen wird (90 Tage), den Verlauf von Heim- und Server-IP und den Hash des Melder-Tokens. Werkzeug-Läufe werden 90 Tage gespeichert (höchstens 3.000) und lassen sich im Verlauf löschen; Gemini-Analysen so lange wie Alarme (`ALERT_RETENTION_DAYS`, höchstens 2.000).
 - Anfragen sind in der Größe begrenzt: 20 MB mit Sitzung (Mail-Analyse bis 15 MB), 64 KB ohne (Login, Melder).
-- Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), DB-IP-Downloads, die Ziele, die du in Werkzeugen oder Scans wählst, und die Dritten der Werkzeuge, die du ausführst (in der Oberfläche gekennzeichnet). CyberChef öffnet sich im Browser; die Eingabe steht im URL-Fragment und geht an keinen Server.
+- Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), Vorschaubilder der Meldungen (lädt der Browser von den Verlagen, `NEWS_IMAGES=0` schaltet das ab), DB-IP-Downloads, die Ziele, die du in Werkzeugen oder Scans wählst, und die Dritten der Werkzeuge, die du ausführst (in der Oberfläche gekennzeichnet). CyberChef öffnet sich im Browser; die Eingabe steht im URL-Fragment und geht an keinen Server.
 - Sicherung: alles liegt im Volume `/data` (`emberwatch.sqlite`, Anmeldedateien, Geodatenbanken).
 
 ## Aufbau
@@ -209,6 +227,7 @@ Woher die Keys kommen:
 Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ──  Emberwatch-Container
                                                                           FastAPI + uvicorn (1 Worker)
                                                                           ├─ Collectoren (asyncio-Schleifen) ── öffentliche Quellen
+                                                                          ├─ Weltlage: Feeds, Erkennung, Akteure (MISP Galaxy)
                                                                           ├─ Asset-Überwachung: InternetDB, Scans, CT, Typo, RIS Live
                                                                           ├─ eigene IPs (Aufrufe, DynDNS, Melder)
                                                                           ├─ Werkzeugkasten (NDJSON-Streams) und Objektseiten
@@ -217,10 +236,10 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
                                                                           └─ SQLite (/data)
 ```
 
-- Backend: `backend/app` (ein Modul je Aufgabe: `sources/` Collectoren, `analytics.py` Muster, `surface.py` Angriffsfläche und Scans, `domains.py` CT und ähnliche Domains, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` Log-Analyse und Syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` Objektseiten, `myip.py` eigene IPs).
+- Backend: `backend/app` (ein Modul je Aufgabe: `sources/` Collectoren, `analytics.py` Muster, `surface.py` Angriffsfläche und Scans, `domains.py` CT und ähnliche Domains, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` Log-Analyse und Syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` Objektseiten, `myip.py` eigene IPs, `news.py` Feeds und Meldungen, `nlp.py` Erkennung, `actors.py` Akteure).
 - Werkzeugkasten: `backend/app/toolbox` – `registry.py` beschreibt jedes Werkzeug (Eingaben, Stufe, Kennzeichen, Parameter) und ist die einzige Quelle für Oberfläche und serverseitige Prüfung; `detect.py` Typerkennung; `result.py` das einheitliche Ergebnisformat; `tools_*.py` die Werkzeuge nach Fragestellung; `runner.py` Läufe, Rezepte und Verlauf.
 - Texte des Backends (Muster, Alarme, Fehler) werden sprachneutral gespeichert und je Anfrage auf Deutsch oder Englisch erzeugt.
-- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML. `router.js` (Bereiche), `maptools.js` (Karten-Werkzeugleiste), `analyse.js` (Objekte, Werkzeugkasten, Ansichten), `netz.js` und `assets.js` (Mein Netz), `result.js` (stellt jedes Werkzeug-Ergebnis dar), `palette.js` (`Strg+K`).
+- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML. `router.js` (Bereiche), `maptools.js` (Karten-Werkzeugleiste), `welt.js` (Weltlage), `analyse.js` (Objekte, Werkzeugkasten, Ansichten), `netz.js` und `assets.js` (Mein Netz), `result.js` (stellt jedes Werkzeug-Ergebnis dar), `palette.js` (`Strg+K`).
 
 ## Datenquellen und Lizenzen
 
@@ -243,6 +262,8 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
 | [GreyNoise Community API](https://www.greynoise.io) | Internet-Scanner und bekannte Dienste (Werkzeug, auf Anforderung) | Bedingungen von GreyNoise |
 | [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch) | Datei-Hashes (Werkzeug, auf Anforderung) | Nutzungsbedingungen von abuse.ch |
 | [rdap.org](https://rdap.org) | RDAP-Bootstrap (Whois-Werkzeug) | öffentlich |
+| [MISP Galaxy](https://github.com/MISP/misp-galaxy) (Cluster threat-actor) | Akteure, Decknamen, Zuschreibungen | CC0 1.0 / BSD 2-Clause |
+| Feeds der Weltlage: [NCSC UK](https://www.ncsc.gov.uk), [BSI](https://www.bsi.bund.de), [The Record](https://therecord.media), [BleepingComputer](https://www.bleepingcomputer.com), [SecurityWeek](https://www.securityweek.com), [Krebs on Security](https://krebsonsecurity.com), [Golem.de](https://www.golem.de) | Überschriften, Anreißer und Vorschaubilder von Sicherheitsmeldungen, verlinkt zum Original | Rechte bleiben bei den Verlagen; Emberwatch zeigt, was die Feeds veröffentlichen, und verlinkt den Artikel |
 | [CyberChef](https://github.com/gchq/CyberChef) (GCHQ) | Dekodieren im Browser (Link) | Apache 2.0 |
 | [DB-IP Lite](https://db-ip.com) | IP-Geolokalisierung und ASN | CC BY 4.0 |
 | [TeleGeography](https://www.submarinecablemap.com) | Seekabel (Stand 2021) | CC BY-NC-SA 3.0 |
@@ -254,6 +275,7 @@ Mehrere Quellen erlauben nur nicht-kommerzielle Nutzung. Emberwatch ist für pri
 ## Einschränkungen
 
 - Cloudflare-Werte sind Anteile am von Cloudflare gesehenen Verkehr, keine absoluten Angriffszahlen. Ursprung ist der Standort der angreifenden IPs, nicht der Täter.
+- Weltlage: Die Erkennung arbeitet regelbasiert auf Überschrift und Anreißer; sie kann Länder, Akteure und Arten übersehen oder falsch lesen (z. B. ein Name, der auch ein gewöhnliches Wort ist). Eine Herkunft ist eine Zuschreibung einer Quelle oder das Land, das die MISP Galaxy dem erkannten Akteur zuordnet, kein Beweis. Die Zahl der Meldungen zeigt die Berichterstattung, die von den Quellen und ihren Sprachen abhängt, nicht das Ausmaß von Angriffen. Vorschaubilder kommen von den Verlagen und können fehlen.
 - Die Geolokalisierung (DB-IP Lite) ist ungefähr.
 - InternetDB wird etwa wöchentlich aktualisiert; ein heute geöffneter Port erscheint eventuell erst Tage später. Für aktuelle Ergebnisse den aktiven Scan nutzen.
 - Die Produktbeobachtung findet NVD-Beschreibungen über Schlüsselwörter; allgemeine Namen können Fehltreffer erzeugen.

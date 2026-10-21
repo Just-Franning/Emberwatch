@@ -39,5 +39,7 @@ These data are not part of the repository; each installation fetches them direct
 - RIPE NCC RIS Live and RIPEstat – RIPE NCC terms
 - SSLMate Cert Spotter – SSLMate terms
 - DB-IP Lite (IP to City, IP to ASN) – CC BY 4.0, "IP Geolocation by DB-IP"
+- MISP Galaxy, cluster "threat-actor" (threat actors, aliases, attributions) – CC0 1.0 / BSD 2-Clause, https://github.com/MISP/misp-galaxy
+- Security reports of the world view (NCSC UK, BSI, The Record, BleepingComputer, SecurityWeek, Krebs on Security, Golem.de and feeds you add) – headlines, teasers and preview images as published in the feeds; the rights stay with the publishers, every report links to its original
 - Map tiles: OpenFreeMap, © OpenMapTiles, © OpenStreetMap contributors
 - Google Gemini (optional) – Google terms
