@@ -6,6 +6,8 @@
 - After an update, browsers could keep the scripts of the previous version from their cache and show an empty interface
   ("null is not an object … this.form"). Scripts, styles and pages are now revalidated on every load. If you updated to
   3.1.0 and see this error: clear the browser cache for Emberwatch once or reload with Ctrl+Shift+R.
+- The status panel shows the note of a data source in the text (e.g. "no matching assets" instead of only "0 entries");
+  before, it was only a tooltip and not visible on touch devices.
 
 ## 3.1.0 – 2026-10-21
 

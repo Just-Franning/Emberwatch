@@ -84,10 +84,12 @@ export function renderStatusPanel(status, { basemapFailed }) {
   const keys = [...CORE, ...Object.keys(SRC).filter((k) => !CORE.includes(k) && by[k])];
   const rows = keys.map((k) => {
     const s = by[k];
-    const txt = !s ? t("st.not_fetched") : s.ok ? t("st.ok", { n: num(s.count ?? 0), ago: ago(s.last_ok) }) : t("st.failed", { msg: s.message || t("common.unknown") });
+    // the note of a source (e.g. "no matching assets") is shown in the text, not only as a tooltip (touch devices)
+    const okTxt = (x) => t("st.ok", { n: num(x.count ?? 0), ago: ago(x.last_ok) }) + (x.message ? ` · ${x.message}` : "");
+    const txt = !s ? t("st.not_fetched") : s.ok ? okTxt(s) : t("st.failed", { msg: s.message || t("common.unknown") });
     const dot = el("i", { class: `dot ${!s ? "" : s.ok ? "ok" : "fail"}` });
     return el("tr", {}, el("td", {}, dot, srcName(k)),
-      el("td", { class: s && !s.ok ? "warn-txt" : null, title: s?.ok && s.message ? s.message : null }, txt));
+      el("td", { class: s && !s.ok ? "warn-txt" : null }, txt));
   });
   const k = status.keys || {};
   const yes = (v) => t(v ? "common.set" : "common.missing");
