@@ -592,6 +592,14 @@ def test_mail_anchor_parsing_is_linear(m):
     assert mismatch(f'<a href="{real}"><span hidden>evil.example</span> www.bank.example</a>')
     assert mismatch(f"<a href={real}>www.bank.example</a>")
     assert mismatch(f'<a href="{real}">Jetzt anmelden</a>') == []
+    # entities, backslashes and href inside other attributes do not hide the real target
+    for body in ('<a href="https&#58;//login.evil.example/x">www.bank.example</a>',
+                 '<a href="https:\\\\login.evil.example\\x">www.bank.example</a>',
+                 f'<a data-href="https://www.bank.example/" href="{real}">www.bank.example</a>',
+                 f'<a title="href=https://www.bank.example/" href="{real}">www.bank.example</a>',
+                 f'<a href="{real}">www&#46;bank&#46;example</a>'):
+        assert mismatch(body) == [("www.bank.example", "login.evil.example")], body
+    assert mismatch('<a href="https://cdn.shop.example/agb.pdf">Unsere agb.pdf herunterladen</a>') == []  # a file name
 
     started = time.perf_counter()
     crafted = ("<a href='https://x.example/'>" * 40000) + ("<a " + "x" * 50) * 20000 + "<" * 200000

@@ -9,6 +9,8 @@ import time
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
 
+import dns.asyncresolver
+import dns.exception
 import httpx
 
 from ..tools import ToolError, is_public, parse_host, resolve
@@ -291,6 +293,24 @@ def _gp_private(host: str, is_ip: bool) -> None:
         raise ToolError("err.tb.third_private", addr=host, party="Globalping")
 
 
+async def _local_addresses(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """All A and AAAA answers of the local resolver (empty if the name does not resolve here)."""
+    res = dns.asyncresolver.Resolver()
+    res.lifetime = 4.0
+    out: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for rtype in ("A", "AAAA"):
+        try:
+            ans = await res.resolve(host, rtype)
+        except dns.exception.DNSException:
+            continue
+        for rd in ans:
+            try:
+                out.append(ipaddress.ip_address(rd.to_text()))
+            except ValueError:
+                continue
+    return out
+
+
 def _gp_target(mode: str, target: str) -> tuple[str, dict[str, Any]]:
     """Validated target and measurement options for Globalping. Private targets are never sent to a third party."""
     if mode == "http":
@@ -344,16 +364,11 @@ async def globalping(ctx: Ctx, spec: ToolSpec, target: str, params: dict[str, An
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # a name is resolved locally first: names that point to private addresses (split horizon, internal zones) stay
+        # a name is resolved locally first: names that point to a private address (split horizon, internal zones) stay
         # on the server. Names this server cannot resolve or that a DNS filter blocks (Pi-hole, AdGuard: NXDOMAIN or
         # 0.0.0.0) are still measured: they are not shown to be internal, and malicious domains are a typical target.
-        try:
-            await resolve(host, False)
-        except ToolError as exc:
-            if exc.key == "err.tool.private":
-                raise ToolError("err.tb.third_private", addr=host, party="Globalping") from exc
-            if exc.key not in ("err.tool.resolve", "err.tool.multicast"):
-                raise
+        if any(not is_public(a) and not a.is_unspecified and not a.is_multicast for a in await _local_addresses(host)):
+            raise ToolError("err.tb.third_private", addr=host, party="Globalping")
     res.obj = ("ip", host) if is_global(host) else ("domain", host)
     body: dict[str, Any] = {"type": mode, "target": host, "limit": limit, "measurementOptions": opts}
     if loc.lower() != "world":

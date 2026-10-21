@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import email
 import hashlib
+import html as htmllib
 import ipaddress
 import re
 from datetime import datetime, timezone
@@ -36,7 +37,16 @@ IPV4_ANY = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
 # opening tags, their href (quoted or unquoted) and closing tags are found separately. Like a browser, a new <a> ends
 # the previous link. A single pattern with a lazy body (<a …>(.*?)</a>) needs quadratic time on unclosed tags.
 ANCHOR_TAG = re.compile(r"<a\s[^<>]*>", re.I)
-HREF = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+))""", re.I)
+# attributes one after another, so "href" inside another attribute (data-href=…, title="href=…") is not taken
+ATTR = re.compile(r"""([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?""")
+LINK_TEXT_MAX = 32 * 1024  # visible text of one link that is checked: start and end (the address is usually there)
+LINK_TEXT_BUDGET = 1024 * 1024  # visible link text checked per part
+# file names in link texts ("agb.pdf herunterladen") are no host names; only extensions that are no top-level domain
+FILE_EXT = {"pdf", "doc", "docx", "docm", "xls", "xlsx", "xlsm", "ppt", "pptx", "pptm", "odt", "ods", "odp", "rtf", "txt",
+            "csv", "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp", "tif", "tiff", "exe", "msi", "dll", "bat", "cmd", "ps1",
+            "vbs", "js", "html", "htm", "php", "asp", "aspx", "jsp", "json", "xml", "log", "ics", "vcf", "eml", "msg", "mp3",
+            "mp4", "wav", "avi", "mkv", "iso", "img", "rar", "7z", "gz", "tar", "tgz", "jar", "apk", "dmg", "lnk", "hta",
+            "cfg", "ini"}
 ANCHOR_CLOSE = re.compile(r"</a\s*>", re.I)
 MAX_ANCHORS = 20000
 TAG = re.compile(r"<[^<>]*>")
@@ -131,8 +141,12 @@ def anchors(html: str) -> list[tuple[str, str]]:
             finish(m.start())
             if len(out) >= MAX_ANCHORS:
                 return out
-        h = HREF.search(m.group(0))
-        cur = (next(g for g in h.groups() if g is not None), m.end()) if h else None
+        cur = None
+        for a in ATTR.finditer(m.group(0), 2):  # after "<a"; the first href counts, as in a browser
+            if a.group(1).lower() == "href":
+                val = next((g for g in a.groups()[1:] if g is not None), None)
+                cur = (val, m.end()) if val is not None else None
+                break
     if cur is not None:
         finish(len(html))
     return out
@@ -150,6 +164,8 @@ def shown_hosts(text: str, limit: int = 20) -> list[str]:
     for tok in text.split():
         if "." not in tok or len(tok) > 2100:  # no host in it; skip cheaply (long link texts are attacker-controlled)
             continue
+        if tok.rstrip(".,;:!?)]}\"'»").rsplit(".", 1)[-1].lower() in FILE_EXT:  # a file name
+            continue
         tok = SCHEME.sub("", tok.strip(".,;:!?()[]{}<>\"'«»"))
         host = tok.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].rsplit("@", 1)[-1].strip(".,;:!?()[]{}<>\"'«»")
         if host.isascii():
@@ -161,6 +177,12 @@ def shown_hosts(text: str, limit: int = 20) -> list[str]:
             if len(out) >= limit:
                 break
     return out
+
+
+def _link_target(href: str) -> str:
+    """The URL a browser opens for an href value: entities decoded, tabs and line breaks removed, backslashes as
+    slashes (https:\\\\host\\path)."""
+    return re.sub(r"[\t\r\n]", "", htmllib.unescape(href)).strip().replace("\\", "/")
 
 
 def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], list[dict[str, Any]]]:
@@ -197,17 +219,26 @@ def _scan_body(msg: Message) -> tuple[dict[str, str], list[tuple[str, str]], lis
                     body = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
                 except LookupError:  # unknown charset name in the mail
                     body = payload.decode("utf-8", errors="replace")
-            for u in URL_RE.findall(body):
-                n = _norm_url(u.replace("&amp;", "&"))
+            plain = htmllib.unescape(body) if ctype == "text/html" else body  # https&#58;// and similar entities
+            for u in URL_RE.findall(plain):
+                n = _norm_url(u)
                 if n and len(urls) < MAX_URLS:
                     urls.setdefault(n, ctype)
             if ctype == "text/html":
-                for href, inner in anchors(body):
-                    hh = url_host(href.replace("&amp;", "&"))
-                    if not hh or len(mismatches) >= 50:
+                text_budget = LINK_TEXT_BUDGET
+                for raw_href, inner in anchors(body):
+                    href = _link_target(raw_href)
+                    n = _norm_url(href) if href.lower().startswith(("http://", "https://")) else None
+                    if n and len(urls) < MAX_URLS:
+                        urls.setdefault(n, ctype)  # also links URL_RE cannot see (backslashes, entities)
+                    hh = url_host(href)
+                    if not hh or len(mismatches) >= 50 or text_budget <= 0:
                         continue
+                    if len(inner) > 2 * LINK_TEXT_MAX:
+                        inner = inner[:LINK_TEXT_MAX] + " " + inner[-LINK_TEXT_MAX:]
+                    text_budget -= len(inner)
                     real = _org(norm_host(hh) or hh)
-                    for sh in shown_hosts(TAG.sub("", inner)):
+                    for sh in shown_hosts(htmllib.unescape(TAG.sub("", inner))):
                         if _org(sh) != real:
                             mismatches.append((sh, hh))
                             break
