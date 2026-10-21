@@ -20,7 +20,7 @@ from ..tools import is_public, parse_ports
 from . import tools_harden, tools_ident, tools_mail, tools_net, tools_threat
 from .common import Ctx
 from .detect import detect, internal_name, norm_host
-from .registry import BY_ID, RECIPES, ToolSpec, available, coerce_params
+from .registry import BY_ID, RECIPES, ToolSpec, applicable, available, coerce_params, effective_type
 from .result import SEV_ORDER, max_sev
 
 log = logging.getLogger("toolbox")
@@ -36,25 +36,44 @@ HOST_TOOLS = {"ping", "traceroute", "pathq", "ports", "tls", "http", "ssh", "dns
 THIRD_PARTY_SELF = {"ipinfo", "globalping", "cyberchef", "dns"}  # dns: depends on the chosen resolver
 
 
+def private_target(value: str, kind: str) -> bool:
+    """Private or reserved addresses and networks, internal names (also as the domain of an e-mail address)."""
+    if kind == "email":
+        value, kind = value.rsplit("@", 1)[-1], "domain"
+    try:
+        if kind == "ip":
+            return not is_public(ipaddress.ip_address(value))
+        if kind == "cidr":
+            net = ipaddress.ip_network(value, strict=False)
+            return not is_public(net.network_address) or not is_public(net.broadcast_address)
+    except ValueError:
+        return True
+    return kind == "domain" and internal_name(value)
+
+
 def third_party_block(spec: ToolSpec, value: str, kind: str) -> str | None:
     """The reason (error text key) why a target must not go to the tool's third party, or None. Private addresses,
     private networks and internal names stay on the server."""
     if not spec.third_party or spec.id in THIRD_PARTY_SELF:
         return None
-    if kind == "email":
-        value, kind = value.rsplit("@", 1)[-1], "domain"
-    try:
-        if kind == "ip" and not is_public(ipaddress.ip_address(value)):
-            return "err.tb.third_private"
-        if kind == "cidr":
-            net = ipaddress.ip_network(value, strict=False)
-            if not is_public(net.network_address) or not is_public(net.broadcast_address):
-                return "err.tb.third_private"
-    except ValueError:
-        return "err.tb.third_private"
-    if kind == "domain" and internal_name(value):
-        return "err.tb.third_private"
-    return None
+    return "err.tb.third_private" if private_target(value, kind) else None
+
+
+def suits(spec: ToolSpec, value: str, kind: str) -> bool:
+    """For the input detection: False if the tool would refuse the target because it is private and would go to a
+    third party. IP info (local data), CyberChef (browser) and DNS (system resolver) still work for private targets."""
+    return not (spec.third_party and spec.id not in ("ipinfo", "cyberchef", "dns") and private_target(value, kind))
+
+
+def fitting_tools(det: dict[str, Any]) -> list[str]:
+    """Tool ids for a detection result: the tools that accept the input type and would not refuse the target."""
+    if det.get("type") == "url" and det.get("host"):
+        value, kind = det["host"], effective_type(det)
+    elif det.get("type") == "email":
+        value, kind = det.get("domain") or "", "domain"
+    else:
+        value, kind = det.get("value") or "", det.get("type", "text")
+    return [x for x in applicable(det) if suits(BY_ID[x], value, kind)]
 
 
 def _guard(spec: ToolSpec, value: str, kind: str) -> str:

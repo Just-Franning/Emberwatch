@@ -411,6 +411,12 @@ def test_globalping(m, fdns):
 
 
 def test_third_party_privacy(m):
+    from fastapi.testclient import TestClient
+    with TestClient(m.app) as tc:
+        fit = tc.get("/api/tb/detect", params={"q": "192.168.1.10"}).json()["tools"]
+        assert "greynoise" not in fit and "globalping" not in fit and {"ipinfo", "ping", "dns"} <= set(fit)
+        assert "greynoise" in tc.get("/api/tb/detect", params={"q": "45.155.205.9"}).json()["tools"]
+        assert "ct" not in tc.get("/api/tb/detect", params={"q": "it@nas.fritz.box"}).json()["tools"]
     for tool, target in (("greynoise", "192.168.1.10"), ("pdns", "nas.fritz.box"), ("rdap", "10.0.0.0/8"),
                          ("bgp", "172.16.0.1"), ("pdns", "srv01.corp"), ("mailsec", "it@mail.intern.lan")):
         with pytest.raises(m.AppError) as exc:

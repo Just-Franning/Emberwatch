@@ -21,6 +21,7 @@ from .geo import Geo
 from .i18n import AppError
 from .logs import _norm_url
 from .toolbox import registry as tbreg
+from .toolbox import runner as tbrun
 from .toolbox.common import cache_get
 from .toolbox.detect import detect
 from .toolbox.result import Result, cell, max_sev
@@ -148,7 +149,7 @@ class Objects:
             "risk": {"sev": sev, "text": i18n.t(r.lang, f"ob.risk.{sev}"), "reasons": reasons},
             "sections": r.sections, "map": {"points": r.points, "paths": r.paths} if r.points else None,
             "related": r.related, "mine": mine, "alerts": alert_rows,
-            "tools": tbreg.applicable(det) if otype in ("ip", "cidr", "asn", "domain", "url", "hash") else [],
+            "tools": tbrun.fitting_tools(det) if otype in ("ip", "cidr", "asn", "domain", "url", "hash") else [],
             "recipes": tbreg.recipes_for(det) if otype in ("ip", "domain", "url") else [],
             "history": self._history(otype, value),
         }

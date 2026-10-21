@@ -1248,7 +1248,8 @@ def api_tb_detect(q: str = Query("", max_length=4096)) -> dict[str, Any]:
     d = tb_detect(q)
     if d["type"] == "empty":
         return {**d, "tools": [], "recipes": []}
-    return {**d, "tools": tbreg.applicable(d), "recipes": tbreg.recipes_for(d)}
+    # tools that would refuse the target (private address or internal name for a third party) are not suggested
+    return {**d, "tools": tbrun.fitting_tools(d), "recipes": tbreg.recipes_for(d)}
 
 
 class RunIn(BaseModel):
