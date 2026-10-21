@@ -194,10 +194,12 @@ async function main() {
     if (prevMap !== "welt") return;
     const ctx = welt.context();
     if (ctx.days) setC2({ days: Math.min(30, ctx.days) });
+    state.c2DaysUser = false; // carried over from the Weltlage: only a new choice here goes back
     if (ctx.country && ctx.country !== state.country) selectCountry(ctx.country);
     else if (!ctx.country && state.country) closeCountry();
     else if (state.country) map.select(state.country);
     if (state.ov && !state.historical) applyLive();
+    else legend(); // the Weltlage legend must not stay (historical day: applyLive is skipped)
   }
 
   onRoute((r) => {

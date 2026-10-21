@@ -594,7 +594,9 @@ def render_pattern(p: dict[str, Any], lang: str, cname: CountryName) -> dict[str
         if cab and cab.get("count"):
             parts.append(t(lang, "pat.infra.critical.cables", count=cab["count"], snapshot=cab.get("snapshot") or "?",
                            names=_join(cab.get("names") or [], lang)))
-        detail = " ".join(x for x in parts if x).strip()[:600]
+        parts = [x.strip() for x in parts if x and x.strip()]
+        # the event detail has no full stop ("…; Networks: DTAG"): end it before the cable sentence
+        detail = " ".join(x if i == len(parts) - 1 or x[-1] in ".!?…" else x + "." for i, x in enumerate(parts))[:600]
     elif k == "corr.hotspots":
         args = {"countries": _join([cname(c, lang) for c in pr.get("ccs") or []], lang)}
         title, detail = t(lang, f"pat.{k}.title", **args), t(lang, f"pat.{k}.detail", **args)

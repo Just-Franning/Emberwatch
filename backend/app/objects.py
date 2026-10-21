@@ -5,6 +5,7 @@ except that a CVE page loads the CVE from NVD once if it is not cached yet.
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import re
@@ -182,6 +183,8 @@ class Objects:
             return await fn(value, lang, client)
         if otype == "country":
             return fn(value, lang, country or {}, trends or {})
+        if otype == "actor":  # groups up to 90 days of reports: off the event loop
+            return await asyncio.to_thread(fn, value, lang)
         return fn(value, lang)
 
     # --- IP ------------------------------------------------------------------------------------------------------

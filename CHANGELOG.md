@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.2.1 – 2026-10-21
+
+Fixes from an independent review of 3.2.0.
+
+### Security
+- Preview images: address literals (also `0x7f.1`, `2130706433`), internal names (`router.lan`, `nas.fritz.box`), ports other than 443 and host names that resolve to private addresses are dropped, because the browser loads the images from inside your network; images stored by 3.2.0 are checked once on the next run
+
+### Fixed
+- Own products in reports: vendors only count as whole words ("HP" no longer matches "https" or "PHP", "SAP" not "Sapphire"); a product name watched for several vendors ("Firewall") matches each of them; no extra vendor mention when one of its products matched
+- Weltlage with a home region of more than 13 countries: the focus and the key figure no longer fail with an error or leave out countries
+- A feed that could not be parsed is fetched in full again on the next run (its ETag was stored before parsing, so the error was hidden behind a 304)
+- The Weltlage period no longer jumps back to the C2 period of the Cyberlage when a report is opened or closed; a period carries over only when it was newly chosen in the Cyberlage
+- "Load more" in the reports list ignores answers for a filter that changed meanwhile
+- The Weltlage legend no longer stays in the Cyberlage after a historical timeline day; the layer switches of the Weltlage follow restored checkbox states
+- Reports published late (new source, delayed feed) are grouped with reports on the same event from days before
+- Ids beyond 64-bit integers give a bad request instead of a server error
+- Feed errors in the source list are shown in the interface language instead of raw error text
+- The Gemini briefing and the actor page group up to 90 days of reports off the event loop
+- Long entries in the Analysis navigation are no longer cut off
+- Outage findings: the event and the sentence about landing submarine cables are separated by a full stop
+
+### Changed
+- Recognition texts and the Gemini prompt say "headline and feed text": recognition reads up to 1,500 characters of the feed text, more than the teaser that is shown
+- README screenshots use documentation IP ranges
+
 ## 3.2.0 – 2026-10-21
 
 The map has two views now: the **Cyberlage** (attack data, red) and the new **Weltlage** (security reports in their geopolitical context, indigo). The map view is tidier: one side panel, layer chips above the map, four key figures below it.
