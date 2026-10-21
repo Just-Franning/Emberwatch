@@ -38,13 +38,16 @@ def _list(v: Any, limit: int = 40) -> list[str]:
     return [str(x).strip()[:120] for x in v if isinstance(x, (str, int)) and str(x).strip()][:limit]
 
 
-def parse(data: dict[str, Any]) -> list[dict[str, Any]]:
-    out = []
-    for v in data.get("values") or []:
+def parse(data: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    values = data.get("values") if isinstance(data, dict) else None
+    for v in values if isinstance(values, list) else []:
+        if not isinstance(v, dict):
+            continue
         name = str(v.get("value") or "").strip()[:120]
         if not name:
             continue
-        m = v.get("meta") or {}
+        m = v.get("meta") if isinstance(v.get("meta"), dict) else {}
         syn = _list(m.get("synonyms"), 60)
         for na in _list(m.get("name-attribution"), 40):  # "Name:uuid of the naming vendor"
             n = na.split(":", 1)[0].strip()

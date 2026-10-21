@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS news (
     url TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
     summary TEXT,
+    body TEXT,
     image TEXT,
     published TEXT NOT NULL,
     fetched_at TEXT NOT NULL,
@@ -364,6 +365,7 @@ MIGRATIONS = (
     ("infra_events", "meta", "TEXT NOT NULL DEFAULT '{}'"),
     ("watchlist", "scan", "INTEGER NOT NULL DEFAULT 0"),
     ("watchlist", "scan_ack", "TEXT"),
+    ("news", "body", "TEXT"),  # text the recognition ran on (also used when it runs again)
 )
 
 

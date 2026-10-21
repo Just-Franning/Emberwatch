@@ -324,7 +324,10 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
                 await myip.check(client, kind)
 
     async def news_job() -> None:
-        await actors.collect(client, S.user_agent)
+        try:
+            await actors.collect(client, S.user_agent)
+        except Exception:  # the reports do not depend on a fresh actor list
+            log.exception("actor list")
         await asyncio.to_thread(news.refresh_mine)  # new actor list, products or domains: recognise again
         await news.collect(client)
 
@@ -1458,7 +1461,8 @@ def api_today(request: Request, limit: int = Query(5, ge=1, le=12)) -> dict[str,
     if news.enabled:
         home = set(S.home_region) or {"DE"}
         for it in welt_overview(1, _welt_filters(None, None, None, None, None, None, None, False, None))["items"]:
-            big = it["n"] >= 3 or (it["source"]["tier"] == "gov" and (home & ({it["origin"]} | set(it["countries"]))))
+            # three independent sources, or an authority about the home region
+            big = len(it["sources"]) >= 3 or (it["source"]["tier"] == "gov" and bool(home & ({it["origin"]} | set(it["countries"]))))
             if big:
                 out.append({"kind": "news", "severity": "info", "title": it["title"],
                             "detail": " · ".join(it["sources"][:3]), "time": it["latest"],

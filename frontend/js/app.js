@@ -26,6 +26,7 @@ const TOOLBAR_KEY = "emberwatch.maptools";
 const boot = window.EmberBoot || { step() {}, progress() {}, done() {} };
 const state = {
   ov: null, victims: [], status: null, alerts: null, today: null, tab: "targets", side: "today", country: null, historical: null, area: "lage",
+  mapArea: "lage", // the map view shown last (Cyberlage or Weltlage)
   c2Filter: { days: 30, source: "all", minConf: 0, family: null }, families: [], stamp: "–",
 };
 
@@ -181,15 +182,16 @@ async function main() {
       document.body.classList.toggle("mode-cyber", mode === "cyber");
       map.setMode(mode);
       band.scrollLeft = 0; // small screens: the band scrolls; start at its beginning in each mode
-      if (mode === "cyber") enterCyber(prev);
+      if (mode === "cyber") enterCyber(state.mapArea); // also after a detour: Weltlage → Analyse → Cyberlage
+      state.mapArea = area;
     }
     statusPanel.hidden = true;
     settingsPanel.hidden = true;
   }
 
   /** Back in the Cyberlage: take over the country of the Weltlage, the period for the C2 filter. */
-  function enterCyber(prev) {
-    if (prev !== "welt") return;
+  function enterCyber(prevMap) {
+    if (prevMap !== "welt") return;
     const ctx = welt.context();
     if (ctx.days) setC2({ days: Math.min(30, ctx.days) });
     if (ctx.country && ctx.country !== state.country) selectCountry(ctx.country);

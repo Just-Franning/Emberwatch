@@ -37,13 +37,20 @@ MAX_PAGE_BYTES = 400 * 1024
 MAX_ITEMS_PER_FEED = 120
 KEEP_DAYS_ON_FETCH = 30
 OG_PER_RUN = 24
+ROW_COLS = ("id, source, url, title, summary, image, published, lang, tier, origin, origin_by, countries, actors, cves, malware, "
+            "kinds, mine, cluster")  # everything but the stored text
+ANALYSE_CHARS = 1500  # characters of the feed text (after the headline) the recognition looks at
 CLUSTER_HOURS = 72
 TIERS = ("gov", "press")
 FEED_ID_RE = re.compile(r"^[a-z0-9_]{2,30}$")
 TAG_RE = re.compile(r"<[^<>]*>")
-IMG_RE = re.compile(r"<img\b[^<>]*>", re.I)
-META_RE = re.compile(r"<meta\b[^<>]*>", re.I)
-ATTR_RE = re.compile(r"""([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+))""")
+# Bounded on purpose: feed content and article pages come from third parties; unbounded runs made the attribute
+# pattern quadratic ("<img aaaa…" of 40 000 characters took 20 s). Longer tags and values are ignored.
+IMG_RE = re.compile(r"<img\b[^<>]{0,2000}>", re.I)
+META_RE = re.compile(r"<meta\b[^<>]{0,2000}>", re.I)
+ATTR_RE = re.compile(r"""(?<![-a-zA-Z0-9_:.])([a-zA-Z_:][-a-zA-Z0-9_:.]{0,60})\s{0,20}=\s{0,20}"""
+                     r"""(?:"([^"]{0,1500})"|'([^']{0,1500})'|([^\s"'<>`=]{1,1500}))""")
+SCAN_HTML = 100_000  # characters of a feed item searched for an image
 AD_RE = re.compile(r"^\s*\[?(anzeige|sponsored|advertisement|promoted|partner content|werbung)\b", re.I)
 TRACKER_RE = re.compile(r"(pixel|track|beacon|counter|stats\.|cpx\.|/1x1|spacer|feeds\.feedburner)", re.I)
 NS_CONTENT = "http://purl.org/rss/1.0/modules/content/"
@@ -91,7 +98,7 @@ def parse_extra(raw: str) -> list[Source]:
         if u.scheme != "https" or not u.hostname or u.username or u.password:
             continue
         tier = f[3] if len(f) > 3 and f[3] in TIERS else "press"
-        lang = f[4][:2].lower() if len(f) > 4 and f[4] else "en"
+        lang = f[4][:2].lower() if len(f) > 4 and re.fullmatch(r"[A-Za-z]{2}", f[4][:2] or "") else "en"
         name, sfx = registrable(u.hostname)
         out.append(Source(f[0], f[1][:60], f[2], tier, lang, "", (f"{name}.{sfx}" if sfx else u.hostname,)))
     return out
@@ -138,7 +145,8 @@ def clean_url(raw: str | None, *, image: bool = False) -> str | None:
         port = u.port
     except ValueError:
         return None
-    netloc = u.hostname + (f":{port}" if port and port != 443 and port != 80 else "")
+    host = f"[{u.hostname}]" if ":" in u.hostname else u.hostname
+    netloc = host + (f":{port}" if port and port != 443 and port != 80 else "")
     return urlunsplit(("https", netloc, u.path or "/", query, ""))
 
 
@@ -148,7 +156,7 @@ def _attrs(tag: str) -> dict[str, str]:
 
 
 def _img_from_html(fragment: str) -> str | None:
-    for tag in IMG_RE.findall((fragment or "")[:200000]):
+    for tag in IMG_RE.findall((fragment or "")[:SCAN_HTML]):
         attrs = _attrs(tag)
         src = attrs.get("src") or attrs.get("data-src")
         if not src or TRACKER_RE.search(src):
@@ -170,14 +178,17 @@ def _date(raw: str) -> datetime | None:
         return None
     try:
         d = parsedate_to_datetime(raw)
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         try:
             d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except ValueError:
+        except (ValueError, OverflowError):
             return None
     if d.tzinfo is None:
         d = d.replace(tzinfo=timezone.utc)
-    return d.astimezone(timezone.utc)
+    try:
+        return d.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
 
 
 def parse_feed(data: bytes) -> list[dict[str, Any]]:
@@ -242,6 +253,10 @@ def og_image(page: str) -> str | None:
 
 def _iso(d: datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
 def _cutoff(days: float) -> str:
@@ -393,8 +408,8 @@ class News:
                 malware.add(name, name)
         prods = self.db.query("SELECT id, vendor, product FROM products")
         prod_phrase = {}
-        for p in prods:
-            phrase = (p["product"] or p["vendor"] or "").strip()
+        for p in prods:  # products watched with a product name; a vendor alone is a vendor mention (no alert)
+            phrase = (p["product"] or "").strip()
             if phrase:
                 prod_phrase[phrase.lower()] = p
         vendors = {(p["vendor"] or "").strip().lower(): p for p in prods if (p["vendor"] or "").strip()}
@@ -431,9 +446,11 @@ class News:
         cves = nlp.cves(body)
         mine: list[dict[str, Any]] = []
         if ctx["prod_rx"]:
+            low = body.lower()
             for m in dict.fromkeys(x.lower() for x in ctx["prod_rx"].findall(body)):
                 p = ctx["prod"].get(m)
-                if p:
+                # as configured: "FortiOS", "PAN-OS", "Exchange Server" count alone; a plain word ("Firewall") only with its vendor
+                if p and (nlp.distinctive(p["product"]) or (p["vendor"] or "").strip().lower() in low):
                     mine.append({"type": "product", "id": p["id"], "label": f"{p['vendor']} {p['product']}".strip()})
         if ctx["vendor_rx"]:
             seen = {x.get("id") for x in mine}
@@ -470,11 +487,12 @@ class News:
         if text.lower().startswith(title.lower()):
             text = text[len(title):].lstrip(" .:-–")
         teaser = nlp.summary(text, 260)
-        found = self.analyse(title, text[:1500], ctx)
+        body = text[:ANALYSE_CHARS]  # kept for the next recognition run; only the teaser is shown
+        found = self.analyse(title, body, ctx)
         new_id = self.db.insert(
-            "INSERT OR IGNORE INTO news(source, url, title, summary, image, published, fetched_at, lang, tier, origin, origin_by, "
-            "countries, actors, cves, malware, kinds, mine) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (src.id, link, title, teaser or None, raw.get("image"), _iso(pub), utcnow(), src.lang, src.tier, found["origin"],
+            "INSERT OR IGNORE INTO news(source, url, title, summary, body, image, published, fetched_at, lang, tier, origin, "
+            "origin_by, countries, actors, cves, malware, kinds, mine) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (src.id, link, title, teaser or None, body or None, raw.get("image"), _iso(pub), utcnow(), src.lang, src.tier, found["origin"],
              found["origin_by"], json.dumps(found["countries"]), json.dumps(found["actors"]), json.dumps(found["cves"]),
              json.dumps(found["malware"]), json.dumps(found["kinds"]), json.dumps(found["mine"])))
         if not new_id:
@@ -482,8 +500,12 @@ class News:
         tok = nlp.title_tokens(title)
         cves = set(found["cves"])
         cluster = new_id
+        window = timedelta(hours=CLUSTER_HOURS)
         for r in ctx["recent"]:
-            if nlp.similar(tok, r["tok"]) or (cves and cves & r["cves"]):
+            if abs(pub - _parse_iso(r["published"])) > window:
+                continue  # the same event is reported within three days
+            # a shared CVE only joins reports about a few CVEs (round-ups such as patch days name dozens)
+            if nlp.similar(tok, r["tok"]) or (cves and len(cves) <= 3 and len(r["cves"]) <= 3 and cves & r["cves"]):
                 cluster = r["cluster"]
                 break
         self.db.execute("UPDATE news SET cluster = ? WHERE id = ?", (cluster, new_id))
@@ -505,10 +527,10 @@ class News:
         """Runs the recognition again on stored items (after the actor list or the user's products changed).
         Creates no alerts: those are only raised for new items."""
         ctx = self._context()
-        rows = self.db.query("SELECT id, title, summary FROM news WHERE published >= ?", (_cutoff(days),))
+        rows = self.db.query("SELECT id, title, summary, body FROM news WHERE published >= ?", (_cutoff(days),))
         upd = []
         for r in rows:
-            f = self.analyse(r["title"], r["summary"] or "", ctx)
+            f = self.analyse(r["title"], r["body"] or r["summary"] or "", ctx)  # the same text as when it was stored
             upd.append((f["origin"], f["origin_by"], json.dumps(f["countries"]), json.dumps(f["actors"]), json.dumps(f["cves"]),
                         json.dumps(f["malware"]), json.dumps(f["kinds"]), json.dumps(f["mine"]), r["id"]))
         self.db.execmany("UPDATE news SET origin=?, origin_by=?, countries=?, actors=?, cves=?, malware=?, kinds=?, mine=? "
@@ -547,6 +569,9 @@ class News:
             try:
                 img = await self._og_fetch(client, r["url"], src)
             except (httpx.HTTPError, ToolError, ValueError, UnicodeError):
+                img = None
+            except Exception as exc:  # e.g. httpx.InvalidURL from a broken Location header: one page must not stop the run
+                log.warning("preview image of %s: %s", r["url"][:200], exc.__class__.__name__)
                 img = None
             if img:
                 self.db.execute("UPDATE news SET image = ? WHERE id = ?", (img, r["id"]))
@@ -594,7 +619,7 @@ class News:
     # --- queries ---------------------------------------------------------------------------------------------------------
     def _rows(self, days: float, *, tier: str | None = None, source: str | None = None, q: str | None = None,
               limit: int = 5000) -> list[dict[str, Any]]:
-        sql = "SELECT * FROM news WHERE published >= ?"
+        sql = f"SELECT {ROW_COLS} FROM news WHERE published >= ?"
         args: list[Any] = [_cutoff(days)]
         if tier in TIERS:
             sql += " AND tier = ?"

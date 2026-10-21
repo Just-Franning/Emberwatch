@@ -439,11 +439,105 @@ def test_mine_refresh_retention_and_switches(tmp_path, monkeypatch):
 def test_actor_list_is_not_replaced_by_bad_data(m):
     async def go(payload):
         def h(request):
-            return httpx.Response(200, json=payload) if isinstance(payload, dict) else httpx.Response(200, content=payload)
+            return httpx.Response(200, content=payload) if isinstance(payload, bytes) else httpx.Response(200, json=payload)
         async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
             return await m.actors.collect(c, "ua")
     assert asyncio.run(go(galaxy())) == 113
     m.db.meta_set("actors_loaded_at", "2000-01-01T00:00:00Z")
     assert asyncio.run(go({"values": [{"value": "Only One"}]})) == 113  # truncated list keeps the old one
     assert asyncio.run(go(b"not json")) == 113
+    assert asyncio.run(go([1, 2])) == 113 and asyncio.run(go({"values": "x"})) == 113
+    assert asyncio.run(go({"values": [1, "x", {"value": "Solo", "meta": "bad"}] + galaxy()["values"][:5]})) == 113
     assert m.db.query("SELECT ok FROM source_status WHERE source='misp_actors'")[0]["ok"] == 0
+
+
+def test_hostile_html_and_broken_redirects_stay_cheap(m):
+    """Third-party HTML is parsed with bounded patterns; a broken Location header does not stop a run."""
+    import time
+    from app import news
+    t0 = time.perf_counter()
+    assert news._img_from_html("<img " + "a" * 40000 + ">") is None
+    assert news._img_from_html(('<img a="' * 30000) + ">") is None
+    assert news.og_image("<head><meta " + "a" * 300000 + "></head>") is None
+    assert news.parse_feed(b"<rss><channel><item><title>x</title><link>https://a.example/</link><description><![CDATA[<img "
+                           + b"a" * 30000 + b">]]></description></item></channel></rss>")[0]["image"] is None
+    assert time.perf_counter() - t0 < 2  # quadratic before: about 20 s for the first case alone
+    assert news._img_from_html('<p><img alt="" width="640" src="https://cdn.example/a.jpg"></p>') == "https://cdn.example/a.jpg"
+
+    feed = b"<rss><channel><item><title>A report about things</title><link>https://therecord.media/broken</link></item></channel></rss>"
+
+    def h(request):
+        if request.url.path == "/feed/":
+            return httpx.Response(200, content=feed)
+        if request.url.path == "/broken":
+            return httpx.Response(302, headers={"location": "https://[zz]/"})
+        return httpx.Response(404)
+    m.news.sources = [m.news.by_id["therecord"]]
+    m.news.by_id = {"therecord": m.news.sources[0]}
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+            return await m.news.collect(c)
+    assert asyncio.run(go()) == 1
+    st = {r["source"]: r for r in m.db.statuses()}
+    assert st["news"]["ok"] and m.db.query("SELECT og_tried, image FROM news")[0] == {"og_tried": 1, "image": None}
+
+
+def test_recognition_runs_again_on_the_stored_text(m):
+    """Re-recognition (new products, new actor list) sees the same text as the first run, not only the teaser."""
+    pid = m.products.add("Fortinet", "FortiOS")
+    m.db.insert("INSERT INTO product_cves(product_id, cve, source, first_seen) VALUES(?,?,?,?)", (pid, "CVE-2026-1000", "kev", m.utcnow()))
+    desc = ("Officials described a long-running campaign in great detail. " * 5) + "Russian hackers exploited CVE-2026-1000 against Ukrainian targets."
+    raw = {"title": "Campaign hits manufacturing sector", "link": "https://therecord.media/x1", "date": None, "desc": desc, "content": "", "image": None}
+    assert m.news._store(m.news.by_id["therecord"], raw, m.news._context())
+    cols = "origin, countries, cves, mine, length(summary) AS teaser"
+    before = m.db.query(f"SELECT {cols} FROM news")[0]
+    assert before["origin"] == "RU" and before["cves"] == '["CVE-2026-1000"]' and before["teaser"] <= 262
+    m.news.reanalyse(30)
+    assert m.db.query(f"SELECT {cols} FROM news")[0] == before
+    item = m.news.detail(m.db.query("SELECT id FROM news")[0]["id"])
+    assert "body" not in item and len(item["summary"]) <= 262  # the stored text is never served
+
+
+def test_own_products_and_grouping_rules(m):
+    from datetime import timedelta
+    from app import nlp
+    assert [nlp.distinctive(x) for x in ("FortiOS", "PAN-OS", "Exchange Server", "Firewall", "exchange", "Windows 11")] == \
+        [True, True, True, False, False, True]
+    m.products.add("Sophos", "Firewall")
+    m.products.add("Fortinet", "FortiOS")
+    m.products.add("Ivanti", "")
+    ctx = m.news._context()
+    mine = lambda title: {(x["type"], x["label"]) for x in m.news.analyse(title, "", ctx)["mine"]}  # noqa: E731
+    assert mine("New firewall bypass technique published") == set()  # a plain product word alone is no match
+    assert mine("Sophos fixes Firewall flaw") == {("product", "Sophos Firewall")}
+    assert mine("FortiOS bug exploited") == {("product", "Fortinet FortiOS")}
+    assert mine("Ivanti patches Connect Secure") == {("vendor", "Ivanti")}  # vendor-only watch: shown, not alerted
+    # grouping: similar headlines more than three days apart are different events
+    src = m.news.by_id["therecord"]
+    now = dt.datetime.now(dt.timezone.utc)
+    base = {"desc": "", "content": "", "image": None}
+    assert m.news._store(src, {**base, "title": "Hackers breach water utility in Texas", "link": "https://therecord.media/w1",
+                                "date": now - timedelta(days=6)}, ctx)
+    assert m.news._store(src, {**base, "title": "Hackers breach water utility in Texas again", "link": "https://therecord.media/w2",
+                                "date": now - timedelta(hours=2)}, ctx)
+    assert m.news._store(src, {**base, "title": "Hackers breach a water utility in Texas", "link": "https://therecord.media/w3",
+                                "date": now - timedelta(hours=1)}, ctx)
+    cl = [r["cluster"] for r in m.db.query("SELECT cluster FROM news ORDER BY id")]
+    assert cl[0] != cl[1] and cl[1] == cl[2]
+    # a patch-day round-up with many CVEs does not glue unrelated reports together
+    many = ", ".join(f"CVE-2026-{2000 + i}" for i in range(8))
+    assert m.news._store(src, {**base, "title": "Patch day fixes 80 flaws", "link": "https://therecord.media/p1", "date": now,
+                                "desc": f"Fixed: {many}."}, ctx)
+    assert m.news._store(src, {**base, "title": "Attackers exploit Exchange zero-day", "link": "https://therecord.media/p2", "date": now,
+                                "desc": "The flaw CVE-2026-2003 is exploited."}, ctx)
+    a, b = m.db.query("SELECT cluster FROM news WHERE url LIKE '%/p_' ORDER BY id")
+    assert a["cluster"] != b["cluster"]
+    assert m.news._store(src, {**base, "title": "CISA adds Exchange flaw to KEV", "link": "https://therecord.media/p3", "date": now,
+                                "desc": "CVE-2026-2003 was added."}, ctx)
+    assert m.db.query("SELECT cluster FROM news WHERE url LIKE '%/p3'")[0]["cluster"] == b["cluster"]
+    # broken dates and IPv6 hosts
+    from app import news
+    assert news._date("Mon, 01 Jan 99999 00:00:00 GMT") is None and news._date("not a date") is None
+    assert news.clean_url("http://[2001:db8::1]:8443/x") == "https://[2001:db8::1]:8443/x"
+    assert [s.lang for s in news.parse_extra("a1|A|https://a.example/f|gov|<s;b2|B|https://b.example/f|press|DE")] == ["en", "de"]

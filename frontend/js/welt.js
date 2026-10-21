@@ -137,6 +137,10 @@ export class Welt {
     try {
       const ov = await api(`api/welt?${this.params()}`);
       if (seq !== this.seq) return;
+      if (!this.active) { // left the Weltlage meanwhile: the key figures belong to the Cyberlage now
+        this.stale = true;
+        return;
+      }
       this.ov = ov;
       this.items = ov.items;
       this.total = ov.kpis.events;
@@ -145,7 +149,7 @@ export class Welt {
       this.renderKpis();
       this.renderTab();
     } catch (e) {
-      if (seq !== this.seq) return;
+      if (seq !== this.seq || !this.active) return;
       const msg = e.status === 404 ? t("wl.off") : t("common.error", { msg: e.message });
       kids(this.panels.news, el("p", { class: "state err" }, msg));
       kids(document.getElementById("kpis"));
@@ -156,6 +160,7 @@ export class Welt {
     btn.disabled = true;
     try {
       const r = await api(`api/news?${this.params({ offset: this.items.length, limit: PAGE })}`);
+      if (!this.active) return;
       const known = new Set(this.items.map((x) => x.id));
       this.items.push(...r.items.filter((x) => !known.has(x.id)));
       this.total = r.total;

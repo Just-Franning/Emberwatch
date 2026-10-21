@@ -391,6 +391,13 @@ def word_matcher(words: Iterable[str], domains: bool = False) -> re.Pattern[str]
                       re.I)
 
 
+def distinctive(name: str) -> bool:
+    """A product name that is unlikely to be an ordinary word: several words, a digit, a hyphen, or capitals inside the
+    word ("FortiOS", "NetScaler", "PAN-OS", "Exchange Server"), as the user entered it."""
+    n = name.strip()
+    return len(n.split()) > 1 or any(c.isdigit() or c == "-" for c in n) or any(c.isupper() for c in n[1:])
+
+
 def summary(text: str, limit: int = 260) -> str:
     t = " ".join(text.split())
     if len(t) <= limit:
