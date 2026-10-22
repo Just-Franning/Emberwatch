@@ -135,7 +135,7 @@ REGIONS: dict[str, list[tuple[str, str, str, str, str]]] = {
 }
 PLACE_ALIASES = {"copenhagen": "københavn", "zurich": "zürich", "tel aviv": "tel aviv-yafo"}
 AWS_CODE_RE = re.compile(r"\b((?:us-gov|us|eu|ap|sa|ca|me|af|il|mx)-(?:north|south|east|west|central|northeast|southeast|"
-                         r"southwest|northwest)-\d{1,2})\b")
+                         r"southwest|northwest)-\d{1,2})\b", re.I)  # AWS writes "US-EAST-1" in its texts
 GCP_CODE_RE = re.compile(r"\b((?:asia|australia|europe|me|northamerica|southamerica|us|africa)-[a-z]+\d{1,2})\b")
 CITY_RE = re.compile(r"([A-ZÀ-Ý][\w.'À-ÿ -]{1,40}?),\s+([A-Z][A-Za-z .'-]{2,40}?)(?=\s*(?:-|\(|,|$|\.|\s{2}))")
 AWS_RESOLVED_RE = re.compile(r"^\s*service is operating normally|\[resolved\]|^\s*resolved\b", re.I)
@@ -313,7 +313,7 @@ class Platforms:
         """Regions or places named in an incident, each with its map position (if known)."""
         codes: list[str] = []
         if provider == "aws":
-            codes = AWS_CODE_RE.findall(text)
+            codes = [c.lower() for c in AWS_CODE_RE.findall(text)]
             for name, code in self._aws_names.items():
                 if f"({name})" in text.lower():
                     codes.append(code)
@@ -335,6 +335,7 @@ class Platforms:
     async def _fetch(self, client: httpx.AsyncClient, prov: str, ua: str) -> bytes | None:
         p = PROVIDERS[prov]
         headers = {"User-Agent": ua}
+        self.db.meta_set(f"status_etag:{prov}:new", "")  # never take over the validator of an earlier, failed fetch
         etag = self.db.meta_get(f"status_etag:{prov}")
         if etag:
             headers["If-None-Match"] = etag
@@ -372,8 +373,11 @@ class Platforms:
                 log.warning("status feed %s: %s", prov, exc.__class__.__name__)
                 self.db.status(f"status_{prov}", False, f"{exc.__class__.__name__}: {str(exc)[:160]}")
             await asyncio.sleep(0.5)
-        self.db.execute("DELETE FROM platform_incidents WHERE updated < ?",
-                        ((datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ"),))
+        now = datetime.now(timezone.utc)
+        # also without new feed data (304): an incident without news for two days no longer counts as active
+        self.db.execute("UPDATE platform_incidents SET status = 'resolved', resolved = updated WHERE status = 'active' AND updated < ?",
+                        (_iso(now - timedelta(hours=STALE_HOURS)),))
+        self.db.execute("DELETE FROM platform_incidents WHERE updated < ?", (_iso(now - timedelta(days=KEEP_DAYS)),))
         return new_alerts
 
     def _store(self, prov: str, incs: list[dict[str, Any]]) -> int:
@@ -384,7 +388,8 @@ class Platforms:
             iid = f"{prov}:{inc['key']}"
             stale = now - inc["updated"] > timedelta(hours=STALE_HOURS)
             status = "resolved" if inc["resolved"] or stale else "active"
-            regions = self.locations(prov, inc["text"])
+            # AWS names the region in the GUID of an update ("…#ec2-us-east-1_1700000000"), not always in the text
+            regions = self.locations(prov, (inc["key"] + " " if prov == "aws" else "") + inc["text"])
             prev = self.db.query("SELECT status FROM platform_incidents WHERE id = ?", (iid,))
             self.db.execute(
                 "INSERT INTO platform_incidents(id, provider, title, status, impact, started, updated, resolved, regions, url, "
