@@ -113,6 +113,14 @@ def _cyberchef(raw: str) -> str:
     return v
 
 
+# Sources that SOURCES_DISABLE can switch off (unknown names are ignored)
+OPTIONAL_SOURCES = ("ooni", "gdelt", "attack", "euvd", "exploits", "urlhaus", "cloud_status")
+
+
+def _names(raw: str) -> frozenset[str]:
+    return frozenset(x.strip().lower() for x in raw.split(",") if x.strip().lower() in OPTIONAL_SOURCES)
+
+
 def _region(raw: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(c.strip().upper() for c in raw.split(",") if re.fullmatch(r"\s*[A-Za-z]{2}\s*", c)))
 
@@ -211,9 +219,15 @@ class Settings:
     news_disable: str = ""
     news_retention_days: int = 90
 
+    # 3.3: further public sources, each can be switched off with SOURCES_DISABLE=ooni,gdelt,...
+    sources_disable: frozenset[str] = frozenset()
+
     @property
     def matrix_enabled(self) -> bool:
         return bool(self.matrix_homeserver and self.matrix_token and self.matrix_room)
+
+    def source_on(self, name: str) -> bool:
+        return name not in self.sources_disable
 
 
 def load() -> Settings:
@@ -313,4 +327,5 @@ def load() -> Settings:
         news_feeds=_str("NEWS_FEEDS"),
         news_disable=_str("NEWS_DISABLE"),
         news_retention_days=_int("NEWS_RETENTION_DAYS", 90, 7, 365),
+        sources_disable=_names(_str("SOURCES_DISABLE")),
     )

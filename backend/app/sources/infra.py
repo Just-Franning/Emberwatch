@@ -176,6 +176,10 @@ async def collect(client: httpx.AsyncClient, db: DB, token: str) -> None:
             rows = parse(await _get(client, token, path, params), now)
             db.execmany(UPSERT, rows)
             total += len(rows)
+            if name == "outages" and not db.meta_get("outages_covered_since"):
+                # from here on a missing outage is meaningful (corroborate.py): the first run covers 7 days back
+                since = datetime.now(timezone.utc) - timedelta(days=7)
+                db.meta_set("outages_covered_since", since.strftime("%Y-%m-%d"))
         except Exception as exc:
             errors.append(f"{name}: {exc}")
             log.warning("Radar-Infra %s: %s", name, exc)

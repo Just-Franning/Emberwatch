@@ -31,10 +31,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import alerts, analytics, i18n, nlp, watchlist
 from .actors import Actors
 from .ai import TASKS, Gemini, build_context
+from .attack import Attack
 from .auth import COOKIE, Auth
 from .bgp import BgpMonitor
 from .cables import Cables
-from .config import load
+from .config import OPTIONAL_SOURCES, load
 from .db import DB, open_path, utcnow
 from .domains import Domains
 from .geo import Geo
@@ -46,9 +47,10 @@ from .news import News
 from .notify import Notifier
 from .objects import TYPES as OBJ_TYPES
 from .objects import Objects, object_context
+from .platforms import Platforms
 from .products import Products
 from .reputation import Reputation
-from .sources import abusech, epss, infra, kev, radar, ransomware
+from .sources import abusech, epss, euvd, exploits, infra, kev, ooni, radar, ransomware
 from .surface import Surface
 from .tools import ToolKit
 from .toolbox import registry as tbreg
@@ -78,8 +80,10 @@ syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
 auth = Auth(S)
 myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
 actors = Actors(db)
-news = News(S, db, actors, S.static_dir / "data" / "centroids.json")
-objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news)
+news = News(S, db, actors, S.static_dir / "data" / "centroids.json", cables)
+attack = Attack(db, S.data_dir)
+platforms = Platforms(db, geo, S.static_dir / "data")
+objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news, attack)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -251,6 +255,8 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         await geo.ensure(client)  # downloads only when missing or older than 30 days
         await abusech.collect_feodo(client, db, geo, S.user_agent, S.abusech_auth_key)
         await abusech.collect_threatfox(client, db, geo, S.user_agent, S.abusech_auth_key)
+        if S.source_on("urlhaus"):
+            await abusech.collect_urlhaus(client, db, S.user_agent, S.abusech_auth_key)
         abusech.prune(db, S.c2_retention_days, S.ioc_retention_days)
         await _after_update()
 
@@ -331,6 +337,24 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
             log.exception("actor list")
         await asyncio.to_thread(news.refresh_mine)  # new actor list, products or domains: recognise again
         await news.collect(client)
+        if news.web_enabled:
+            await news.collect_web(client)
+        await asyncio.to_thread(news.refresh_checks)  # compare with the measurements (they keep arriving)
+
+    async def ooni_job() -> None:
+        await ooni.collect(client, db, S.user_agent)
+
+    async def attack_job() -> None:
+        await attack.collect(client, S.user_agent)
+
+    async def euvd_job() -> None:
+        await euvd.collect(client, db, S.user_agent)
+
+    async def exploits_job() -> None:
+        await exploits.collect(client, db, S.user_agent)
+
+    async def platforms_job() -> None:
+        await platforms.collect(client, S.user_agent)
 
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
@@ -348,6 +372,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "kev": kev_job, "epss": epss_job, "products": products_job, "reputation": reputation_job, "surface": surface_job,
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
         "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job, "news": news_job,
+        "ooni": ooni_job, "attack": attack_job, "euvd": euvd_job, "exploits": exploits_job, "platforms": platforms_job,
     }
 
 
@@ -368,6 +393,11 @@ async def lifespan(app: FastAPI):
         ]
         if news.enabled:
             plan.append(("news", S.news_interval, 30))
+        optional = (("ooni", 6 * 60, 200), ("attack", 7 * 24 * 60, 400), ("euvd", 12 * 60, 260),
+                    ("exploits", 24 * 60, 330), ("cloud_status", 10, 70))
+        for name, minutes, delay in optional:
+            if S.source_on(name):
+                plan.append(("platforms" if name == "cloud_status" else name, minutes, delay))
         tasks = [asyncio.create_task(_loop(name, minutes, jobs[name], delay)) for name, minutes, delay in plan]
         if S.bgp_live:
             tasks.append(asyncio.create_task(bgp.run(_ClientRef())))
@@ -616,7 +646,10 @@ def api_status(request: Request) -> dict[str, Any]:
         "history": {"radar_days_final": final_days, "backfill_target": S.backfill_days,
                     "ransomware_backfill": db.meta_get("ransomware_backfill") == "done"},
         "cables": cables.meta,
-        "news": {"enabled": news.enabled, "images": S.news_images, "sources": len(news.sources), "actors": actors.count()},
+        "news": {"enabled": news.enabled, "images": S.news_images, "sources": len(news.sources), "actors": actors.count(),
+                 "web": news.web_enabled},
+        "optional": {name: S.source_on(name) for name in OPTIONAL_SOURCES},
+        "attack": {"version": attack.version()},
         "keys": {
             "cloudflare": bool(S.cf_api_token), "abusech": bool(S.abusech_auth_key),
             "ransomware_live": bool(S.ransomware_live_api_key), "gemini": bool(S.gemini_api_key),
@@ -832,8 +865,8 @@ def _search_news(*, q: str | None = None, cve: str | None = None) -> list[dict[s
     if not news.enabled:
         return []
     if cve:
-        rows = db.query("SELECT id, source, title, published FROM news WHERE cves LIKE ? ORDER BY published DESC LIMIT 10",
-                        (f'%"{cve}"%',))
+        rows = db.query("SELECT id, source, title, published FROM news WHERE cves LIKE ? AND tier IN ('gov', 'press') "
+                        "ORDER BY published DESC LIMIT 10", (f'%"{cve}"%',))
     elif q and len(q) >= 3:
         rows = news._rows(90, q=q, limit=10)
     else:
@@ -1334,6 +1367,8 @@ def _welt_filters(tier: str | None, source: str | None, kind: str | None, countr
         raise AppError("err.bad_request")
     if source and source not in news.by_id:
         raise AppError("err.bad_request")
+    if (tier == "web" or source == "gdelt") and not news.web_enabled:
+        raise AppError("err.bad_request")
     if (country or "").strip() == "region":  # the home region, however many countries HOME_REGION lists
         ccs = list(S.home_region)
     else:  # a country or a short list ("DE,AT,CH")
@@ -1362,7 +1397,7 @@ def welt_overview(days: int, flt: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/welt")
-def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press)$"),
+def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press|web)$"),
              source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=80),
              country: str | None = Query(None, max_length=40), origin: str | None = Query(None, max_length=2),
              target: str | None = Query(None, max_length=2), actor: str | None = Query(None, max_length=120),
@@ -1374,7 +1409,7 @@ def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov
 
 @app.get("/api/news")
 def api_news(days: int = Query(7), offset: int = Query(0, ge=0, le=20000), limit: int = Query(40, ge=1, le=100),
-             tier: str | None = Query(None, pattern="^(gov|press)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
+             tier: str | None = Query(None, pattern="^(gov|press|web)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
              kind: str | None = Query(None, max_length=80), country: str | None = Query(None, max_length=40),
              origin: str | None = Query(None, max_length=2), target: str | None = Query(None, max_length=2),
              actor: str | None = Query(None, max_length=120), mine: bool = False, confirmed: bool = False,
@@ -1449,6 +1484,44 @@ async def api_ai_welt(request: Request, body: WeltAiIn) -> dict[str, Any]:
     q = (body.question or "").strip()
     task = TASKS[lang]["welt_question"] + q if q else TASKS[lang]["welt"]
     return await _ai_report(request, task, ctx, f"welt:{body.days}", q, lang)
+
+
+# --- 3.3: internet blocking (OONI, government-directed outages) and platform outages ---------------------------------
+@app.get("/api/welt/blocking")
+def api_welt_blocking(days: int = Query(7)) -> dict[str, Any]:
+    """Per country: OONI measurements (websites, messengers) and the outages Cloudflare attributes to a government."""
+    if not news.enabled:
+        raise AppError("err.news.disabled", 404)
+    if days not in WELT_DAYS:
+        raise AppError("err.bad_request")
+    d = min(days, 30)  # OONI counts are kept for 35 days
+    rows = ooni.summary(db, max(d, 7)) if S.source_on("ooni") else []
+    shut = []
+    for r in db.query("SELECT id, start_ts, end_ts, countries, cause, scope, url FROM infra_events WHERE kind = 'outage' "
+                      "AND cause IN ('GOVERNMENT_DIRECTED', 'BLOCKING') AND COALESCE(end_ts, start_ts) >= ? "
+                      "ORDER BY start_ts DESC LIMIT 100", (_cutoff(days),)):
+        try:
+            ccs = [c for c in json.loads(r["countries"] or "[]") if CC_RE.match(str(c))]
+        except ValueError:
+            ccs = []
+        shut.append({"id": r["id"], "start": r["start_ts"], "end": r["end_ts"], "countries": ccs, "cause": r["cause"],
+                     "scope": r["scope"], "url": r["url"]})
+    return {"enabled": S.source_on("ooni"), "days": days, "ooni_days": max(d, 7), "countries": rows[:250], "shutdowns": shut}
+
+
+class PlatformsIn(BaseModel):
+    providers: list[str] = Field(default_factory=list, max_length=10)
+
+
+@app.get("/api/platforms")
+def api_platforms(days: int = Query(7, ge=1, le=30), active: bool = False) -> dict[str, Any]:
+    return {"enabled": S.source_on("cloud_status"), "providers": platforms.providers(),
+            "incidents": platforms.listing(days, active)}
+
+
+@app.post("/api/platforms/used")
+def api_platforms_used(body: PlatformsIn) -> dict[str, Any]:
+    return {"providers": platforms.set_used([str(p)[:20] for p in body.providers])}
 
 
 # --- "today": the few things that matter most right now ----------------------------------------------------------

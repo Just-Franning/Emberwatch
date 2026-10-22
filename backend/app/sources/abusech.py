@@ -23,6 +23,7 @@ log = logging.getLogger("abusech")
 
 FEODO_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.json"
 THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
+URLHAUS_RECENT = "https://urlhaus-api.abuse.ch/v1/urls/recent/"
 
 UPSERT = """
 INSERT INTO c2(id, source, ioc, ip, port, malware, threat_type, status, confidence, first_seen, last_seen,
@@ -179,6 +180,51 @@ async def collect_threatfox(client: httpx.AsyncClient, db: DB, geo: Geo, ua: str
     db.execmany(IOC_UPSERT, ioc_rows)
     db.status("threatfox", True, "", len(rows))
     db.status("threatfox_iocs", True, "", db.query("SELECT COUNT(*) AS n FROM iocs")[0]["n"])
+
+
+async def collect_urlhaus(client: httpx.AsyncClient, db: DB, ua: str, key: str) -> None:
+    """URLhaus (3.3): URLs that distribute malware, added in the last days (API v1 urls/recent, Auth-Key).
+    They go to the "iocs" table (type url): log analysis, the IOC match and the watchlist (your domains and networks)
+    use them like ThreatFox IOCs."""
+    if not key:
+        db.status("urlhaus", False, code="missing_key", params={"var": "ABUSECH_AUTH_KEY"})
+        return
+    try:
+        r = await client.get(URLHAUS_RECENT, headers={"Auth-Key": key, "User-Agent": ua}, timeout=90)
+        r.raise_for_status()
+        body = r.json()
+        if not isinstance(body, dict) or body.get("query_status") not in ("ok", "no_results"):
+            raise ValueError(f"query_status={body.get('query_status') if isinstance(body, dict) else '?'}")
+        data = body.get("urls") or []
+        if not isinstance(data, list):
+            data = []
+    except Exception as exc:
+        db.status("urlhaus", False, f"{exc.__class__.__name__}: {str(exc)[:160]}")
+        return
+    now = utcnow()
+    rows = []
+    for e in data[:5000]:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        url = str(e.get("url") or "")[:2000]
+        host = ioc_host(url)
+        if not url or not host:
+            continue
+        ip = None
+        try:
+            ip = str(ipaddress.ip_address(host))
+            host = None
+        except ValueError:
+            pass
+        tags = [str(t)[:40] for t in (e.get("tags") or []) if t] if isinstance(e.get("tags"), list) else []
+        ref = str(e.get("urlhaus_reference") or "")
+        rows.append((
+            f"urlhaus:{e.get('id')}", url, "url", ip, host, None, str(e.get("threat") or "malware_download")[:40],
+            tags[0] if tags else "unknown", None, _norm_ts(e.get("date_added")), _norm_ts(e.get("date_added")),
+            ref if ref.startswith("https://urlhaus.abuse.ch/") else f"https://urlhaus.abuse.ch/url/{e.get('id')}/", now,
+        ))
+    db.execmany(IOC_UPSERT, rows)
+    db.status("urlhaus", True, "", db.query("SELECT COUNT(*) AS n FROM iocs WHERE id LIKE 'urlhaus:%'")[0]["n"])
 
 
 def ioc_host(ioc: str) -> str | None:

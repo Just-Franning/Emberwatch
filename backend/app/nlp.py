@@ -362,6 +362,11 @@ KINDS: dict[str, tuple[str, ...]] = {
     "sanctions": ("sanction", "sanktion"),
     "policy": ("regulation", "legislation", "directive", "nis2", "nis-2", "cyber resilience act", "gesetz", "richtlinie",
                "verordnung"),
+    # 3.3: physical internet infrastructure and state interference with the internet
+    "cable": ("submarine cable", "undersea cable", "subsea cable", "seabed cable", "seekabel", "unterseekabel",
+              "ostseekabel", "datenkabel in der ostsee"),
+    "shutdown": ("internet shutdown", "internet blackout", "internet outage ordered", "internetsperre", "internet-sperre",
+                 "internetabschaltung", "internet-abschaltung", "netzsperre", "censorship", "zensur", "blocked access to"),
 }
 _KIND_RE = {k: re.compile(r"(?<![0-9a-zà-öø-ÿ])(?:" + "|".join(re.escape(w) for w in v) + ")", re.I) for k, v in KINDS.items()}
 

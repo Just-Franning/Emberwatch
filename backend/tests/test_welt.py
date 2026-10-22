@@ -151,7 +151,7 @@ def client() -> httpx.AsyncClient:
 @pytest.fixture()
 def m(tmp_path, monkeypatch):
     mod = v3.load_app(tmp_path, monkeypatch, GEMINI_API_KEY="gm-test", HOME_REGION="DE,AT,CH", LANGUAGE="en",
-                      NEWS_DISABLE="ncsc_uk,securityweek,golem",
+                      NEWS_DISABLE="ncsc_uk,securityweek,golem,cert_eu,cisa,heise", SOURCES_DISABLE="gdelt",
                       NEWS_FEEDS="certx|CERT-X|https://feeds.certx.example/rss|gov|de;bad id|X|https://a.example/;"
                                  "plain|Plain|http://insecure.example/rss")
     STATE.clear()
@@ -375,7 +375,7 @@ def test_overview_detail_and_api(m):
         assert today["items"][0]["kind"] == "alert" and today["items"][0]["severity"] == "high"
         assert "example.de" in today["items"][0]["title"]
         st = tc.get("/api/status").json()
-        assert st["news"] == {"enabled": True, "images": True, "sources": 5, "actors": 113}
+        assert st["news"] == {"enabled": True, "images": True, "sources": 5, "actors": 113, "web": False}
         csp = tc.get("/").headers["content-security-policy"]
         assert "img-src 'self' data: blob: https:;" in csp
 
@@ -405,7 +405,8 @@ def test_gemini_news_and_welt(m):
 
 
 def test_mine_refresh_retention_and_switches(tmp_path, monkeypatch):
-    m = v3.load_app(tmp_path, monkeypatch, NEWS_DISABLE="ncsc_uk,securityweek,golem,krebs", NEWS_IMAGES="0",
+    m = v3.load_app(tmp_path, monkeypatch, NEWS_DISABLE="ncsc_uk,securityweek,golem,krebs,cert_eu,cisa,heise",
+                    SOURCES_DISABLE="gdelt", NEWS_IMAGES="0",
                     NEWS_RETENTION_DAYS="7")
     from app import news as news_mod
 
@@ -606,7 +607,8 @@ def test_own_products_match_whole_words_and_every_watch(m):
 
 def test_home_region_of_any_size_and_late_reports(tmp_path, monkeypatch):
     region = "DE,AT,CH,FR,NL,BE,LU,PL,CZ,DK,SE,NO,FI,IT"
-    m = v3.load_app(tmp_path, monkeypatch, HOME_REGION=region, NEWS_DISABLE="ncsc_uk,securityweek,golem,krebs")
+    m = v3.load_app(tmp_path, monkeypatch, HOME_REGION=region, NEWS_DISABLE="ncsc_uk,securityweek,golem,krebs,cert_eu,cisa,heise",
+                    SOURCES_DISABLE="gdelt")
     src = m.news.by_id["therecord"]
     ctx = m.news._context()
     now = dt.datetime.now(dt.timezone.utc)

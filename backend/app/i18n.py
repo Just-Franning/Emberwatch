@@ -747,3 +747,7 @@ _merge(_OT)
 from .texts_welt import WT as _WT  # noqa: E402
 
 _merge(_WT)
+
+from .texts_33 import T33 as _T33  # noqa: E402
+
+_merge(_T33)

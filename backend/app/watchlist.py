@@ -4,6 +4,8 @@ Matching against threat feeds (runs after every feed update):
 - C2 inventory (Feodo, ThreatFox): IP in network, AS number, domain/URL host
 - Infrastructure events (Cloudflare Radar): involved ASNs, for hijacks also affected prefixes
 - Ransomware victims: victim name equals the domain or a subdomain of it
+- Further network IOCs (3.3: ThreatFox payload/IOC URLs and domains, URLhaus malware URLs): host on the domain or a
+  subdomain of it, IP in the network (C2 entries are matched above and not twice)
 New hits become alerts (alerts.py); each hit is stored exactly once.
 """
 from __future__ import annotations
@@ -107,6 +109,27 @@ def scan(db: DB) -> list[int]:
     c2 = db.query("SELECT id, source, ioc, ip, port, malware, threat_type, asn, as_name, reference FROM c2")
     infra = db.query("SELECT id, kind, asns, prefixes, meta, url FROM infra_events")
     victims = db.query("SELECT id, victim, grp, permalink FROM victims")
+    iocs = db.query("SELECT id, ioc, ip, host, threat_type, malware, reference FROM iocs "
+                    "WHERE threat_type IS NULL OR threat_type != 'botnet_cc'")
+    by_host: dict[str, list[dict[str, Any]]] = {}
+    with_ip: list[tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, dict[str, Any]]] = []
+    for r in iocs:
+        if r["host"]:
+            by_host.setdefault(r["host"].lower().rstrip("."), []).append(r)
+        if r["ip"]:
+            try:
+                with_ip.append((ipaddress.ip_address(r["ip"]), r))
+            except ValueError:
+                pass
+    # IOC hosts per watched domain (each host is walked up its parent domains once)
+    watched = {w["value"] for w in entries if w["kind"] == "domain"}
+    on_domain: dict[str, list[dict[str, Any]]] = {}
+    for h, rs in by_host.items():
+        labels = h.split(".")
+        for i in range(len(labels) - 1):
+            parent = ".".join(labels[i:])
+            if parent in watched:
+                on_domain.setdefault(parent, []).extend(rs)
     new: list[int] = []
 
     def hit(w: dict[str, Any], sev: str, key: str, params: dict[str, Any], ref: str, url: str | None) -> None:
@@ -133,6 +156,10 @@ def scan(db: DB) -> list[int]:
                             break
                     except (ValueError, TypeError):
                         continue
+            for addr, r in with_ip:
+                if addr in net:
+                    hit(w, "high", "watch.ioc_ip", {"ioc": r["ioc"][:300], "threat": r["threat_type"] or "ioc", "malware": r["malware"]},
+                        f"ioc:{r['id']}", r["reference"])
         elif kind == "asn":
             asn = int(val)
             for r in c2:
@@ -150,6 +177,9 @@ def scan(db: DB) -> list[int]:
             for v in victims:
                 if domain_match(host_of(v["victim"]), val):
                     hit(w, "high", "watch.leak_victim", {"group": v["grp"], "victim": v["victim"]}, f"rw:{v['id']}", v["permalink"])
+            for r in on_domain.get(val, []):
+                hit(w, "high", "watch.ioc_domain", {"ioc": r["ioc"][:300], "threat": r["threat_type"] or "ioc", "malware": r["malware"]},
+                    f"ioc:{r['id']}", r["reference"])
     return new
 
 

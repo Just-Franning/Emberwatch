@@ -25,6 +25,8 @@ from .toolbox import registry as tbreg
 from .toolbox import runner as tbrun
 from .toolbox.common import cache_get
 from .toolbox.detect import detect
+from .attack import NOTICE as ATTACK_NOTICE
+from .sources import exploits
 from .toolbox.result import Result, cell, max_sev
 
 TYPES = ("ip", "cidr", "asn", "domain", "url", "hash", "cve", "country", "malware", "group", "vendor", "actor")
@@ -79,7 +81,7 @@ def normalize(otype: str, value: str) -> str:
 
 class Objects:
     def __init__(self, s: Settings, db: DB, geo: Geo, rep: Any, matcher: Any, products: Any, domains: Any, surface: Any,
-                 myip: Any = None, actors: Any = None, news: Any = None) -> None:
+                 myip: Any = None, actors: Any = None, news: Any = None, attack: Any = None) -> None:
         self.s = s
         self.db = db
         self.geo = geo
@@ -91,6 +93,7 @@ class Objects:
         self.myip = myip
         self.actors = actors
         self.news = news
+        self.attack = attack
 
     # --- shared ------------------------------------------------------------------------------------------------
     def _alerts_with(self, needle: str, lang: str, kind: str = "other", limit: int = 30) -> list[dict[str, Any]]:
@@ -456,9 +459,26 @@ class Objects:
             r.rel("vendor", k["vendor"])
         elif ep and ep[0]["epss"] >= 0.5:
             r.find("high", "ob.f.epss", e=f"{ep[0]['epss']:.2f}")
+        eu = self.db.query("SELECT euvd_id, exploited_since FROM euvd WHERE cve=?", (cve,))
+        if eu:
+            rows.append(("ENISA EUVD", cell(r.t("ob.v.euvd", id=eu[0]["euvd_id"], date=eu[0]["exploited_since"] or "?"),
+                                            sev="high", href="https://euvd.enisa.europa.eu/")))
+            if not kev:
+                r.find("high", "ob.f.euvd", date=eu[0]["exploited_since"] or "?")
+        xp = exploits.for_cve(self.db, cve)
+        if any(x["source"] == "metasploit" for x in xp):
+            r.find("high" if not kev and not eu else "medium", "ob.f.exploit_msf")
+        elif xp:
+            r.find("info", "ob.f.exploit_nuclei")
         if nvd and (nvd.get("cvss") or 0) >= 9 and not kev:
             r.find("medium", "ob.f.cvss", s=nvd["cvss"])
         r.kv(r.t("ob.sec.facts"), rows)
+        if xp:
+            r.table(r.t("ob.sec.exploits"), [r.t("ob.c.source"), r.t("ob.c.name"), r.t("ob.c.rating"), ""],
+                    [[r.t(f"ob.v.xp_{x['source']}"), cell(x["name"] or x["ref"], mono=not x["name"]),
+                      r.t(f"ob.v.rank_{x['rank']}") if x["rank"] else (r.t(f"ob.v.sev_{x['severity']}") if x["severity"] else "–"),
+                      cell("↗", href=x["url"]) if x["url"] else ""] for x in xp],
+                    note=r.t("ob.n.exploits"))
         if nvd and nvd.get("summary"):
             r.text(r.t("ob.sec.description"), nvd["summary"])
         elif nvd_err:
@@ -563,6 +583,7 @@ class Objects:
                 r.point({"lat": c["lat"], "lon": c["lon"]}, "c2", None, c["ip"])
         if new24:
             r.find("medium", "ob.f.family_new", n=new24)
+        self._attack_software(r, fam)
         own_hits = [c["ip"] for c in c2 if c["ip"] and self._assets_with_ip(c["ip"])]
         if own_hits:
             r.find("high", "ob.f.family_own", ips=", ".join(own_hits[:3]))
@@ -662,6 +683,7 @@ class Objects:
                     if src:
                         r.path([(src[1], src[0]), (cen[1], cen[0])])
                 r.rel("country", c)
+        self._attack_group(r, [name, *a["synonyms"]])
         if a["refs"]:
             r.items(r.t("ob.sec.actor_refs"), [cell(u.split("/")[2], href=u) for u in a["refs"][:15]])
         if a["country"]:
@@ -669,6 +691,42 @@ class Objects:
         page = self._page(r, "actor", name, name, cname, {"assets": [], "myip": None}, [])
         page["reports"] = [{"id": x["id"], "title": x["title"], "latest": x["latest"]} for x in reports[:10]]
         return page
+
+    # --- MITRE ATT&CK (3.3) ------------------------------------------------------------------------------------------------------------
+    def _attack_note(self, r: Result) -> str:
+        return r.t("ob.n.attack", v=(self.attack.version() if self.attack else None) or "?", notice=ATTACK_NOTICE)
+
+    def _attack_group(self, r: Result, names: list[str]) -> None:
+        g = self.attack.group_for(names) if self.attack else None
+        if not g:
+            return
+        used = self.attack.used_by(g["stix_id"])
+        rows = []
+        for t in used["techniques"]:
+            tac = ", ".join(x["name"] for x in t["tactics"]) or "–"
+            rows.append([tac, cell(t["id"], href=t["url"], mono=True), t["name"]])
+        r.table(r.t("ob.sec.attack_techniques", id=g["ext_id"], n=len(rows)),
+                [r.t("ob.c.tactic"), "ID", r.t("ob.c.technique")], rows, note=self._attack_note(r), empty=r.t("ob.v.none"))
+        if used["software"]:
+            r.items(r.t("ob.sec.attack_software", n=len(used["software"])),
+                    [cell(f"{x['name']} ({x['id']})", href=x["url"]) for x in used["software"][:40]])
+        r.items(r.t("ob.sec.attack_group"), [cell(f"{g['name']} ({g['ext_id']})", href=g["url"])])
+
+    def _attack_software(self, r: Result, fam: str) -> None:
+        sw = self.attack.software_for(fam) if self.attack else None
+        if not sw:
+            return
+        used = self.attack.used_by(sw["stix_id"])
+        groups = self.attack.users_of(sw["stix_id"])
+        r.kv(r.t("ob.sec.attack_sw", id=sw["ext_id"]), [
+            (r.t("ob.k.attack_sw"), cell(f"{sw['name']} ({sw['ext_id']})", href=sw["url"])),
+            (r.t("ob.k.attack_type"), r.t("ob.v.sw_" + ("tool" if sw.get("sw_type") == "tool" else "malware"))),
+            (r.t("ob.k.attack_techniques"), len(used["techniques"])),
+            (r.t("ob.k.attack_groups"), ", ".join(x["name"] for x in groups[:12]) or None)])
+        r.sections[-1]["note"] = self._attack_note(r)
+        for x in groups[:5]:
+            if self.actors and self.actors.get(x["name"]):
+                r.rel("actor", self.actors.get(x["name"])["name"])
 
     # --- vendor -----------------------------------------------------------------------------------------------------------------------
     def _vendor(self, vendor: str, lang: str) -> dict[str, Any]:

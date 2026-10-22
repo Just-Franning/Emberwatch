@@ -356,6 +356,69 @@ CREATE TABLE IF NOT EXISTS actors (
     refs TEXT,
     updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS ooni (
+    cc TEXT NOT NULL,
+    day TEXT NOT NULL,
+    test TEXT NOT NULL,
+    measurements INTEGER NOT NULL,
+    anomalies INTEGER NOT NULL,
+    confirmed INTEGER NOT NULL,
+    failures INTEGER NOT NULL,
+    PRIMARY KEY (cc, day, test)
+);
+CREATE TABLE IF NOT EXISTS attack_objects (
+    stix_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    ext_id TEXT,
+    name TEXT NOT NULL,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    tactics TEXT NOT NULL DEFAULT '[]',
+    sub INTEGER NOT NULL DEFAULT 0,
+    sw_type TEXT,
+    ord INTEGER NOT NULL DEFAULT 0,
+    url TEXT
+);
+CREATE INDEX IF NOT EXISTS attack_objects_kind ON attack_objects(kind);
+CREATE TABLE IF NOT EXISTS attack_uses (
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    PRIMARY KEY (src, dst)
+);
+CREATE TABLE IF NOT EXISTS euvd (
+    cve TEXT PRIMARY KEY,
+    euvd_id TEXT,
+    exploited_since TEXT,
+    score REAL,
+    epss REAL,
+    vendor TEXT,
+    product TEXT,
+    published TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exploits (
+    cve TEXT NOT NULL,
+    source TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    name TEXT,
+    detail TEXT,
+    published TEXT,
+    PRIMARY KEY (cve, source, ref)
+);
+CREATE TABLE IF NOT EXISTS platform_incidents (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    impact TEXT,
+    started TEXT,
+    updated TEXT,
+    resolved TEXT,
+    regions TEXT NOT NULL DEFAULT '[]',
+    url TEXT,
+    summary TEXT,
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS platform_incidents_updated ON platform_incidents(updated);
 """
 
 # (table, column, declaration) – applied with ALTER TABLE if the column is missing
@@ -366,6 +429,8 @@ MIGRATIONS = (
     ("watchlist", "scan", "INTEGER NOT NULL DEFAULT 0"),
     ("watchlist", "scan_ack", "TEXT"),
     ("news", "body", "TEXT"),  # text the recognition ran on (also used when it runs again)
+    ("news", "cables", "TEXT"),  # 3.3: submarine cables named in the report (ids of the cable map)
+    ("news", "checks", "TEXT"),  # 3.3: comparison with measurements (corroborate.py), refreshed every run
 )
 
 
@@ -444,6 +509,17 @@ class DB:
             try:
                 for sql, params in statements:
                     self._conn.execute(sql, tuple(params))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def replace(self, steps: list[tuple[str, list[tuple[Any, ...]]]]) -> None:
+        """Runs executemany for each (sql, rows) atomically – e.g. delete a whole data set and insert the new one."""
+        with self._lock:
+            try:
+                for sql, rows in steps:
+                    self._conn.executemany(sql, rows)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
