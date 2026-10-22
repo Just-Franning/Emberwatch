@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.2.1 – 2026-10-21
+## 3.2.1 – 2026-10-22
 
 Fixes from an independent review of 3.2.0.
 
