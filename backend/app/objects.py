@@ -694,7 +694,8 @@ class Objects:
 
     # --- MITRE ATT&CK (3.3) ------------------------------------------------------------------------------------------------------------
     def _attack_note(self, r: Result) -> str:
-        return r.t("ob.n.attack", v=(self.attack.version() if self.attack else None) or "?", notice=ATTACK_NOTICE)
+        return r.t("ob.n.attack", v=(self.attack.version() if self.attack else None) or "?",
+                   notice=self.attack.notice() if self.attack else ATTACK_NOTICE.format(year="2026"))
 
     def _attack_group(self, r: Result, names: list[str]) -> None:
         g = self.attack.group_for(names) if self.attack else None

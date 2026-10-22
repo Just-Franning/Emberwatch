@@ -293,7 +293,7 @@ def bundle(extra=0) -> str:
     def ref(eid, kind):
         return [{"source_name": "mitre-attack", "external_id": eid, "url": f"https://attack.mitre.org/{kind}/{eid.replace('.', '/')}"}]
     objs = [
-        {"type": "x-mitre-collection", "id": "x-mitre-collection--1", "x_mitre_version": "20.0"},
+        {"type": "x-mitre-collection", "id": "x-mitre-collection--1", "x_mitre_version": "20.0", "modified": "2026-10-13T12:00:00.000Z"},
         {"type": "x-mitre-matrix", "id": "x-mitre-matrix--1", "tactic_refs": ["x-mitre-tactic--ia", "x-mitre-tactic--c2"]},
         {"type": "x-mitre-tactic", "id": "x-mitre-tactic--c2", "name": "Command and Control", "x_mitre_shortname": "command-and-control",
          "external_references": ref("TA0011", "tactics")},
@@ -336,8 +336,8 @@ def test_stix_stream_parser_and_actor_pages(m, monkeypatch):
     from app import attack
     text = bundle(extra=600)
     monkeypatch.setattr(attack, "CHUNK", 257)  # objects across many chunk boundaries
-    rows, uses, version, order = attack.parse(io.StringIO(text))
-    assert version == "20.0" and order == ["x-mitre-tactic--ia", "x-mitre-tactic--c2"]
+    rows, uses, info, order = attack.parse(io.StringIO(text))
+    assert info == {"version": "20.0", "year": "2026"} and order == ["x-mitre-tactic--ia", "x-mitre-tactic--c2"]
     ids = {r[2] for r in rows}
     assert {"G0007", "T1566.001", "T1071.001", "S0650", "S0154", "TA0011"} <= ids and not ids & {"G0999", "T1999"}
     assert ("intrusion-set--apt28", "attack-pattern--dep") not in uses and len(uses) == 4
@@ -371,7 +371,7 @@ def test_stix_stream_parser_and_actor_pages(m, monkeypatch):
         page = tc.get("/api/obj", params={"type": "actor", "value": "APT28"}).json()
         sec = next(s for s in page["sections"] if s.get("title", "").startswith("Techniques according to MITRE ATT&CK"))
         assert sec["rows"][0][0] == "Initial Access" and sec["rows"][0][1][0]["t"] == "T1566.001 Spearphishing Attachment"
-        assert sec["rows"][1][0] == "Command and Control" and "The MITRE Corporation" in sec["note"]
+        assert sec["rows"][1][0] == "Command and Control" and "© 2026 The MITRE Corporation" in sec["note"]
         from app.objects import object_context
         ctx = object_context(page)
         assert any(r == ["Initial Access", "T1566.001 Spearphishing Attachment"] for x in ctx["sections"] for r in x.get("rows", []))

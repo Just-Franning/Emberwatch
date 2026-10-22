@@ -1047,6 +1047,7 @@ a.echip:hover { border-color: var(--border-strong); color: #fff; background: var
 .gov.web { border-style: dashed; color: var(--text-2); }
 .wtag.chk { color: #bbf7d0; border-color: rgba(34, 197, 94, 0.55); }
 .wl-checks { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 6px; }
+.wl-checks .wl-mine { margin: 0; }
 .web-note { border-left: 2px dashed var(--border-strong); padding-left: 8px; }
 .chk-verdict { font-weight: 600; }
 .chk-verdict.supported { color: #86efac; }

@@ -455,8 +455,9 @@ CSP = (
     f"worker-src 'self'; connect-src 'self' {BASEMAP_HOST}; font-src 'self'; "
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
-PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/boot.js",
+PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg", "/styles.css",
+                # the login page and the modules it imports (i18n.js loads all text catalogues)
+                "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/texts_33.js", "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)

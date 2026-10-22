@@ -70,6 +70,8 @@ services:
       NEWS_DISABLE: ${NEWS_DISABLE:-}
       NEWS_FEEDS: ${NEWS_FEEDS:-}
       NEWS_RETENTION_DAYS: ${NEWS_RETENTION_DAYS:-90}
+      # Optional sources to switch off: ooni,gdelt,attack,euvd,exploits,urlhaus,cloud_status
+      SOURCES_DISABLE: ${SOURCES_DISABLE:-}
       # Log analysis
       LOG_MAX_MB: ${LOG_MAX_MB:-25}
       SYSLOG_ENABLED: ${SYSLOG_ENABLED:-0}

@@ -1,6 +1,6 @@
 # Emberwatch
 
-Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware, exploited vulnerabilities and internet infrastructure from public sources, security reports of authorities and specialist media in their geopolitical context, plus monitoring of your own assets, products and logs.
+Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware, exploited vulnerabilities, internet infrastructure and cloud outages from public sources, security reports of authorities and specialist media in their geopolitical context – checked against measurements –, plus monitoring of your own assets, products and logs.
 
 **English** · [Deutsch](README.de.md)
 
@@ -13,7 +13,7 @@ Self-hosted cyber threat picture on a world map: attacks, C2 servers, ransomware
 Emberwatch has four areas: **Cyber** (the world map with attack data, red), **World** (security reports on the same map, indigo), **Analysis** (objects and tools) and **My network** (your own IPs, assets, products and logs). `Ctrl+K` opens a command palette for everything. The selected country and the period carry over between the two map views.
 
 **Cyber – global threat picture**
-- World map with L7 attack flows (origin → target), country shading by attack share, reported C2 servers, ransomware victims per country, internet outages, BGP hijacks/route leaks, traffic anomalies and submarine cables; layers are switched with the chips above the map
+- World map with L7 attack flows (origin → target), country shading by attack share, reported C2 servers, ransomware victims per country, internet outages, BGP hijacks/route leaks, traffic anomalies, submarine cables and active incidents of AWS, Azure, Google Cloud and Cloudflare at the affected region; layers are switched with the chips above the map
 - *Today*: the few things that matter now – your alerts of the last 48 hours, detected patterns and events many sources report; four key figures below the map (your country as attack target, active C2, ransomware in your region, new KEV that concern you)
 - Rankings: target and origin countries (24 h vs. 7 days), DDoS vectors, L7 attack categories, C2 families and hosting networks, ransomware groups and sectors, newly exploited vulnerabilities (CISA KEV with FIRST EPSS)
 - Rule-based pattern detection (rising countries and vectors, spikes, new C2 families, KEV clusters, critical outages, correlations) – deterministic and explained, no black box
@@ -22,14 +22,16 @@ Emberwatch has four areas: **Cyber** (the world map with attack data, red), **Wo
 - Optional Gemini reports (global, country, home region, free questions with follow-ups), exportable as Markdown or PDF. The model only receives aggregated figures.
 
 **World – security reports in context**
-- Reports of government CERTs and specialist media (RSS/Atom), with headline, teaser, preview image and a link to the original; reports on the same event are grouped
-- Recognised automatically from headline and feed text (up to 1,500 characters): countries, the named origin, threat actors (MISP Galaxy), malware, CVEs and the kind of incident (ransomware, DDoS, espionage, sabotage, breach, law enforcement, sanctions, …). Attributions are shown as statements of the sources, labelled as recognised automatically
-- Map: country pairs (origin → target according to the reports) and the countries named; filters for corroborated events (an authority or at least two sources), law enforcement & sanctions, sources, focus country or home region, period
-- *Report in context*: classification, the same event in other sources, what the local data say about it (KEV/EPSS of the CVEs, active C2 servers of the malware, Cloudflare data for the country pair) and whether it concerns your products, CVEs or domains – such reports also raise alerts
+- Reports of government CERTs and specialist media (RSS/Atom), with headline, teaser, preview image and a link to the original; reports on the same event are grouped. Optionally the worldwide press via GDELT: headlines from news sites around the world, marked as unverified, shown only when chosen as source, kept apart from the curated sources and never alerted
+- Recognised automatically from headline and feed text (up to 1,500 characters): countries, the named origin, threat actors (MISP Galaxy), malware, CVEs, submarine cables named in the report and the kind of incident (ransomware, DDoS, espionage, sabotage, breach, submarine cable, internet blocking, law enforcement, sanctions, …). Attributions are shown as statements of the sources, labelled as recognised automatically
+- **Compared with measurements:** each report is checked against Emberwatch's own data – a DDoS against the Cloudflare share of the target country (compared with the 14 days before), ransomware against the group's leak site posts, cable damage and shutdowns against internet outages, blocking against OONI measurements, CVEs against CISA KEV and ENISA, malware against active C2 servers. The result (supported, not supported, unclear) is shown with the numbers behind it; a filter shows only reports the data support. Measurements show traffic, posts and outages, not who is behind them
+- Map: country pairs (origin → target according to the reports), the countries named, the submarine cables named and internet blocking (confirmed blocking according to OONI, shutdowns Cloudflare attributes to a government); filters for corroborated events (an authority or at least two sources), law enforcement & sanctions, sources, focus country or home region, period
+- *Blocking* tab: shutdowns ordered by governments and OONI measurements per country (confirmed blocking, anomalous websites and messengers, compared with the period before), with links to OONI Explorer and IODA
+- *Report in context*: classification, the same event in other sources, the comparison with measurements, the submarine cables named, what the local data say about it (KEV, ENISA, EPSS and public exploit code of the CVEs, active C2 servers of the malware, Cloudflare data for the country pair) and whether it concerns your products, CVEs or domains – such reports also raise alerts
 - Actors with their aliases, attributed country and sponsor, confidence, references and the reports naming them; optional Gemini briefing of the period and Gemini assessment of a single report
 
 **Analysis – objects and tools**
-- Object pages for IPs, networks, AS numbers, domains, URLs, file hashes, CVEs, countries, malware families, ransomware groups, threat actors and vendors: risk assessment with reasons, everything the local data knows, the relation to your own assets, related objects, your alerts about it, earlier tool runs and an optional Gemini assessment
+- Object pages for IPs, networks, AS numbers, domains, URLs, file hashes, CVEs, countries, malware families, ransomware groups, threat actors and vendors: risk assessment with reasons, everything the local data knows, the relation to your own assets, related objects, your alerts about it, earlier tool runs and an optional Gemini assessment. Threat actors and malware show their techniques by tactic and the software they use according to MITRE ATT&CK; CVEs show whether ENISA lists them as exploited and whether public exploit code (Metasploit modules) or check templates (Nuclei) exist
 - Tool box: paste any input (IP, network, AS, domain, URL, e-mail address, hash, CVE or a mail header); Emberwatch detects the type and shows which tools fit, grouped by question:
   - *Reachability:* ping, traceroute, path quality, Globalping
   - *Ownership:* IP info, RDAP/whois, BGP/RPKI (RIPEstat), passive DNS (mnemonic), certificates (Certificate Transparency)
@@ -39,19 +41,19 @@ Emberwatch has four areas: **Cyber** (the world map with attack data, red), **Wo
   - *Convert:* CyberChef (in the browser)
 - Every tool is labelled: **passive** (only data sources), **active** (harmless contact with the target) or **intrusive** (needs your confirmation per run); plus *target sees you* and which *third party* receives the input
 - Recipes run several tools in one go: server check, domain check, suspicious IP, suspicious mail
-- Deep views: exploited vulnerabilities (filters, EPSS, marks what affects you), infrastructure events, C2 servers (with block list export), ransomware victims; history of all tool runs (90 days)
+- Deep views: exploited vulnerabilities (CISA KEV, or exploited according to ENISA but not in KEV; filters, EPSS, public exploit code, marks what affects you), infrastructure events, C2 servers (with block list export), ransomware victims, platform incidents (AWS, Azure, Google Cloud, Cloudflare, with regions); history of all tool runs (90 days)
 
 **My network**
 - Overview: your IPs, alerts of the last 7 days, assets by risk, products, operation
 - **My IP:** tracks your home connection and the egress address of this server, records every change and checks both against Spamhaus DROP, Tor, the C2/IOC data, AbuseIPDB and Shodan InternetDB (open ports). The home IP is learned from your visits (with confirmation, optionally automatically within your provider's network), a DynDNS host name or a reporter: `curl` with a token, or any dyndns2 client (routers, ddclient)
-- Assets (IPs, networks, AS numbers, domains): matching against C2 servers, ThreatFox IOCs, BGP hijacks/leaks, outages, leak sites, Spamhaus DROP and AbuseIPDB; passive attack surface via Shodan InternetDB; optional active TCP scan after explicit confirmation; Certificate Transparency and lookalike domain monitoring; live BGP monitoring via RIPE RIS Live
-- Product watch for vendors/products against CISA KEV and NVD
+- Assets (IPs, networks, AS numbers, domains): matching against C2 servers, ThreatFox IOCs, URLhaus malware URLs, BGP hijacks/leaks, outages, leak sites, Spamhaus DROP and AbuseIPDB; passive attack surface via Shodan InternetDB; optional active TCP scan after explicit confirmation; Certificate Transparency and lookalike domain monitoring; live BGP monitoring via RIPE RIS Live
+- Product watch for vendors/products against CISA KEV and NVD; the cloud platforms you use (AWS, Azure, Google Cloud, Cloudflare) raise an alert for each new incident on their status page
 - Log analysis (upload, also .gz) and optional syslog receiver
 - One alert feed with optional Matrix notifications and a daily report
 
 **Interface:** German and English, one side panel on the map (movable and resizable), keyboard shortcuts, start animation, optional login.
 
-![World view: a report in its context](docs/weltlage.webp)
+![World view: a report in its context, compared with measurements](docs/weltlage.webp)
 
 ![Object page of a country](docs/object.webp)
 
@@ -163,7 +165,7 @@ All settings are environment variables; [`.env.example`](.env.example) lists eve
 | `AUTH_MODE` | `password` | `password` = built-in login, `none` = no login (only behind an authenticating proxy) |
 | `AUTH_PASSWORD` | – | Login password; empty = generated on first start |
 | `CF_API_TOKEN` | – | Cloudflare API token with Radar read permission (attacks, outages, BGP events) |
-| `ABUSECH_AUTH_KEY` | – | abuse.ch Auth-Key (ThreatFox) |
+| `ABUSECH_AUTH_KEY` | – | abuse.ch Auth-Key (ThreatFox, URLhaus, MalwareBazaar) |
 | `RANSOMWARE_LIVE_API_KEY` | – | Optional ransomware.live PRO key; without it the free API is used |
 | `ABUSEIPDB_API_KEY` | – | Optional, IP reputation (free tier: 1,000 checks per day) |
 | `NVD_API_KEY` | – | Optional, faster product checks (50 instead of 5 requests per 30 s) |
@@ -181,7 +183,8 @@ All settings are environment variables; [`.env.example`](.env.example) lists eve
 | `NEWS_IMAGES` | `1` | Preview images of reports; the browser loads them from the publisher (`0` = no images, no `https:` in the image policy) |
 | `NEWS_DISABLE` | – | Switch off built-in sources, e.g. `golem,krebs` |
 | `NEWS_FEEDS` | – | More feeds: `id\|Name\|https://feed-url[\|gov\|lang]`, several separated by `;` (`gov` = authority) |
-| `NEWS_RETENTION_DAYS` | `90` | Days reports are kept (7–365) |
+| `NEWS_RETENTION_DAYS` | `90` | Days reports are kept (7–365); the worldwide press (GDELT) is kept 14 days |
+| `SOURCES_DISABLE` | – | Switch off optional sources, comma-separated: `ooni` (blocking measurements), `gdelt` (worldwide press), `attack` (MITRE ATT&CK), `euvd` (ENISA), `exploits` (Metasploit/Nuclei metadata), `urlhaus`, `cloud_status` (platform incidents) |
 | `TOOLS_ENABLED` | `1` | `0` switches the network tools and the tool box off |
 | `TOOLS_ALLOW_PRIVATE` | `0` | `1` = tools and active scans may target private addresses |
 | `SCAN_ENABLED` | `1` | `0` disables active scans completely |
@@ -218,6 +221,7 @@ Where to get the keys:
 - World view: feeds are read with entity expansion and external references disabled (defusedxml), at most 5 MB each, with conditional requests; redirects must stay on HTTPS and public addresses. Preview images are taken from the feed or from the article page, which is only fetched from the source's own domain and public addresses (at most 400 KB, three redirects, each checked). Image addresses must use a public host name on the default port that resolves to public addresses; address literals and internal names are dropped, because your browser loads the images from inside your network. Headlines and teasers are shown as text; links and images are HTTPS only, images are loaded without a referrer.
 - *My IP* stores the addresses the interface is opened from (90 days), the history of your home and server IPs and the hash of the reporter token. Tool runs are stored for 90 days (at most 3,000) and can be deleted in the history; Gemini analyses are kept as long as alerts (`ALERT_RETENTION_DAYS`, at most 2,000).
 - Request bodies are limited: 20 MB with a session (mail analysis up to 15 MB), 64 KB without one (login, reporter).
+- 3.3 sources: status feeds are parsed like news feeds (defusedxml, size limits); Emberwatch downloads only the *metadata* of Metasploit and Nuclei (which module or template exists for which CVE), never exploit code, and links only to paths inside the two GitHub repositories; the ATT&CK bundle and the exploit lists replace the stored data only when the download is complete. The worldwide press (GDELT) stores headline and link only; no article pages or images are fetched for it.
 - Outbound connections: the data sources listed below, the basemap tiles (OpenFreeMap, loaded by the browser), preview images of reports (loaded by the browser from the publishers, `NEWS_IMAGES=0` turns this off), DB-IP downloads, the targets you choose in the tools or scans, and the third parties of the tools you run (labelled in the interface). CyberChef opens in the browser; the input stays in the URL fragment and is not sent to a server.
 - Backups: everything lives in the `/data` volume (`emberwatch.sqlite`, login files, geolocation databases).
 
@@ -236,7 +240,7 @@ Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ─�
                                                                           └─ SQLite (/data)
 ```
 
-- Backend: `backend/app` (one module per concern: `sources/` collectors, `analytics.py` patterns, `surface.py` attack surface and scans, `domains.py` CT and lookalikes, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` log analysis and syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` object pages, `myip.py` own IPs, `news.py` feeds and reports, `nlp.py` recognition, `actors.py` threat actors).
+- Backend: `backend/app` (one module per concern: `sources/` collectors, `analytics.py` patterns, `surface.py` attack surface and scans, `domains.py` CT and lookalikes, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` log analysis and syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` object pages, `myip.py` own IPs, `news.py` feeds and reports, `nlp.py` recognition, `actors.py` threat actors, `corroborate.py` comparison of reports with measurements, `cables.py` submarine cables, `attack.py` MITRE ATT&CK, `platforms.py` cloud platform incidents; `sources/ooni.py`, `gdelt.py`, `euvd.py`, `exploits.py` the 3.3 sources).
 - Tool box: `backend/app/toolbox` – `registry.py` describes every tool (inputs, level, flags, parameters) and is the single source for the interface and the server-side validation; `detect.py` input detection; `result.py` the unified result format; `tools_*.py` the tools by question; `runner.py` runs, recipes and history.
 - Texts the backend produces (patterns, alerts, errors) are stored language-neutral and rendered per request in German or English.
 - Frontend: `frontend/` without a build step; all dynamic content is inserted as text, never as HTML. `router.js` (areas), `maptools.js` (map tool bar), `welt.js` (world view), `analyse.js` (objects, tool box, views), `netz.js` and `assets.js` (my network), `result.js` (renders every tool result), `palette.js` (`Ctrl+K`).
@@ -246,9 +250,13 @@ Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ─�
 | Source | Used for | Terms |
 |---|---|---|
 | [Cloudflare Radar](https://radar.cloudflare.com) | attack shares, vectors, outages, BGP hijacks/leaks, anomalies | CC BY-NC 4.0 |
-| [abuse.ch](https://abuse.ch) Feodo Tracker, ThreatFox | C2 servers, IOCs | abuse.ch terms of use |
+| [abuse.ch](https://abuse.ch) Feodo Tracker, ThreatFox, URLhaus | C2 servers, IOCs, malware URLs | abuse.ch terms of use |
 | [Ransomware.live](https://www.ransomware.live) | leak site victims | attribution required, no redistribution of raw data |
 | [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | exploited vulnerabilities | public |
+| [ENISA EUVD](https://euvd.enisa.europa.eu) | vulnerabilities exploited according to ENISA | reproduction authorised provided the source is acknowledged |
+| [Metasploit Framework](https://github.com/rapid7/metasploit-framework) (Rapid7), module metadata | public exploit code per CVE (metadata only) | BSD-3-Clause |
+| [Nuclei templates](https://github.com/projectdiscovery/nuclei-templates) (ProjectDiscovery), `cves.json` | public check templates per CVE (metadata only) | MIT |
+| [MITRE ATT&CK](https://attack.mitre.org) Enterprise | techniques and software of groups and malware | © The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. |
 | [FIRST EPSS](https://www.first.org/epss/) | exploitation probability | FIRST terms |
 | [NVD](https://nvd.nist.gov) | CVEs for watched products | This product uses data from the NVD API but is not endorsed or certified by the NVD. |
 | [Shodan InternetDB](https://internetdb.shodan.io) | passive attack surface | free for non-commercial use |
@@ -263,12 +271,16 @@ Browser (vanilla JS, MapLibre, Chart.js)  ──HTTPS──  reverse proxy  ─�
 | [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch) | file hashes (tool, on request) | abuse.ch terms of use |
 | [rdap.org](https://rdap.org) | RDAP bootstrap (whois tool) | public |
 | [MISP Galaxy](https://github.com/MISP/misp-galaxy) (threat-actor cluster) | threat actors, aliases, attributions | CC0 1.0 / BSD 2-Clause |
-| World view feeds: [NCSC UK](https://www.ncsc.gov.uk), [BSI](https://www.bsi.bund.de), [The Record](https://therecord.media), [BleepingComputer](https://www.bleepingcomputer.com), [SecurityWeek](https://www.securityweek.com), [Krebs on Security](https://krebsonsecurity.com), [Golem.de](https://www.golem.de) | headlines, teasers and preview images of security reports, linked to the original | rights stay with the publishers; Emberwatch shows what the feeds publish and links to the article |
+| World view feeds: [NCSC UK](https://www.ncsc.gov.uk), [BSI](https://www.bsi.bund.de), [CERT-EU](https://cert.europa.eu), [CISA](https://www.cisa.gov/news-events/cybersecurity-advisories), [The Record](https://therecord.media), [BleepingComputer](https://www.bleepingcomputer.com), [SecurityWeek](https://www.securityweek.com), [Krebs on Security](https://krebsonsecurity.com), [Golem.de](https://www.golem.de), [heise Security](https://www.heise.de/security/) | headlines, teasers and preview images of security reports, linked to the original | rights stay with the publishers; Emberwatch shows what the feeds publish and links to the article |
+| [GDELT Project](https://www.gdeltproject.org) (DOC 2.0 API) | worldwide press headlines (optional, unverified) | free use; citation of and link to the GDELT Project required |
+| [OONI](https://ooni.org/data/) (Open Observatory of Network Interference) | blocking measurements per country and day | CC BY-NC-SA 4.0 |
+| [IODA](https://ioda.inetintel.cc.gatech.edu) (Georgia Tech) | link only (no data used: not openly licensed) | – |
+| [AWS Health Dashboard](https://health.aws.amazon.com/health/status), [Azure status](https://azure.status.microsoft/en-us/status), [Google Cloud Service Health](https://status.cloud.google.com), [Cloudflare Status](https://www.cloudflarestatus.com) | platform incidents | public status pages |
 | [CyberChef](https://github.com/gchq/CyberChef) (GCHQ) | decoding in the browser (link) | Apache 2.0 |
 | [DB-IP Lite](https://db-ip.com) | IP geolocation and ASN | CC BY 4.0 |
 | [TeleGeography](https://www.submarinecablemap.com) | submarine cables (snapshot 2021) | CC BY-NC-SA 3.0 |
 | [OpenFreeMap](https://openfreemap.org), OpenMapTiles, OpenStreetMap | basemap | see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
-| [Natural Earth](https://www.naturalearthdata.com) | country shapes (offline map) | public domain |
+| [Natural Earth](https://www.naturalearthdata.com) | country shapes (offline map), city coordinates of cloud regions | public domain |
 
 Several sources only allow non-commercial use. Emberwatch is meant for private and non-commercial use; see [Licence](#licence).
 
@@ -276,6 +288,11 @@ Several sources only allow non-commercial use. Emberwatch is meant for private a
 
 - Cloudflare values are shares of the traffic Cloudflare sees, not absolute attack counts. Origin is where the attacking IPs are, not who is behind them.
 - World view: recognition works on headline and feed text and is rule-based; it can miss or misread countries, actors and kinds (e.g. a name that is also an ordinary word). An origin is an attribution by a source or the country the MISP Galaxy gives for the recognised actor, not proof. The number of reports shows coverage, which depends on the sources and their languages, not the scale of attacks. Preview images come from the publishers and may be missing.
+- Comparison with measurements: only what Emberwatch's own data can show. A country outside Cloudflare's top 25 attack targets, a group without leak site posts in the data or a period that is still open gives "unclear", not "not supported". "Supported" means consistent with the data, not proof; who is behind an attack cannot be measured.
+- OONI depends on volunteers: some countries have few measurements, and an anomalous measurement can also be a technical failure. Only confirmed blocking (a known block page) colours the map.
+- The worldwide press (GDELT) is collected automatically and not verified; it can contain irrelevant or duplicate headlines.
+- Platform incidents: only what the providers publish on their status pages (Microsoft lists only broad incidents there). Regions are recognised in the text and placed at the location the provider documents; where it names only a state or country, the map shows the largest city there or the centre of the country.
+- MITRE ATT&CK is linked by names and aliases; groups ATT&CK does not describe have no techniques. Public exploit code shows that a flaw is easy to exploit, not that it is exploited.
 - Geolocation (DB-IP Lite) is approximate.
 - InternetDB is updated about weekly; a port opened today may only appear days later. Use the active scan for current results.
 - The product watch matches NVD descriptions by keyword; generic names can produce false positives.
@@ -295,7 +312,7 @@ python -m pytest -q tests            # tests use mocked upstream APIs
 COLLECTORS=0 AUTH_MODE=none DATA_DIR=../data STATIC_DIR=../frontend uvicorn app.main:app --reload
 ```
 
-`scripts/` contains the generators for the bundled map data (basemap style, country shapes, submarine cables).
+`scripts/` contains the generators for the bundled map data (basemap style, country shapes, submarine cables, city coordinates of the cloud regions).
 
 ## Changelog
 
