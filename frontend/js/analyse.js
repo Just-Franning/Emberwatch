@@ -1,5 +1,5 @@
-// Analysis area: start page, object pages, tool box, deep views (KEV, infrastructure, C2, ransomware), run history,
-// Gemini per object. Everything below the header; the map stays in the situation view ("show on map" switches there).
+// Analysis area: start page, object pages, tool box, deep views (exploited vulnerabilities, infrastructure, C2,
+// ransomware, cloud platform incidents), run history, Gemini per object. Everything below the header; the map stays in the situation view ("show on map" switches there).
 import { reportArticle } from "./ai.js";
 import { t } from "./i18n.js";
 import { alertItem } from "./panels.js";
@@ -9,7 +9,8 @@ import { go, href, isPinned, objLink, pinned, recent, remember, routes, togglePi
 import { RunStack } from "./runstack.js";
 import { api, countryName, dateOnly, dateTime, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const VIEWS = ["kev", "infra", "c2", "ransom"];
+const VIEWS = ["kev", "infra", "c2", "ransom", "platforms"];
+const XP_NAMES = { metasploit: "Metasploit", nuclei: "Nuclei" };
 const MAX_INPUT = 2048; // same limit as the input detection on the server (longer input counts as free text)
 let handoff = null; // long input (mail header) passed from the start page to the tool box
 
@@ -392,7 +393,7 @@ export class Analyse {
   }
 
   async view_kev(box, seq) {
-    const f = { q: "", vendor: "", days: "0", ransomware: false, min_epss: "0", mine: false, sort: "date" };
+    const f = { q: "", vendor: "", days: "0", ransomware: false, min_epss: "0", mine: false, sort: "date", catalog: "kev", exploit: false };
     const out = el("div");
     const q = el("input", { type: "search", placeholder: t("an.kev.q_ph"), "aria-label": t("an.kev.q_ph"), maxlength: 100 });
     const vendor = el("select", { "aria-label": t("an.kev.vendor") }, el("option", { value: "" }, t("common.all")));
@@ -401,39 +402,55 @@ export class Analyse {
     const sort = el("select", { "aria-label": t("an.kev.sort") }, el("option", { value: "date" }, t("an.kev.by_date")), el("option", { value: "epss" }, t("an.kev.by_epss")));
     const rw = el("input", { type: "checkbox" });
     const mine = el("input", { type: "checkbox" });
+    const xpOnly = el("input", { type: "checkbox" });
+    const catalog = el("select", { "aria-label": t("an.kev.catalog") }, el("option", { value: "kev" }, t("an.kev.cat_kev")), el("option", { value: "euvd" }, t("an.kev.cat_euvd")));
+    const rwLabel = el("label", { class: "pcheck" }, rw, t("an.kev.ransom_only"));
+    const xpTags = (r) => (r.exploits || []).filter((x) => XP_NAMES[x]).map((x) => el("span", { class: "tag xp", title: t("an.kev.xp_title") }, XP_NAMES[x]));
     const load = async () => {
-      const p = new URLSearchParams({ sort: f.sort, limit: "500" });
+      const p = new URLSearchParams({ sort: f.sort, limit: "500", catalog: f.catalog });
       for (const k of ["q", "vendor"]) if (f[k]) p.set(k, f[k]);
       if (f.days !== "0") p.set("days", f.days);
       if (f.min_epss !== "0") p.set("min_epss", f.min_epss);
       if (f.ransomware) p.set("ransomware", "true");
       if (f.mine) p.set("mine", "true");
+      if (f.exploit) p.set("exploit", "true");
       kids(out, el("p", { class: "state" }, t("common.loading")));
       const d = await api(`api/kev?${p}`);
       if (seq !== this.seq) return;
-      if (vendor.options.length === 1) vendor.append(...d.vendors.map((v) => el("option", { value: v.key }, `${v.key} (${num(v.count)})`)));
-      kids(out, el("p", { class: "note" }, t("an.kev.count", { n: num(d.total), total: num(d.catalog) })),
-        d.rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res" },
-          el("thead", {}, el("tr", {}, ["CVE", t("an.kev.vendor"), t("an.kev.product"), t("an.kev.added"), t("an.kev.due"), "EPSS", ""].map((h) => el("th", {}, h)))),
+      const euvd = f.catalog === "euvd";
+      if (!f.vendor) { // vendors of the current selection; kept while one is chosen, so another can be picked
+        kids(vendor, el("option", { value: "" }, t("common.all")), ...d.vendors.map((v) => el("option", { value: v.key }, `${v.key} (${num(v.count)})`)));
+      }
+      const heads = ["CVE", t("an.kev.vendor"), t("an.kev.product"), euvd ? t("an.kev.since") : t("an.kev.added"), ...(euvd ? [] : [t("an.kev.due")]), "EPSS", ""];
+      kids(out, el("p", { class: "note" }, t(euvd ? "an.kev.count_euvd" : "an.kev.count", { n: num(d.total), total: num(d.catalog) })),
+        euvd && !d.euvd ? el("p", { class: "note" }, t("an.kev.euvd_off")) : null,
+        d.rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res kev" },
+          el("thead", {}, el("tr", {}, heads.map((h) => el("th", {}, h)))),
           el("tbody", {}, d.rows.map((r) => el("tr", {},
-            el("td", {}, objLink("cve", r.cve)),
-            el("td", {}, objLink("vendor", r.vendor, r.vendor)),
-            el("td", {}, r.product || "", el("div", { class: "muted" }, r.name || "")),
-            el("td", {}, dateOnly(r.date_added)), el("td", {}, dateOnly(r.due_date)),
+            el("td", {}, objLink("cve", r.cve), euvd && r.euvd ? el("div", { class: "muted mono" }, r.euvd) : null),
+            el("td", {}, r.vendor ? objLink("vendor", r.vendor, r.vendor) : "–"),
+            el("td", {}, r.product || "", r.name ? el("div", { class: "muted" }, r.name) : null),
+            el("td", {}, dateOnly(r.date_added)), euvd ? null : el("td", {}, dateOnly(r.due_date)),
             el("td", { class: r.epss >= 0.5 ? "warn-txt" : null }, r.epss === null || r.epss === undefined ? "–" : dec2(r.epss)),
             el("td", {}, (r.ransomware || "").toLowerCase() === "known" ? el("span", { class: "tag bad" }, t("pr.ransom_tag")) : null,
+              !euvd && r.euvd ? el("span", { class: "tag", title: t("an.kev.enisa_title", { id: r.euvd }) }, "ENISA") : null,
+              ...xpTags(r),
               r.watched ? el("span", { class: "tag warn" }, t("an.kev.watched")) : null, r.exposed ? el("span", { class: "tag bad" }, t("an.kev.exposed")) : null))))))
-          : el("p", { class: "empty" }, t("common.no_data")));
+          : el("p", { class: "empty" }, t("common.no_data")),
+        el("p", { class: "note" }, t("an.kev.sources_note")));
     };
     const apply = debounce(() => {
-      Object.assign(f, { q: q.value.trim(), vendor: vendor.value, days: days.value, min_epss: epss.value, sort: sort.value, ransomware: rw.checked, mine: mine.checked });
+      if (catalog.value !== f.catalog) vendor.value = ""; // vendor names differ between the catalogues
+      Object.assign(f, { q: q.value.trim(), vendor: vendor.value, days: days.value, min_epss: epss.value, sort: sort.value, ransomware: rw.checked,
+        mine: mine.checked, catalog: catalog.value, exploit: xpOnly.checked });
+      rwLabel.hidden = f.catalog === "euvd"; // ransomware use is a KEV field
       load().catch((e) => kids(out, el("p", { class: "state err" }, e.message)));
     }, 250);
-    for (const n of [q, vendor, days, epss, sort, rw, mine]) n.addEventListener(n === q ? "input" : "change", apply);
+    for (const n of [q, vendor, days, epss, sort, rw, mine, catalog, xpOnly]) n.addEventListener(n === q ? "input" : "change", apply);
     kids(box, ...this.viewHead("kev"),
-      el("div", { class: "filters wide" }, el("label", { class: "grow" }, t("an.kev.search"), q), el("label", {}, t("an.kev.vendor"), vendor),
-        el("label", {}, t("an.kev.period"), days), el("label", {}, "EPSS", epss), el("label", {}, t("an.kev.sort"), sort),
-        el("label", { class: "pcheck" }, rw, t("an.kev.ransom_only")), el("label", { class: "pcheck" }, mine, t("an.kev.mine_only"))),
+      el("div", { class: "filters wide" }, el("label", {}, t("an.kev.catalog"), catalog), el("label", { class: "grow" }, t("an.kev.search"), q),
+        el("label", {}, t("an.kev.vendor"), vendor), el("label", {}, t("an.kev.period"), days), el("label", {}, "EPSS", epss), el("label", {}, t("an.kev.sort"), sort),
+        rwLabel, el("label", { class: "pcheck" }, xpOnly, t("an.kev.exploit_only")), el("label", { class: "pcheck" }, mine, t("an.kev.mine_only"))),
       out);
     await load();
   }
@@ -558,6 +575,54 @@ export class Analyse {
       el("div", { class: "filters wide" }, el("label", {}, t("an.kev.period"), days), el("label", {}, t("t.groups"), grp), el("label", {}, t("an.infra.country"), cc)),
       el("p", { class: "note" }, t("t.latest_note")), out);
     await load();
+  }
+
+  /** Incidents at AWS, Azure, Google Cloud and Cloudflare from their public status pages. */
+  async view_platforms(box, seq) {
+    const out = el("div");
+    const days = el("select", { "aria-label": t("an.kev.period") }, ...[1, 7, 30].map((v) => el("option", { value: v, selected: v === 7 }, v === 1 ? t("t.24h") : t("t.days", { n: v }))));
+    const prov = el("select", { "aria-label": t("an.pf.provider") }, el("option", { value: "" }, t("common.all")));
+    const active = el("input", { type: "checkbox" });
+    let data = null;
+    const region = (r) => {
+      const name = r.code && r.name !== r.code ? `${r.name} (${r.code})` : r.name || r.code || "";
+      const prec = r.precision === "region" || r.precision === "country" ? ` · ${t(`an.pf.prec.${r.precision}`)}` : "";
+      return r.cc && /^[A-Z]{2}$/.test(r.cc) ? el("span", {}, objLink("country", r.cc, name), el("span", { class: "muted" }, prec)) : el("span", {}, name);
+    };
+    const draw = () => {
+      const rows = data.incidents.filter((x) => (!prov.value || x.provider === prov.value) && (!active.checked || x.status === "active"));
+      const nActive = rows.filter((x) => x.status === "active").length;
+      kids(out,
+        el("p", { class: "note" }, t("an.pf.count", { n: num(rows.length), a: num(nActive) })),
+        rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res" },
+          el("thead", {}, el("tr", {}, [t("an.pf.provider"), t("an.pf.title"), t("an.pf.regions"), t("an.pf.started"), t("an.pf.updated"), ""].map((h) => el("th", {}, h)))),
+          el("tbody", {}, rows.map((x) => el("tr", {},
+            el("td", {}, x.provider_name || x.provider, x.used ? el("span", { class: "tag warn" }, t("an.pf.used")) : null),
+            el("td", {}, el("strong", {}, x.title),
+              x.status === "active" ? el("span", { class: "tag bad" }, t("an.pf.active")) : el("span", { class: "tag" }, t("an.pf.resolved")),
+              x.impact && ["none", "minor", "major", "critical"].includes(x.impact) ? el("span", { class: "tag" }, t(`an.pf.impact.${x.impact}`)) : null,
+              x.summary ? el("div", { class: "muted" }, x.summary.slice(0, 300)) : null),
+            el("td", {}, ...(x.regions || []).slice(0, 8).flatMap((r, i) => [i ? ", " : null, region(r)])),
+            el("td", {}, dateTime(x.started)), el("td", {}, dateTime(x.updated)),
+            el("td", {}, safeLink(x.url, "↗"))))))) : el("p", { class: "empty" }, t("common.no_data")));
+    };
+    const load = async () => {
+      kids(out, el("p", { class: "state" }, t("common.loading")));
+      data = await api(`api/platforms?days=${days.value}`);
+      if (seq !== this.seq) return;
+      const cur = prov.value;
+      kids(prov, el("option", { value: "" }, t("common.all")), ...data.providers.map((x) => el("option", { value: x.id, selected: x.id === cur }, x.name)));
+      draw();
+    };
+    days.addEventListener("change", () => load().catch((e) => kids(out, el("p", { class: "state err" }, e.message))));
+    prov.addEventListener("change", draw);
+    active.addEventListener("change", draw);
+    kids(box, ...this.viewHead("platforms"),
+      el("div", { class: "filters wide" }, el("label", {}, t("an.kev.period"), days), el("label", {}, t("an.pf.provider"), prov),
+        el("label", { class: "pcheck" }, active, t("an.pf.only_active"))),
+      el("p", { class: "note" }, t("an.pf.note"), " ", el("a", { href: href("netz/products") }, t("an.pf.used_hint"))), out);
+    await load();
+    if (seq === this.seq && data && !data.enabled) out.prepend(el("p", { class: "note warn-txt" }, t("an.pf.off")));
   }
 }
 

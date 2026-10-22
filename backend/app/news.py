@@ -874,8 +874,11 @@ class News:
         return out
 
     def matches(self, it: dict[str, Any], *, kind: str | None = None, country: str | None = None, origin: str | None = None,
-                target: str | None = None, actor: str | None = None, mine: bool = False, confirmed: bool = False) -> bool:
+                target: str | None = None, actor: str | None = None, mine: bool = False, confirmed: bool = False,
+                supported: bool = False) -> bool:
         if kind and not set(kind.split(",")) & set(it["kinds"]):  # one or more kinds
+            return False
+        if supported and (it["checks"] or {}).get("verdict") != corroborate.SUPPORTED:  # local measurements support it
             return False
         if confirmed and not (it["source"]["tier"] == "gov" or len(it["sources"]) >= 2):  # an authority or 2+ sources
             return False

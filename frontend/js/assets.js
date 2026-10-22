@@ -2,10 +2,10 @@
 // reputation), watched products (KEV/NVD), log analysis and the alert list. Rendered into the page of the area.
 import { t } from "./i18n.js";
 import { alertItem } from "./panels.js";
-import { go, objLink, routes } from "./router.js";
+import { go, href, objLink, routes } from "./router.js";
 import { ago, api, bytes, dateOnly, dateTime, dec1, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news"];
+const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news", "platform"];
 const label = (w) => (w.kind === "asn" ? `AS${w.value}` : w.value);
 const kindTag = (k) => el("span", { class: "kind" }, t(`as.kind.${k}`));
 const msg = (cls = "note") => el("p", { class: cls });
@@ -302,7 +302,7 @@ export class Assets {
 
   // --- products -----------------------------------------------------------------------------------
   async renderProducts() {
-    const data = await api("api/products");
+    const [data, pf] = await Promise.all([api("api/products"), api("api/platforms?active=true").catch(() => null)]);
     const feedback = msg();
     const vendor = el("input", { type: "text", maxlength: 60, placeholder: t("pr.vendor_ph"), "aria-label": t("pr.vendor_ph"), required: true });
     const product = el("input", { type: "text", maxlength: 80, placeholder: t("pr.product_ph"), "aria-label": t("pr.product_ph") });
@@ -326,7 +326,28 @@ export class Assets {
       form, feedback,
       rows.length ? el("ol", { class: "rank" }, rows) : el("p", { class: "empty" }, t("pr.none")),
       el("p", { class: "note" }, t("pr.nvd_notice")),
+      pf?.enabled ? this.platformsBox(pf) : null,
     );
+  }
+
+  /** Cloud platforms in use: their new incidents raise alerts (platforms.py). */
+  platformsBox(pf) {
+    const feedback = msg();
+    const boxes = pf.providers.map((p) => el("input", { type: "checkbox", value: p.id, checked: p.used }));
+    const save = async () => {
+      boxes.forEach((b) => { b.disabled = true; });
+      try {
+        await api("api/platforms/used", { json: { providers: boxes.filter((b) => b.checked).map((b) => b.value) } });
+        setMsg(feedback, t("pf.saved"));
+      } catch (e) { setMsg(feedback, e.message, true); } finally { boxes.forEach((b) => { b.disabled = false; }); }
+    };
+    boxes.forEach((b) => b.addEventListener("change", save));
+    const active = pf.incidents.length;
+    return el("section", { class: "card wide pf-used" },
+      el("h3", {}, t("pf.used_h")), el("p", { class: "note" }, t("pf.used_note")),
+      el("div", { class: "pf-boxes" }, pf.providers.map((p, i) => el("label", { class: "pcheck" }, boxes[i], p.name, " ", safeLink(p.page, "↗")))),
+      active ? el("p", {}, el("a", { href: href(routes.view("platforms")) }, t("pf.active_n", { n: num(active) }))) : null,
+      feedback);
   }
 
   async watchProduct(vendor, product) {

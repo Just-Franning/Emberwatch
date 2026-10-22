@@ -7,7 +7,7 @@ import { el, kids } from "./util.js";
 
 const NAV = [
   ["lage", "pal.nav.lage"], ["welt", "pal.nav.welt"], ["analyse", "pal.nav.analyse"], [routes.tools(), "pal.nav.tools"], ["analyse/history", "pal.nav.history"],
-  [routes.view("kev"), "an.view.kev"], [routes.view("infra"), "an.view.infra"], [routes.view("c2"), "an.view.c2"], [routes.view("ransom"), "an.view.ransom"],
+  [routes.view("kev"), "an.view.kev"], [routes.view("infra"), "an.view.infra"], [routes.view("c2"), "an.view.c2"], [routes.view("ransom"), "an.view.ransom"], [routes.view("platforms"), "an.view.platforms"],
   ["netz", "pal.nav.netz"], ["netz/assets", "nz.nav.assets"], ["netz/products", "nz.nav.products"], ["netz/alerts", "nz.nav.alerts"],
   ["netz/logs", "nz.nav.logs"], ["netz/myip", "nz.nav.myip"],
 ];

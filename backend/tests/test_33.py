@@ -370,7 +370,11 @@ def test_stix_stream_parser_and_actor_pages(m, monkeypatch):
     with TestClient(m.app) as tc:
         page = tc.get("/api/obj", params={"type": "actor", "value": "APT28"}).json()
         sec = next(s for s in page["sections"] if s.get("title", "").startswith("Techniques according to MITRE ATT&CK"))
-        assert sec["rows"][0][1]["t"] == "T1566.001" and "The MITRE Corporation" in sec["note"]
+        assert sec["rows"][0][0] == "Initial Access" and sec["rows"][0][1][0]["t"] == "T1566.001 Spearphishing Attachment"
+        assert sec["rows"][1][0] == "Command and Control" and "The MITRE Corporation" in sec["note"]
+        from app.objects import object_context
+        ctx = object_context(page)
+        assert any(r == ["Initial Access", "T1566.001 Spearphishing Attachment"] for x in ctx["sections"] for r in x.get("rows", []))
         mal = tc.get("/api/obj", params={"type": "malware", "value": "QakBot"}).json()
         assert any((s.get("title") or "").startswith("MITRE ATT&CK (S0650)") for s in mal["sections"])
 
@@ -578,3 +582,33 @@ def test_region_table_resolves_every_region(m):
             assert r.get("lat") is not None and r["precision"] in ("city", "region", "country"), (prov, code)
     fra = m.platforms.regions["aws"]["eu-central-1"]
     assert fra["precision"] == "city" and abs(fra["lat"] - 50.1) < 0.2 and abs(fra["lon"] - 8.68) < 0.2
+
+
+# --- API additions: "supported" filter, exploited vulnerabilities by catalogue ------------------------------------------------
+def test_supported_filter_and_kev_catalogues(m):
+    _radar(m, {**{n: 2.0 for n in range(2, 16)}, 0: 7.0})
+    store(m, "Pro-Russian hacktivists claim DDoS attacks on German government sites", hours=2)
+    store(m, "New guidance on password managers published", hours=3)
+    m.news.refresh_checks()
+    m.db.execmany("INSERT INTO kev(cve, vendor, product, name, date_added) VALUES(?,?,?,?,?)",
+                  [("CVE-2026-1111", "Acme", "Gate", "Acme Gate RCE", day(3)), ("CVE-2026-1112", "Acme", "Box", "Acme Box", day(4))])
+    m.db.execmany("INSERT INTO euvd(cve, euvd_id, exploited_since, vendor, product, updated_at) VALUES(?,?,?,?,?,?)",
+                  [("CVE-2026-1111", "EUVD-2026-1", day(5), "Acme", "Gate", iso(1)),
+                   ("CVE-2026-2222", "EUVD-2026-2", day(2), "Totolink", "A3700R", iso(1))])
+    m.db.execute("INSERT INTO exploits(cve, source, ref, name, detail, published) VALUES(?,?,?,?,?,?)",
+                 ("CVE-2026-1112", "nuclei", "http/cves/2026/CVE-2026-1112.yaml", "x", "high", None))
+    from fastapi.testclient import TestClient
+    with TestClient(m.app) as tc:
+        assert tc.get("/api/welt", params={"days": 7}).json()["kpis"]["events"] == 2
+        w = tc.get("/api/welt", params={"days": 7, "supported": "true"}).json()
+        assert w["kpis"]["events"] == 1 and w["items"][0]["checks"]["verdict"] == "supported"
+        assert tc.get("/api/news", params={"days": 7, "supported": "true"}).json()["total"] == 1
+        k = tc.get("/api/kev").json()
+        rows = {r["cve"]: r for r in k["rows"]}
+        assert rows["CVE-2026-1111"]["euvd"] == "EUVD-2026-1" and rows["CVE-2026-1112"]["exploits"] == ["nuclei"]
+        assert k["catalog"] == 2 and k["euvd"] is True
+        assert [r["cve"] for r in tc.get("/api/kev", params={"exploit": "true"}).json()["rows"]] == ["CVE-2026-1112"]
+        e = tc.get("/api/kev", params={"catalog": "euvd", "days": 30, "sort": "epss", "q": "EUVD-2026"}).json()
+        assert [r["cve"] for r in e["rows"]] == ["CVE-2026-2222"] and e["catalog"] == 1  # only what KEV does not list
+        assert e["rows"][0]["date_added"] == day(2) and e["rows"][0]["due_date"] is None
+        assert tc.get("/api/kev", params={"catalog": "x"}).status_code == 422

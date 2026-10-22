@@ -66,6 +66,8 @@ const SRC = {
   cloudflare_radar: "Cloudflare Radar", radar_infra: null, feodo: "Feodo Tracker", threatfox: "ThreatFox", threatfox_iocs: null,
   ransomware_live: "Ransomware.live", cisa_kev: "CISA KEV", epss: "FIRST EPSS", spamhaus_drop: null, tor_exits: null,
   internetdb: null, nvd: null, certspotter: null, typosquatting: null, ris_live: null, news: null, misp_actors: "MISP Galaxy",
+  urlhaus: null, euvd: "ENISA EUVD", exploits: null, mitre_attack: "MITRE ATT&CK", ooni: null, gdelt: null,
+  status_aws: null, status_azure: null, status_gcp: null, status_cloudflare: null,
 };
 const CORE = ["cloudflare_radar", "radar_infra", "feodo", "threatfox", "ransomware_live", "cisa_kev", "epss"];
 const srcName = (k) => SRC[k] || t(`src_name.${k}`);
@@ -74,6 +76,12 @@ export function renderStatusDots(status) {
   const dots = document.getElementById("status-dots");
   const by = Object.fromEntries((status.sources || []).map((s) => [s.source, s]));
   kids(dots, ...CORE.map((k) => el("i", { class: !by[k] ? "" : by[k].ok ? "ok" : "fail", title: srcName(k) })));
+}
+
+/** Optional sources (SOURCES_DISABLE): "all on" or the names of those switched off. */
+function optionalTxt(opt) {
+  const off = Object.entries(opt || {}).filter(([, on]) => !on).map(([k]) => k);
+  return off.length ? t("st.optional_off", { list: off.join(", ") }) : t("st.optional_all");
 }
 
 export function renderStatusPanel(status, { basemapFailed, stampText = "–" }) {
@@ -122,6 +130,8 @@ export function renderStatusPanel(status, { basemapFailed, stampText = "–" }) 
       row(t("st.cables"), status.cables?.snapshot ? `TeleGeography ${status.cables.snapshot}` : t("common.missing")),
       row(t("st.news"), status.news?.enabled ? t("st.news_on", { n: num(status.news.sources), a: num(status.news.actors),
         img: t(status.news.images ? "st.news_img_on" : "st.news_img_off") }) : t("common.off")),
+      row(t("st.optional"), optionalTxt(status.optional)),
+      row(t("st.attack"), status.attack?.version ? `Enterprise ${status.attack.version}` : t("st.not_fetched")),
       row(t("st.stamp"), stampText))),
     el("div", { class: "row" }, testBtn, notifyMsg),
     el("h3", {}, t("st.map")),

@@ -701,12 +701,14 @@ class Objects:
         if not g:
             return
         used = self.attack.used_by(g["stix_id"])
-        rows = []
+        # one row per tactic (matrix order), its techniques as links; a technique of several tactics is listed under each
+        by_tactic: dict[str, list[Any]] = {}
         for t in used["techniques"]:
-            tac = ", ".join(x["name"] for x in t["tactics"]) or "–"
-            rows.append([tac, cell(t["id"], href=t["url"], mono=True), t["name"]])
-        r.table(r.t("ob.sec.attack_techniques", id=g["ext_id"], n=len(rows)),
-                [r.t("ob.c.tactic"), "ID", r.t("ob.c.technique")], rows, note=self._attack_note(r), empty=r.t("ob.v.none"))
+            for tac in t["tactics"] or [{"name": "–"}]:
+                by_tactic.setdefault(tac["name"], []).append(cell(f"{t['id']} {t['name']}", href=t["url"]))
+        rows = [[tac, techs] for tac, techs in by_tactic.items()]
+        r.table(r.t("ob.sec.attack_techniques", id=g["ext_id"], n=len(used["techniques"])),
+                [r.t("ob.c.tactic"), r.t("ob.c.techniques")], rows, note=self._attack_note(r), empty=r.t("ob.v.none"))
         if used["software"]:
             r.items(r.t("ob.sec.attack_software", n=len(used["software"])),
                     [cell(f"{x['name']} ({x['id']})", href=x["url"]) for x in used["software"][:40]])
@@ -759,6 +761,8 @@ def object_context(page: dict[str, Any]) -> dict[str, Any]:
     """Compact, LLM-ready extract of an object page. The object itself is sent; the user's own assets, IPs, products and
     alerts are reduced to flags, and attacker-controlled free text (leak site titles) is left out."""
     def plain(c: Any) -> Any:
+        if isinstance(c, list):  # a cell with several entries (links)
+            return ", ".join(str(plain(x)) for x in c)[:300]
         v = c.get("t") if isinstance(c, dict) else c
         return v[:300] if isinstance(v, str) else v
 

@@ -1,14 +1,17 @@
 // World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth).
-// Cyberlage: country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
-// Weltlage: country pairs and countries named in security reports, the selected report; borders and labels in indigo.
+// Cyberlage: country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, cloud platform
+//   incidents, tool results.
+// Weltlage: country pairs and countries named in security reports, submarine cables named in them, internet blocking
+//   (OONI, government-directed shutdowns), the selected report; borders and labels in indigo.
 import { t } from "./i18n.js";
-import { objLink } from "./router.js";
-import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion } from "./util.js";
+import { href, objLink, routes } from "./router.js";
+import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion, safeLink } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 // Weltlage colours (indigo; the land stays dark, only lines and marks change)
 export const WELT = { line: "#818cf8", dot: "#a5b4fc", ring: "#6366f1", sel: "#e0e7ff", border: "rgba(99, 102, 241, 0.72)", border2: "rgba(99, 102, 241, 0.85)",
-  state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff" };
+  state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff", cable: "#c7d2fe",
+  shutdown: "rgba(251, 113, 133, 0.62)", blocking: "rgba(251, 113, 133, 0.2)" };
 // basemap paint values that follow the mode: [layer, property, Weltlage value]
 const MODE_PAINT = [
   ["boundary_country_z0-4", "line-color", WELT.border], ["boundary_country_z5-", "line-color", WELT.border2],
@@ -19,9 +22,13 @@ const MODE_PAINT = [
 ];
 const CYBER_LAYERS = {
   arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"], infra: ["infra"],
-  cables: ["cables", "cables-hl", "landing"], tool: ["tool-path", "tool-points", "tool-labels"],
+  cables: ["cables", "cables-hl", "landing"], tool: ["tool-path", "tool-points", "tool-labels"], cloud: ["cloud"],
 };
-const WELT_LAYERS = { pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], sel: ["welt-sel-line", "welt-sel-pt", "welt-sel-label"] };
+const WELT_LAYERS = {
+  pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], cables: ["welt-cables"], block: ["welt-block"],
+  sel: ["welt-sel-cable", "welt-sel-line", "welt-sel-pt", "welt-sel-label"],
+};
+const NONE = ["==", ["get", "iso"], "\u0000"]; // a filter that matches no feature
 const PAIR_OPACITY = ["interpolate", ["linear"], ["get", "w"], 0, 0.4, 1, 0.9];
 const CHORO_OPACITY = ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7];
 const FONT = ["Noto Sans Regular"];
@@ -112,6 +119,15 @@ const ICONS = {
   "ico-anomaly": (g, s) => { // hollow square
     g.lineWidth = 2.5; g.strokeStyle = COLORS.infra; g.strokeRect(5, 5, s - 10, s - 10);
   },
+  "ico-cloud": (g, s) => { // cloud: three arcs on a flat base
+    g.beginPath();
+    g.moveTo(5, s - 6);
+    g.arc(7.5, s - 9, 3.5, Math.PI * 0.5, Math.PI * 1.5);
+    g.arc(s / 2 - 0.5, s / 2 - 1.5, 5.5, Math.PI * 1.05, Math.PI * 1.9);
+    g.arc(s - 7.5, s - 9.5, 4, Math.PI * 1.4, Math.PI * 0.5);
+    g.closePath();
+    g.fillStyle = COLORS.cloud; g.fill(); g.lineWidth = 1.6; g.strokeStyle = "#060607"; g.stroke();
+  },
 };
 
 // --- map ----------------------------------------------------------------------
@@ -120,8 +136,11 @@ export class Emberwatch {
     this.onCountry = onCountry;
     this.onIp = onIp;
     this.mode = "cyber";
-    this.vis = { arcs: true, c2: true, ransom: true, infra: true, cables: false, tool: true };
-    this.wvis = { pairs: true, dots: true, sel: true };
+    this.vis = { arcs: true, c2: true, ransom: true, infra: true, cables: false, tool: true, cloud: true };
+    this.wvis = { pairs: true, dots: true, cables: false, block: false, sel: true };
+    this.cloudCount = 0;
+    this.weltCables = {};
+    this.blocking = {};
     this.welt = { mentioned: {}, origins: {} };
     this.metric = "l7_target";
     this.countries = {};
@@ -180,6 +199,7 @@ export class Emberwatch {
       infra: { type: "geojson", data: EMPTY },
       c2: { type: "geojson", data: EMPTY, cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },
       tool: { type: "geojson", data: EMPTY },
+      cloud: { type: "geojson", data: EMPTY },
       "welt-pairs": { type: "geojson", data: EMPTY },
       "welt-dots": { type: "geojson", data: EMPTY },
       "welt-sel": { type: "geojson", data: EMPTY },
@@ -194,6 +214,10 @@ export class Emberwatch {
             0, RAMP[0], 0.25, RAMP[1], 0.5, RAMP[2], 0.75, RAMP[3], 1, RAMP[4]],
           "fill-opacity": CHORO_OPACITY,
         },
+      },
+      { // Weltlage: blocking and shutdowns (colour per country, set in setWeltBlocking)
+        id: "welt-block", type: "fill", source: "countries", filter: NONE, layout: vis(false),
+        paint: { "fill-color": WELT.blocking, "fill-opacity": 1 },
       },
       { id: "ne-borders", type: "line", source: "countries", layout: vis(this.offline), paint: { "line-color": "rgba(170, 38, 38, 0.6)", "line-width": 0.6 } },
       {
@@ -243,6 +267,19 @@ export class Emberwatch {
         },
         paint: withText ? { "text-color": "#fee2e2", "text-halo-color": "#060607", "text-halo-width": 1.2, "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] }
           : { "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] },
+      },
+      {
+        id: "cloud", type: "symbol", source: "cloud",
+        layout: {
+          "icon-image": "ico-cloud", "icon-size": ["interpolate", ["linear"], ["get", "n"], 1, 0.9, 6, 1.3],
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+          ...(withText ? {
+            "text-field": ["case", [">", ["get", "n"], 1], ["to-string", ["get", "n"]], ""], "text-font": FONT, "text-size": 10,
+            "text-offset": [1.4, -0.9], "text-allow-overlap": true, "text-ignore-placement": true,
+          } : {}),
+        },
+        paint: withText ? { "icon-opacity": ["match", ["get", "precision"], "country", 0.6, 1], "text-color": "#dbeafe", "text-halo-color": "#060607", "text-halo-width": 1.2 }
+          : { "icon-opacity": ["match", ["get", "precision"], "country", 0.6, 1] },
       },
       {
         id: "c2-cluster", type: "circle", source: "c2", filter: ["has", "point_count"],
@@ -302,6 +339,14 @@ export class Emberwatch {
         paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.4 },
       }] : []),
       // Weltlage (hidden in the Cyberlage)
+      {
+        id: "welt-cables", type: "line", source: "cables", filter: ["in", ["get", "id"], ["literal", []]], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": WELT.cable, "line-opacity": 0.85, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.6, 6, 3.2] },
+      },
+      {
+        id: "welt-sel-cable", type: "line", source: "cables", filter: ["in", ["get", "id"], ["literal", []]], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": WELT.sel, "line-opacity": 0.95, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 2.2, 6, 4] },
+      },
       {
         id: "welt-pairs", type: "line", source: "welt-pairs", layout: { ...vis(false), "line-cap": "round" },
         paint: {
@@ -365,6 +410,7 @@ export class Emberwatch {
     this.map.on("error", (e) => {
       const txt = `${e?.error?.message || ""} ${e?.error?.url || ""}`;
       if (e?.sourceId === "openmaptiles" || /openfreemap/.test(txt)) errors++;
+      else console.warn("map:", e?.error?.message || e); // style and expression errors stay visible (this listener mutes MapLibre's own log)
     });
     const check = () => {
       // isSourceLoaded() also reports "loaded" on source errors; what matters is whether tiles have content
@@ -399,7 +445,7 @@ export class Emberwatch {
   _bind() {
     const m = this.map;
     let hovered = null;
-    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "tool-points", "landing", "welt-dots", "welt-origins"];
+    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "cloud", "tool-points", "landing", "welt-dots", "welt-origins"];
     m.on("mousemove", "choro", (e) => {
       const f = e.features?.[0];
       if (!f) return;
@@ -463,6 +509,15 @@ export class Emberwatch {
       this._tipShow(e, p.name, [p.rfs ? `RFS ${p.rfs}` : null, p.length, p.owners].filter(Boolean).join(", ").slice(0, 160));
     });
     m.on("mouseleave", "cables", () => this._tipHide());
+    m.on("click", "cloud", (e) => this.cloudPopup(e.features[0].properties, e.lngLat));
+    for (const id of ["welt-cables", "welt-sel-cable"]) {
+      m.on("mousemove", id, (e) => {
+        const p = e.features[0].properties;
+        const n = this.weltCables[p.id] || 0;
+        this._tipShow(e, p.name, [n ? t("wl.map.cable_tip", { n: num(n) }) : null, p.rfs ? `RFS ${p.rfs}` : null].filter(Boolean).join(" · "));
+      });
+      m.on("mouseleave", id, () => this._tipHide());
+    }
     for (const id of ["welt-dots", "welt-origins"]) {
       m.on("click", id, (e) => { const cc = e.features[0].properties.cc; if (cc) this.onCountry(cc); });
       m.on("mousemove", id, (e) => this._tipShow(e, countryName(e.features[0].properties.cc), this._weltTip(e.features[0].properties.cc)));
@@ -508,7 +563,42 @@ export class Emberwatch {
           ? el("a", { class: "btn", href: p.reference, target: "_blank", rel: "noopener noreferrer" }, "abuse.ch") : null)));
   }
 
+  cloudPopup(p, lngLat) {
+    let items = [];
+    try { items = JSON.parse(p.items); } catch { items = []; }
+    this.popup(lngLat, el("div", { class: "pop" },
+      el("h4", {}, t("map.cloud_h", { provider: p.provider_name }), p.used === true || p.used === "true" ? el("span", { class: "tag warn" }, t("map.cloud_used")) : null),
+      el("div", { class: "note" }, `${p.region}${p.precision !== "city" ? ` · ${t(`map.cloud_prec.${p.precision === "country" ? "country" : "region"}`)}` : ""}`),
+      el("ul", {}, items.slice(0, 6).map((x) => el("li", {}, safeLink(x.url, x.title) || x.title, el("span", { class: "muted" }, ` · ${t("map.cloud_since", { t: dateTime(x.started) })}`)))),
+      items.length > 6 ? el("div", { class: "note" }, t("common.more", { n: items.length - 6 })) : null,
+      el("div", { class: "row" }, el("a", { class: "btn", href: href(routes.view("platforms")) }, t("map.cloud_all")))));
+  }
+
   // --- data ---------------------------------------------------------------------
+  /** Active cloud platform incidents: one symbol per provider and location, the incidents in the popup. */
+  setCloud(incidents) {
+    const groups = new Map();
+    for (const inc of incidents || []) {
+      if (inc.status !== "active") continue;
+      for (const r of inc.regions || []) {
+        if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+        const key = `${inc.provider}|${r.lat.toFixed(2)}|${r.lon.toFixed(2)}`;
+        if (!groups.has(key)) {
+          groups.set(key, { provider: inc.provider, provider_name: inc.provider_name || inc.provider, used: Boolean(inc.used), lat: r.lat, lon: r.lon,
+            precision: r.precision || "city", region: r.code && r.name !== r.code ? `${r.name} (${r.code})` : r.name || r.code || "", items: [] });
+        }
+        const g = groups.get(key);
+        if (!g.items.some((x) => x.id === inc.id)) g.items.push({ id: inc.id, title: inc.title, url: inc.url, started: inc.started });
+      }
+    }
+    const feats = [...groups.values()].map((g) => ({
+      type: "Feature", geometry: { type: "Point", coordinates: [g.lon, g.lat] },
+      properties: { provider: g.provider, provider_name: g.provider_name, used: g.used, region: g.region, precision: g.precision, n: g.items.length, items: JSON.stringify(g.items) },
+    }));
+    this.cloudCount = feats.length;
+    this.map.getSource("cloud").setData({ type: "FeatureCollection", features: feats });
+  }
+
   setCountries(countries) {
     this.countries = countries || {};
     this.paintChoropleth();
@@ -535,7 +625,7 @@ export class Emberwatch {
     for (const [cc, v] of vals) m.setFeatureState({ source: "countries", id: cc }, { v: this.max ? v / this.max : 0 });
   }
 
-  legendInfo() { return { metric: this.metric, meta: METRICS[this.metric], max: this.max || 0 }; }
+  legendInfo() { return { metric: this.metric, meta: METRICS[this.metric], max: this.max || 0, cloud: this.vis.cloud && this.cloudCount > 0 }; }
 
   setC2(fc) {
     this.c2All = fc || EMPTY;
@@ -678,8 +768,37 @@ export class Emberwatch {
 
   _weltTip(cc) {
     const n = this.welt.mentioned[cc] || 0, o = this.welt.origins[cc] || 0;
-    if (!n && !o) return t("wl.map.none");
-    return [n ? t("wl.map.named", { n: num(n) }) : null, o ? t("wl.map.origin_n", { n: num(o) }) : null].filter(Boolean).join(" · ");
+    const parts = [n ? t("wl.map.named", { n: num(n) }) : null, o ? t("wl.map.origin_n", { n: num(o) }) : null];
+    const b = this.wvis.block ? this.blocking.info?.[cc] : null;
+    if (b) {
+      if (b.shutdown) parts.push(t("wl.map.blk_shut"));
+      if (b.confirmed) parts.push(t("wl.map.blk_conf", { n: num(b.confirmed), d: num(this.blocking.days || 7) }));
+      else if (b.anomaly_pct !== null && b.anomaly_pct !== undefined) parts.push(t("wl.map.blk_anom", { p: pct(b.anomaly_pct) }));
+    }
+    return parts.filter(Boolean).join(" · ") || t("wl.map.none");
+  }
+
+  /** Submarine cables named in the reports of the selection: {cable id: number of reports}. */
+  setWeltCables(counts) {
+    this.weltCables = counts || {};
+    this.map.setFilter("welt-cables", ["in", ["get", "id"], ["literal", Object.keys(this.weltCables).slice(0, 300)]]);
+  }
+
+  /** Internet blocking per country: shutdowns ordered by a government and confirmed blocking (OONI). */
+  setWeltBlocking({ shutdown = [], confirmed = [], info = {}, days = 7 } = {}) {
+    this.blocking = { info, days };
+    const shut = [...new Set(shutdown)].filter((c) => /^[A-Z]{2}$/.test(c));
+    const conf = [...new Set(confirmed)].filter((c) => /^[A-Z]{2}$/.test(c) && !shut.includes(c));
+    if (!shut.length && !conf.length) {
+      this.map.setFilter("welt-block", NONE);
+      return;
+    }
+    const color = ["match", ["get", "iso"]]; // match labels are plain arrays of literals (no "literal" wrapper)
+    if (shut.length) color.push(shut, WELT.shutdown);
+    if (conf.length) color.push(conf, WELT.blocking);
+    color.push("rgba(0, 0, 0, 0)");
+    this.map.setPaintProperty("welt-block", "fill-color", color);
+    this.map.setFilter("welt-block", ["in", ["get", "iso"], ["literal", [...shut, ...conf]]]);
   }
 
   /** Weltlage data: pairs [{origin, target, n}], mentioned {cc: n}, origins {cc: n}. */
@@ -724,6 +843,8 @@ export class Emberwatch {
       pts.push([c.lon, c.lat]);
     }
     this.map.getSource("welt-sel").setData({ type: "FeatureCollection", features: feats });
+    const cables = (it?.cables || []).filter((x) => typeof x === "string").slice(0, 8);
+    this.map.setFilter("welt-sel-cable", ["in", ["get", "id"], ["literal", cables]]);
     this.map.setPaintProperty("welt-pairs", "line-opacity", 0.18); // the selected report stands out
     if (fit && pts.length > 1) this.fitTo(pts, 4);
     else if (fit && pts.length === 1) this.flyTo(pts[0][0], pts[0][1], 3);
@@ -732,6 +853,7 @@ export class Emberwatch {
 
   clearWeltItem() {
     this.map.getSource("welt-sel")?.setData(EMPTY);
+    if (this.map.getLayer("welt-sel-cable")) this.map.setFilter("welt-sel-cable", ["in", ["get", "id"], ["literal", []]]);
     this.map.setPaintProperty("welt-pairs", "line-opacity", PAIR_OPACITY);
   }
 

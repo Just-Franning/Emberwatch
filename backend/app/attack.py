@@ -32,6 +32,14 @@ NOTICE = "© The MITRE Corporation. This work is reproduced and distributed with
 KINDS = {"intrusion-set": "group", "attack-pattern": "technique", "malware": "software", "tool": "software",
          "x-mitre-tactic": "tactic"}
 EXT_RE = re.compile(r"^(G\d{4}|T\d{4}(?:\.\d{3})?|S\d{4}|TA\d{4})$")
+KEY_RE = re.compile(r"[^0-9a-z]")
+MIN_KEY = 3
+
+
+def _key(name: str) -> str:
+    """Comparison key of a name: lower case, letters and digits only ("Agent Tesla" = "AgentTesla", "APT 28" = "APT28")."""
+    k = KEY_RE.sub("", (name or "").lower())
+    return k if len(k) >= MIN_KEY else ""
 
 
 def iter_objects(fh: TextIO) -> Iterator[dict[str, Any]]:
@@ -132,7 +140,7 @@ class Attack:
     def __init__(self, db: DB, data_dir: Path) -> None:
         self.db = db
         self.data_dir = data_dir
-        self._index: dict[str, str] | None = None  # lower-case name/alias of a group -> stix id
+        self._index: dict[str, str] | None = None  # name/alias key of a group -> stix id (_key)
         self._sw: dict[str, str] | None = None
 
     @property
@@ -204,20 +212,22 @@ class Attack:
         out: dict[str, str] = {}
         for r in self.db.query("SELECT stix_id, name, aliases FROM attack_objects WHERE kind = ?", (kind,)):
             for n in [r["name"], *json.loads(r["aliases"] or "[]")]:
-                out.setdefault(str(n).strip().lower(), r["stix_id"])
+                k = _key(str(n))
+                if k:
+                    out.setdefault(k, r["stix_id"])
         return out
 
     def group_for(self, names: list[str]) -> dict[str, Any] | None:
         """The ATT&CK group of an actor, by its name or one of its aliases."""
         if self._index is None:
             self._index = self._names("group")
-        sid = next((self._index[n.strip().lower()] for n in names if n and n.strip().lower() in self._index), None)
+        sid = next((self._index[_key(n)] for n in names if _key(n) in self._index), None)
         return self._object(sid) if sid else None
 
     def software_for(self, name: str) -> dict[str, Any] | None:
         if self._sw is None:
             self._sw = self._names("software")
-        sid = self._sw.get((name or "").strip().lower())
+        sid = self._sw.get(_key(name)) if _key(name) else None
         return self._object(sid) if sid else None
 
     def _object(self, sid: str) -> dict[str, Any] | None:

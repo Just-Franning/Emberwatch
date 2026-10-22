@@ -323,10 +323,13 @@ async function main() {
   });
 
   // --- controls -----------------------------------------------------------------------------------------------------
-  for (const [id, layer] of [["lyr-arcs", "arcs"], ["lyr-c2", "c2"], ["lyr-ransom", "ransom"], ["lyr-infra", "infra"], ["lyr-cables", "cables"]]) {
+  for (const [id, layer] of [["lyr-arcs", "arcs"], ["lyr-c2", "c2"], ["lyr-ransom", "ransom"], ["lyr-infra", "infra"], ["lyr-cables", "cables"], ["lyr-cloud", "cloud"]]) {
     const cb = document.getElementById(id);
     map.setVisible(layer, cb.checked);
-    cb.addEventListener("change", () => map.setVisible(layer, cb.checked));
+    cb.addEventListener("change", () => {
+      map.setVisible(layer, cb.checked);
+      if (layer === "cloud" && state.area === "lage") legend();
+    });
   }
   const metric = document.getElementById("choro-metric");
   metric.addEventListener("change", () => {
@@ -383,9 +386,10 @@ async function main() {
   async function refresh(first = false) {
     try {
       if (first) boot.step(t("boot.feeds"), "run");
-      const [ov, c2, victims, status, alertData, today] = await Promise.all([
+      const [ov, c2, victims, status, alertData, today, cloud] = await Promise.all([
         api("api/overview"), api("api/c2?days=30"), api("api/victims?days=7&limit=200"), api("api/status"),
         api("api/alerts?limit=1&min_severity=low"), api("api/today?limit=5").catch(() => ({ items: [] })),
+        api("api/platforms?active=true").catch(() => ({ incidents: [] })),
       ]);
       state.ov = ov;
       state.victims = victims;
@@ -395,6 +399,7 @@ async function main() {
       state.stamp = dateTime(ov.generated_at);
       state.families = [...new Set(c2.features.map((f) => f.properties.malware).filter(Boolean))].sort((a, b) => a.localeCompare(b));
       map.setC2(c2);
+      map.setCloud(cloud.incidents);
       if (!state.historical) applyLive();
       if (state.area !== "welt") renderKpis(ov, status, { onTile: onKpi });
       if (state.side === "rank") drawTab();

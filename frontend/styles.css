@@ -268,6 +268,7 @@ kbd { font: inherit; border: 1px solid var(--border); padding: 0 5px; border-rad
 .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0 4px; }
 .filters label { display: grid; gap: 2px; color: var(--text-3); font-size: 10.5px; }
 .filters select, .filters input { width: 100%; font-size: 11.5px; }
+.filters input[type="checkbox"] { width: auto; flex: none; } /* not stretched: the label text stays on one line */
 .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
 .btnrow a, .btnrow button { font-size: 11px; }
 a.btn {
@@ -420,6 +421,7 @@ body.mode-cyber.tl-on .hud-bottom { padding-top: 6px; border-top-color: var(--bo
 .timeline .live.on { border-color: var(--accent-strong); color: var(--heading); background: rgba(127, 29, 29, 0.45); }
 .tl-day { min-width: 210px; text-align: right; color: var(--text-2); font-size: 11.5px; }
 .credits { margin: 0; font-size: 10px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.credits:hover, .credits:focus-within { white-space: normal; } /* the full list of sources, also by keyboard */
 body.mode-cyber.tl-on .credits { margin-top: 3px; }
 .credits a { color: var(--text-2); }
 
@@ -741,7 +743,7 @@ table.res td.num { text-align: right; white-space: nowrap; }
 .filters.wide { display: flex; flex-wrap: wrap; grid-template-columns: none; gap: 8px 10px; align-items: end; margin: 6px 0 10px; }
 .filters.wide label { min-width: 120px; }
 .filters.wide label.grow { flex: 1; min-width: 200px; }
-.filters.wide label.pcheck { min-width: 0; }
+.filters.wide label.pcheck { min-width: 0; white-space: nowrap; padding-bottom: 6px; }
 .cc-in { width: 60px; text-transform: uppercase; }
 
 /* --- map tool bar and result window (situation view) -------------------------------------------------------- */
@@ -865,7 +867,7 @@ body.area-welt .areas a[aria-current="page"] { background: rgba(49, 46, 129, 0.4
   border-radius: 999px; padding: 4px 12px; border: 1px solid var(--border); background: rgba(10, 10, 10, 0.82);
   backdrop-filter: blur(4px); font-size: 11.5px; letter-spacing: 0.02em; line-height: 18px;
 }
-.modebar .chip { color: var(--text-2); }
+.modebar .chip { color: var(--text-2); white-space: nowrap; }
 .modebar .chip:has(input:checked) { color: var(--heading); border-color: var(--border-strong); background: rgba(127, 29, 29, 0.32); }
 body.area-welt .modebar .chip:has(input:checked) { background: rgba(49, 46, 129, 0.45); }
 .pill[aria-pressed="true"] { border-color: var(--border-strong); color: var(--heading); background: rgba(127, 29, 29, 0.32); }
@@ -1036,3 +1038,39 @@ a.echip:hover { border-color: var(--border-strong); color: #fff; background: var
   .ncard { grid-template-columns: 84px minmax(0, 1fr); }
   .nthumb { width: 84px; height: 56px; }
 }
+
+/* 3.3: cloud incidents, submarine cables and blocking in the Weltlage, comparison with measurements */
+.sw-cloud { width: 13px; height: 8px; border-radius: 6px 6px 2px 2px; background: #60a5fa; box-shadow: 0 0 0 1px #060607; }
+.sw-wcable { width: 14px; height: 0; border-top: 2px solid #c7d2fe; }
+.sw-wshut { width: 10px; height: 9px; background: rgba(251, 113, 133, 0.62); border: 1px solid rgba(251, 113, 133, 0.9); }
+.sw-wblock { width: 10px; height: 9px; background: rgba(251, 113, 133, 0.2); border: 1px solid rgba(251, 113, 133, 0.5); }
+.gov.web { border-style: dashed; color: var(--text-2); }
+.wtag.chk { color: #bbf7d0; border-color: rgba(34, 197, 94, 0.55); }
+.wl-checks { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 4px 0 6px; }
+.web-note { border-left: 2px dashed var(--border-strong); padding-left: 8px; }
+.chk-verdict { font-weight: 600; }
+.chk-verdict.supported { color: #86efac; }
+.chk-verdict.unclear { color: var(--text-2); }
+.chk-list { list-style: none; margin: 4px 0 8px; padding: 0; }
+.chk-list li { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; padding: 7px 0; border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.chk-r { align-self: start; text-align: center; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; line-height: 18px; border: 1px solid var(--border-soft); color: var(--text-2); }
+.chk-r.supported { color: #86efac; border-color: rgba(34, 197, 94, 0.55); }
+.chk-r.unclear { border-style: dashed; color: var(--text-3); }
+.chk-body { display: grid; gap: 2px; min-width: 0; font-family: var(--sans); font-size: 13px; overflow-wrap: anywhere; }
+.chk-body strong { font-weight: 600; color: var(--heading); }
+.chk-body strong a { color: inherit; }
+.chk-detail { display: grid; gap: 1px; color: var(--text-2); font-size: 12px; }
+.cable-list li { margin: 3px 0; font-family: var(--sans); font-size: 13px; }
+.blk { width: 100%; }
+.blk td, .blk th { font-size: 11.5px; padding-left: 4px; padding-right: 4px; }
+.blk td.num, .blk th.num { text-align: right; white-space: nowrap; }
+.blk td .muted { font-size: 10.5px; }
+.blk-links a { font-size: 10.5px; }
+.blk-shut li { margin: 4px 0; font-size: 12px; }
+.tag.xp { border-color: rgba(251, 146, 60, 0.45); color: #fdba74; }
+.pf-used { margin-top: 18px; }
+.pf-boxes { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0; }
+table.res td:has(+ td > .cell-list) { white-space: nowrap; word-break: normal; } /* the label of a row with a list of links */
+.cell-list { line-height: 1.6; }
+.cell-list a { text-decoration-color: rgba(248, 113, 113, 0.3); }
+table.res.kev td:first-child { white-space: nowrap; word-break: normal; } /* CVE and EUVD ids are never broken */

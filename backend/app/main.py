@@ -1359,7 +1359,8 @@ def _int_or_404(v: str) -> int:
 
 
 def _welt_filters(tier: str | None, source: str | None, kind: str | None, country: str | None, origin: str | None,
-                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False) -> dict[str, Any]:
+                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False,
+                  supported: bool = False) -> dict[str, Any]:
     if not news.enabled:
         raise AppError("err.news.disabled", 404)
     kinds = [k for k in (kind or "").split(",") if k]
@@ -1376,6 +1377,7 @@ def _welt_filters(tier: str | None, source: str | None, kind: str | None, countr
         if len(ccs) > 12:
             raise AppError("err.bad_request")
     return {"tier": tier, "source": source, "kind": ",".join(kinds) or None, "country": ",".join(ccs) or None, "confirmed": confirmed,
+            "supported": supported,
             "origin": _cc(origin) if origin else None, "target": _cc(target) if target else None,
             "actor": (actor or "").strip() or None, "mine": mine, "q": (q or "").strip() or None}
 
@@ -1401,10 +1403,11 @@ def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov
              source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=80),
              country: str | None = Query(None, max_length=40), origin: str | None = Query(None, max_length=2),
              target: str | None = Query(None, max_length=2), actor: str | None = Query(None, max_length=120),
-             mine: bool = False, confirmed: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+             mine: bool = False, confirmed: bool = False, supported: bool = False,
+             q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed))
+    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed, supported))
 
 
 @app.get("/api/news")
@@ -1413,10 +1416,10 @@ def api_news(days: int = Query(7), offset: int = Query(0, ge=0, le=20000), limit
              kind: str | None = Query(None, max_length=80), country: str | None = Query(None, max_length=40),
              origin: str | None = Query(None, max_length=2), target: str | None = Query(None, max_length=2),
              actor: str | None = Query(None, max_length=120), mine: bool = False, confirmed: bool = False,
-             q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+             supported: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed)
+    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed, supported)
     return news.listing(days, offset, limit, **flt)
 
 
@@ -1701,8 +1704,11 @@ async def api_ai_object(request: Request, body: ObjAiIn) -> dict[str, Any]:
 def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Query(None, max_length=80),
             days: int = Query(0, ge=0, le=3650), ransomware: bool = False, min_epss: float = Query(0.0, ge=0.0, le=1.0),
             mine: bool = False, sort: str = Query("date", pattern="^(date|epss)$"),
+            catalog: str = Query("kev", pattern="^(kev|euvd)$"), exploit: bool = False,
             limit: int = Query(300, ge=1, le=2000)) -> dict[str, Any]:
-    """CISA KEV with EPSS, filterable. 'mine' = only CVEs of watched products or seen on own IPs (InternetDB)."""
+    """Exploited vulnerabilities with EPSS, filterable.
+    catalog "kev": CISA KEV; "euvd": exploited according to ENISA (EUVD) but not (yet) in CISA KEV.
+    'mine' = only CVEs of watched products or seen on own IPs (InternetDB); 'exploit' = only with public exploit code."""
     exposed: set[str] = set()
     for r in db.query("SELECT vulns FROM surface"):
         try:
@@ -1710,36 +1716,52 @@ def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Qu
         except ValueError:
             continue
     watched = {r["cve"] for r in db.query("SELECT DISTINCT cve FROM product_cves")}
-    sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile "
-           "FROM kev k LEFT JOIN epss e ON e.cve = k.cve WHERE 1=1")
+    if catalog == "kev":
+        sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile, "
+               "u.euvd_id AS euvd FROM kev k LEFT JOIN epss e ON e.cve = k.cve LEFT JOIN euvd u ON u.cve = k.cve WHERE 1=1")
+    else:  # same columns, so filters and sorting below apply to both catalogues
+        sql = ("SELECT k.cve, k.vendor, k.product, NULL AS name, k.exploited_since AS date_added, NULL AS due_date, "
+               "NULL AS ransomware, e.epss, e.percentile, k.euvd_id AS euvd FROM euvd k LEFT JOIN epss e ON e.cve = k.cve "
+               "WHERE k.cve NOT IN (SELECT cve FROM kev)")
     params: list[Any] = []
+    added = "k.date_added" if catalog == "kev" else "k.exploited_since"  # fixed column names, not user input
     if q and q.strip():
-        sql += " AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
+        name = "k.name" if catalog == "kev" else "k.euvd_id"
+        sql += (" AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' "
+                f"OR {name} LIKE ? ESCAPE '\\')")
         params += [_like(q.strip())] * 4
     if vendor:
         sql += " AND k.vendor = ? COLLATE NOCASE"
         params.append(vendor.strip())
     if days:
-        sql += " AND k.date_added >= ?"
+        sql += f" AND {added} >= ?"
         params.append(_cutoff(days)[:10])
-    if ransomware:
+    if ransomware and catalog == "kev":
         sql += " AND lower(k.ransomware) = 'known'"
     if min_epss > 0:
         sql += " AND e.epss >= ?"
         params.append(min_epss)
-    sql += " ORDER BY " + ("COALESCE(e.epss, -1) DESC, k.date_added DESC" if sort == "epss" else "k.date_added DESC, k.cve DESC")
+    sql += " ORDER BY " + (f"COALESCE(e.epss, -1) DESC, {added} DESC" if sort == "epss" else f"{added} DESC, k.cve DESC")
     rows = db.query(sql, params)
+    xp: dict[str, list[str]] = {}
+    for r in db.query("SELECT DISTINCT cve, source FROM exploits ORDER BY source"):
+        xp.setdefault(r["cve"], []).append(r["source"])
     for r in rows:
         r["watched"] = r["cve"] in watched
         r["exposed"] = r["cve"] in exposed
+        r["exploits"] = xp.get(r["cve"], [])
     if mine:
         rows = [r for r in rows if r["watched"] or r["exposed"]]
+    if exploit:
+        rows = [r for r in rows if r["exploits"]]
     vendors: dict[str, int] = {}
     for r in rows:
         vendors[r["vendor"] or "?"] = vendors.get(r["vendor"] or "?", 0) + 1
     return {"total": len(rows), "rows": rows[:limit],
             "vendors": [{"key": k, "count": v} for k, v in sorted(vendors.items(), key=lambda x: -x[1])[:25]],
-            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"]}
+            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"] if catalog == "kev" else
+            db.query("SELECT COUNT(*) AS n FROM euvd WHERE cve NOT IN (SELECT cve FROM kev)")[0]["n"],
+            "euvd": S.source_on("euvd"), "exploits": S.source_on("exploits")}
 
 
 @app.get("/api/infra")

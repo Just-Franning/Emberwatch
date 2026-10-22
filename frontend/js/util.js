@@ -120,6 +120,7 @@ export const COLORS = {
   ransom: "#9179f2",
   infra: "#e5e7eb",
   cable: "#6b7280",
+  cloud: "#60a5fa",
   tool: "#ffffff",
   high: "#ef4444",
   medium: "#fb923c",

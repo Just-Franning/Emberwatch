@@ -9,6 +9,7 @@ import { dateTime, download, el, safeLink, sevTag } from "./util.js";
 
 export function cellNode(c) {
   if (c === null || c === undefined || c === "") return document.createTextNode("–");
+  if (Array.isArray(c)) return el("span", { class: "cell-list" }, ...c.slice(0, 200).flatMap((x, i) => [i ? ", " : "", cellNode(x)])); // several entries
   if (typeof c !== "object") return document.createTextNode(String(c));
   const txt = c.t ?? "";
   let node;

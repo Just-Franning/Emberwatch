@@ -68,6 +68,7 @@
       <label class="chip" data-i18n-title="legend.ransom"><input type="checkbox" id="lyr-ransom" checked><i class="sw sw-ransom" aria-hidden="true"></i><span data-i18n="chip.ransom"></span></label>
       <label class="chip" data-i18n-title="legend.infra"><input type="checkbox" id="lyr-infra" checked><i class="sw sw-infra" aria-hidden="true"></i><span data-i18n="chip.infra"></span></label>
       <label class="chip" data-i18n-title="legend.cables"><input type="checkbox" id="lyr-cables"><i class="sw sw-cable" aria-hidden="true"></i><span data-i18n="chip.cables"></span></label>
+      <label class="chip" data-i18n-title="legend.cloud"><input type="checkbox" id="lyr-cloud" checked><i class="sw sw-cloud" aria-hidden="true"></i><span data-i18n="chip.cloud"></span></label>
     </div>
     <div class="mb-side mb-cyber mb-right">
       <label class="pill-select"><span data-i18n="choro.label"></span>
@@ -89,6 +90,8 @@
     <div class="mb-side mb-welt layers" role="group" data-i18n-aria="wl.layers">
       <label class="chip" data-i18n-title="wl.chip.pairs_title"><input type="checkbox" id="wl-arcs" checked><i class="sw sw-wpair" aria-hidden="true"></i><span data-i18n="wl.chip.pairs"></span></label>
       <label class="chip" data-i18n-title="wl.chip.dots_title"><input type="checkbox" id="wl-dots" checked><i class="sw sw-wdot" aria-hidden="true"></i><span data-i18n="wl.chip.dots"></span></label>
+      <label class="chip" data-i18n-title="wl.chip.cables_title"><input type="checkbox" id="wl-cables" checked><i class="sw sw-wcable" aria-hidden="true"></i><span data-i18n="wl.chip.cables"></span></label>
+      <label class="chip" data-i18n-title="wl.chip.block_title"><input type="checkbox" id="wl-block"><i class="sw sw-wshut" aria-hidden="true"></i><span data-i18n="wl.chip.block"></span></label>
       <label class="chip" data-i18n-title="wl.chip.confirmed_title"><input type="checkbox" id="wl-confirmed"><i class="sw sw-wcheck" aria-hidden="true"></i><span data-i18n="wl.chip.confirmed"></span></label>
       <label class="chip" data-i18n-title="wl.chip.law_title"><input type="checkbox" id="wl-law"><i class="sw sw-wlaw" aria-hidden="true"></i><span data-i18n="wl.chip.law"></span></label>
       <label class="pill-select"><span data-i18n="wl.sources"></span><select id="wl-source"></select></label>
@@ -119,6 +122,7 @@
         <button role="tab" aria-selected="true" data-side="news" data-i18n="wl.tab.news"></button>
         <button role="tab" aria-selected="false" data-side="actors" data-i18n="wl.tab.actors"></button>
         <button role="tab" aria-selected="false" data-side="pairs" data-i18n="wl.tab.pairs"></button>
+        <button role="tab" aria-selected="false" data-side="block" data-i18n="wl.tab.block"></button>
         <button role="tab" aria-selected="false" data-side="brief" data-i18n="wl.tab.brief"></button>
       </nav>
       <button type="button" class="collapse" data-collapse="side" aria-expanded="true"><span aria-hidden="true">–</span><span class="sr-only"></span></button>
@@ -168,6 +172,7 @@
       <section class="tp mb-welt" id="tp-news" role="tabpanel"></section>
       <section class="tp mb-welt" id="tp-actors" role="tabpanel" hidden></section>
       <section class="tp mb-welt" id="tp-pairs" role="tabpanel" hidden></section>
+      <section class="tp mb-welt" id="tp-block" role="tabpanel" hidden></section>
       <section class="tp mb-welt" id="tp-brief" role="tabpanel" hidden></section>
     </div>
   </aside>
@@ -233,10 +238,13 @@
       <span class="tl-day" id="tl-day" data-i18n="tl.no_history"></span>
     </div>
     <p class="credits mb-cyber">
+      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
+      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth ·
       <a href="https://radar.cloudflare.com" rel="noopener noreferrer" target="_blank">Cloudflare Radar</a> (CC BY-NC 4.0) ·
       <a href="https://abuse.ch" rel="noopener noreferrer" target="_blank">abuse.ch</a> ·
       <a href="https://www.ransomware.live" rel="noopener noreferrer" target="_blank">Ransomware.live</a> ·
       <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" rel="noopener noreferrer" target="_blank">CISA KEV</a> ·
+      <a href="https://euvd.enisa.europa.eu" rel="noopener noreferrer" target="_blank">ENISA EUVD</a> ·
       <a href="https://www.first.org/epss/" rel="noopener noreferrer" target="_blank">FIRST EPSS</a> ·
       <a href="https://nvd.nist.gov" rel="noopener noreferrer" target="_blank">NVD</a> ·
       <a href="https://internetdb.shodan.io" rel="noopener noreferrer" target="_blank">Shodan InternetDB</a> ·
@@ -244,16 +252,17 @@
       <a href="https://ris-live.ripe.net" rel="noopener noreferrer" target="_blank">RIPE NCC RIS</a> ·
       <a href="https://sslmate.com/certspotter/" rel="noopener noreferrer" target="_blank">Cert Spotter</a> ·
       <a href="https://db-ip.com" rel="noopener noreferrer" target="_blank">IP Geolocation by DB-IP</a> ·
-      <a href="https://www.submarinecablemap.com" rel="noopener noreferrer" target="_blank">TeleGeography</a> (CC BY-NC-SA 3.0, 2021) ·
-      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
-      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth
+      <a href="https://www.submarinecablemap.com" rel="noopener noreferrer" target="_blank">TeleGeography</a> (CC BY-NC-SA 3.0, 2021)
     </p>
     <p class="credits mb-welt">
+      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
+      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth ·
       <span data-i18n="wl.credits"></span>
       <a href="https://github.com/MISP/misp-galaxy" rel="noopener noreferrer" target="_blank">MISP Galaxy</a> (CC0 1.0 / BSD-2-Clause) ·
       <a href="https://radar.cloudflare.com" rel="noopener noreferrer" target="_blank">Cloudflare Radar</a> (CC BY-NC 4.0) ·
-      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
-      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth
+      <a href="https://ooni.org/data/" rel="noopener noreferrer" target="_blank">OONI</a> (CC BY-NC-SA 4.0) ·
+      <a href="https://www.gdeltproject.org/" rel="noopener noreferrer" target="_blank">GDELT Project</a> ·
+      <a href="https://www.submarinecablemap.com" rel="noopener noreferrer" target="_blank">TeleGeography</a> (CC BY-NC-SA 3.0, 2021)
     </p>
   </footer>
 
