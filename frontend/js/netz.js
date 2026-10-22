@@ -7,7 +7,7 @@ import { go, href, objLink, routes } from "./router.js";
 import { ago, api, countryName, dateTime, el, kids, num, sevTag } from "./util.js";
 
 const VIEWS = ["assets", "products", "alerts", "logs", "myip"];
-const navLink = (path, label, on) => el("a", { href: href(path), class: on ? "on" : null }, label);
+const navLink = (path, label, on) => el("a", { href: href(path), class: on ? "on" : null, title: label }, el("span", { class: "lbl" }, label));
 const geoTxt = (g) => (g ? [g.asn ? `AS${g.asn} ${g.as_name || ""}`.trim() : null, g.country ? countryName(g.country) : null].filter(Boolean).join(" · ") : "");
 
 export class Netz {

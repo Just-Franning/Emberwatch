@@ -16,6 +16,14 @@ const LAW = "law,sanctions";
 const PAGE = 40;
 const httpsImg = (u) => (typeof u === "string" && /^https:\/\/[^\s"'<>]+$/.test(u) ? u : null);
 const kindLabel = (k) => t(`wl.kind.${k}`);
+const FEED_ERRORS = ["http", "timeout", "network", "too_large", "redirect", "redirect_http", "redirect_private", "parse", "entities", "other"];
+/** Why a feed could not be read (stored as a code by the server, rendered in the interface language). */
+function feedError(s) {
+  const code = FEED_ERRORS.includes(s.error) ? s.error : "other";
+  const p = s.error_params || {};
+  const text = t(`wl.feed_err.${code}`, { status: String(p.status ?? "?") });
+  return (code === "network" || code === "other") && p.detail ? `${text} (${p.detail})` : text;
+}
 const destroyIn = (node) => node.querySelectorAll("canvas").forEach(destroy);
 
 /** Preview image of the publisher: loaded by the browser without referrer; removed if it fails. */
@@ -65,6 +73,9 @@ export class Welt {
     const arcs = document.getElementById("wl-arcs"), dots = document.getElementById("wl-dots");
     arcs.addEventListener("change", () => this.map.setWeltVisible("pairs", arcs.checked));
     dots.addEventListener("change", () => this.map.setWeltVisible("dots", dots.checked));
+    // the browser may restore checkbox states on reload: the map follows the boxes from the start
+    this.map.setWeltVisible("pairs", arcs.checked);
+    this.map.setWeltVisible("dots", dots.checked);
     const confirmed = document.getElementById("wl-confirmed"), law = document.getElementById("wl-law");
     confirmed.addEventListener("change", () => this.set({ confirmed: confirmed.checked }));
     law.addEventListener("change", () => this.set({ kind: law.checked ? LAW : "" }));
@@ -122,7 +133,7 @@ export class Welt {
     if (f.source === "gov" || f.source === "press") p.set("tier", f.source);
     else if (f.source) p.set("source", f.source);
     const region = this.status?.region?.codes || [];
-    if (f.focus === "region" && region.length) p.set("country", region.join(","));
+    if (f.focus === "region" && region.length) p.set("country", "region"); // the server expands HOME_REGION (any size)
     else if (/^[A-Z]{2}$/.test(f.focus)) p.set("country", f.focus);
     for (const k of ["kind", "q", "actor", "origin", "target"]) if (f[k]) p.set(k, f[k]);
     if (f.mine) p.set("mine", "true");
@@ -158,14 +169,16 @@ export class Welt {
 
   async more(btn) {
     btn.disabled = true;
+    const seq = this.seq; // a filter changed meanwhile: these items belong to the old selection
     try {
       const r = await api(`api/news?${this.params({ offset: this.items.length, limit: PAGE })}`);
-      if (!this.active) return;
+      if (seq !== this.seq || !this.active) return;
       const known = new Set(this.items.map((x) => x.id));
       this.items.push(...r.items.filter((x) => !known.has(x.id)));
       this.total = r.total;
       this.renderTab();
     } catch (e) {
+      if (seq !== this.seq || !btn.isConnected) return;
       btn.replaceWith(el("p", { class: "state err" }, t("common.error", { msg: e.message })));
     }
   }
@@ -182,7 +195,8 @@ export class Welt {
     if (/^[A-Z]{2}$/.test(q.get("country") || "")) fromLink.focus = q.get("country");
     if (["1", "7", "30", "90"].includes(q.get("days") || "")) fromLink.days = Number(q.get("days"));
     if (first && ctx.country && !fromLink.focus && !this.f.focus) fromLink.focus = ctx.country;
-    if (ctx.days && !fromLink.days && ctx.days !== this.f.days) fromLink.days = ctx.days; // period chosen in the Cyberlage
+    // period chosen in the Cyberlage: only when entering, not on the drawer routes (#/welt/n/<id>) inside the Weltlage
+    if (first && ctx.days && !fromLink.days && ctx.days !== this.f.days) fromLink.days = ctx.days;
     if (fromLink.actor || fromLink.kind || fromLink.focus) {
       // a link from elsewhere ("reports on actor X") starts from a clean selection; source and period stay
       Object.assign(this.f, { q: "", mine: false, origin: "", target: "", kind: "", actor: "", confirmed: false });
@@ -428,7 +442,7 @@ export class Welt {
         el("td", {}, el("i", { class: `dot ${s.ok === true ? "ok" : s.ok === false ? "fail" : ""}`, "aria-hidden": "true" }), s.name,
           s.tier === "gov" ? el("span", { class: "gov" }, t("wl.gov")) : null),
         el("td", { class: "num" }, t("wl.src_items", { n: num(s.items_7d) })),
-        el("td", { class: s.ok === false ? "warn-txt" : "muted" }, s.ok === false ? (s.message || t("common.error", { msg: "" })) : s.last_ok ? ago(s.last_ok) : t("st.not_fetched")))))),
+        el("td", { class: s.ok === false ? "warn-txt" : "muted" }, s.ok === false ? feedError(s) : s.last_ok ? ago(s.last_ok) : t("st.not_fetched")))))),
       el("h3", { class: "tp-h" }, t("wl.method_h")),
       el("ul", { class: "plain method" }, ["wl.method1", "wl.method2", "wl.method3", "wl.method4"].map((k) => el("li", {}, t(k)))));
   }

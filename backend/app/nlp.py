@@ -1,4 +1,4 @@
-"""Light-weight recognition in news texts (headline and teaser): CVEs, countries (with the attributed origin),
+"""Light-weight recognition in news texts (headline and feed text): CVEs, countries (with the attributed origin),
 threat actors, malware families, kinds of incident and the user's own products and domains.
 
 Everything here is heuristic and only reads the text of the feed. The results are labelled as "recognised
@@ -380,10 +380,10 @@ def cves(text: str) -> list[str]:
     return out[:10]
 
 
-def word_matcher(words: Iterable[str], domains: bool = False) -> re.Pattern[str] | None:
+def word_matcher(words: Iterable[str], domains: bool = False, min_len: int = 3) -> re.Pattern[str] | None:
     """Case-insensitive whole-word matcher for product and domain names (the user's own data). Domains also match as
-    the end of a longer host name (www.example.de)."""
-    ws = sorted({w.strip() for w in words if w and len(w.strip()) >= 3}, key=len, reverse=True)
+    the end of a longer host name (www.example.de). Vendors use min_len=2 (HP, F5)."""
+    ws = sorted({w.strip() for w in words if w and len(w.strip()) >= min_len}, key=len, reverse=True)
     if not ws:
         return None
     before = r"(?<![0-9A-Za-zÀ-ÖØ-öø-ÿ-])" if domains else r"(?<![0-9A-Za-zÀ-ÖØ-öø-ÿ.-])"

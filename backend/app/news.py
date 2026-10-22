@@ -1,9 +1,10 @@
 """Weltlage: IT security news from curated feeds of authorities and specialist media.
 
-Per item Emberwatch stores the headline, a short teaser (at most 260 characters), the link, the publication time and
-the address of a preview image. Images are not copied: the browser loads them from the publisher (NEWS_IMAGES).
-Headlines and teasers are third-party text: they are shown as text only, analysed with linear algorithms (nlp.py) and
-never interpreted as markup or instructions.
+Per item Emberwatch stores the headline, a short teaser (at most 260 characters), up to ANALYSE_CHARS of the feed text
+for the recognition (never served), the link, the publication time and the address of a preview image. Images are not
+copied: the browser loads them from the publisher (NEWS_IMAGES), only from public host names (image_host_ok).
+Feed texts are third-party text: they are shown as text only, analysed with linear algorithms (nlp.py) and never
+interpreted as markup or instructions.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from .actors import Actors
 from .db import DB, utcnow
 from .domains import registrable
 from .tools import ToolError, resolve
+from .toolbox.detect import internal_name, is_domain
 
 log = logging.getLogger("emberwatch.news")
 
@@ -57,6 +59,17 @@ TRACKER_RE = re.compile(r"(pixel|track|beacon|counter|stats\.|cpx\.|/1x1|spacer|
 NS_CONTENT = "http://purl.org/rss/1.0/modules/content/"
 NS_MEDIA = "http://search.yahoo.com/mrss/"
 DROP_PARAMS = re.compile(r"^(utm_|mc_|fbclid$|gclid$|ref$|source$|cmpid$|wt_)", re.I)
+
+
+class FeedError(Exception):
+    """Why a feed could not be read; stored as a code with parameters and rendered in the interface language."""
+    CODES = ("http", "timeout", "network", "too_large", "redirect", "redirect_http", "redirect_private", "parse", "entities",
+             "other")
+
+    def __init__(self, code: str, **params: Any) -> None:
+        super().__init__(code)
+        self.code = code if code in self.CODES else "other"
+        self.params = params
 
 
 @dataclass(frozen=True)
@@ -124,8 +137,16 @@ def strip_html(s: str, limit: int = 20000) -> str:
     return " ".join(html.unescape(t).split())
 
 
+def image_host_ok(host: str) -> bool:
+    """Preview images are loaded by the user's browser, which usually sits inside the LAN: only public-looking host names
+    on the default port. Address literals (10.0.0.1, [fd00::1], 0x7f.1, 2130706433), single-label and internal names
+    (router.lan, nas.fritz.box) are refused; collect() also checks that the name resolves to public addresses."""
+    h = (host or "").lower().rstrip(".")
+    return is_domain(h) and not internal_name(h)
+
+
 def clean_url(raw: str | None, *, image: bool = False) -> str | None:
-    """https URL without credentials, tracking parameters and fragment; http is upgraded."""
+    """https URL without credentials, tracking parameters and fragment; http is upgraded. Images: see image_host_ok."""
     s = html.unescape((raw or "").strip())
     if not s or len(s) > 1500 or any(c.isspace() for c in s):
         return None
@@ -145,6 +166,8 @@ def clean_url(raw: str | None, *, image: bool = False) -> str | None:
     try:
         port = u.port
     except ValueError:
+        return None
+    if image and (not image_host_ok(u.hostname) or (port and port not in (80, 443))):
         return None
     host = f"[{u.hostname}]" if ":" in u.hostname else u.hostname
     netloc = host + (f":{port}" if port and port != 443 and port != 80 else "")
@@ -289,8 +312,9 @@ class News:
         return bool(getattr(self.s, "news_enabled", True)) and bool(self.sources)
 
     # --- fetching --------------------------------------------------------------------------------------------------------
-    async def _fetch(self, client: httpx.AsyncClient, src: Source) -> bytes | None:
-        """Feed body, or None if unchanged (conditional GET with ETag / Last-Modified)."""
+    async def _fetch(self, client: httpx.AsyncClient, src: Source) -> tuple[bytes | None, dict[str, str]]:
+        """Feed body (None if unchanged; conditional GET with ETag / Last-Modified) and the validators to store once the
+        body has been parsed: a feed that fails to parse must be fetched in full again, not answered with 304."""
         headers = {"User-Agent": self.s.user_agent,
                    "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.3"}
         etag = self.db.meta_get(f"news_etag:{src.id}")
@@ -303,7 +327,7 @@ class News:
         for hop in range(4):
             if hop:  # the configured URL is trusted; redirect targets must be https and public
                 if not url.startswith("https://"):
-                    raise ValueError("redirect to a non-https URL")
+                    raise FeedError("redirect_http")
                 await resolve(urlsplit(url).hostname or "", False)
             r = await client.send(client.build_request("GET", url, headers=headers, timeout=25), stream=True,
                                   follow_redirects=False)
@@ -311,50 +335,64 @@ class News:
                 if r.status_code in (301, 302, 303, 307, 308):
                     nxt = r.headers.get("location") or ""
                     if not nxt:
-                        raise ValueError("redirect without location")
+                        raise FeedError("redirect")
                     url = str(httpx.URL(url).join(nxt))
                     continue
                 if r.status_code == 304:
-                    return None
+                    return None, {}
                 if r.status_code != 200:
-                    raise httpx.HTTPStatusError(f"HTTP {r.status_code}", request=r.request, response=r)
+                    raise FeedError("http", status=r.status_code)
                 buf = bytearray()
                 async for chunk in r.aiter_bytes():
                     buf.extend(chunk)
                     if len(buf) > MAX_FEED_BYTES:
-                        raise ValueError("feed too large")
+                        raise FeedError("too_large")
             finally:
                 await r.aclose()
+            validators = {}
             if r.headers.get("etag"):
-                self.db.meta_set(f"news_etag:{src.id}", r.headers["etag"][:200])
+                validators[f"news_etag:{src.id}"] = r.headers["etag"][:200]
             if r.headers.get("last-modified"):
-                self.db.meta_set(f"news_lastmod:{src.id}", r.headers["last-modified"][:100])
-            return bytes(buf)
-        raise ValueError("too many redirects")
+                validators[f"news_lastmod:{src.id}"] = r.headers["last-modified"][:100]
+            return bytes(buf), validators
+        raise FeedError("redirect")
 
     async def collect(self, client: httpx.AsyncClient) -> int:
         """Fetches all feeds, stores new items with their recognition, creates alerts. Returns the number of new items."""
         if not self.enabled:
             self.db.status("news", True, code="disabled")
             return 0
+        self._drop_bad_images()
         sem = asyncio.Semaphore(3)
 
-        async def one(src: Source) -> tuple[Source, list[dict[str, Any]] | None, str | None]:
+        async def one(src: Source) -> tuple[Source, list[dict[str, Any]] | None, FeedError | None]:
             async with sem:
                 try:
-                    data = await self._fetch(client, src)
+                    data, validators = await self._fetch(client, src)
                     if data is None:
                         return src, [], None
-                    return src, await asyncio.to_thread(parse_feed, data), None
-                except (httpx.HTTPError, ValueError, SyntaxError) as exc:  # ParseError and defusedxml errors are ValueErrors/SyntaxErrors
-                    return src, None, f"{exc.__class__.__name__}: {str(exc)[:160]}"
-                except ToolError as exc:  # redirect to a private address or unresolvable host
-                    return src, None, f"redirect refused: {exc.key}"
-                except Exception as exc:  # defusedxml.DefusedXmlException (entities refused) and anything unexpected
-                    log.warning("feed %s: %s", src.id, exc.__class__.__name__, exc_info=not isinstance(exc, DefusedXmlException))
-                    return src, None, exc.__class__.__name__
+                    items = await asyncio.to_thread(parse_feed, data)
+                    for key, value in validators.items():  # only after the body was parsed
+                        self.db.meta_set(key, value)
+                    return src, items, None
+                except FeedError as exc:
+                    return src, None, exc
+                except ToolError:  # redirect to a private address or an unresolvable host
+                    return src, None, FeedError("redirect_private")
+                except DefusedXmlException:  # entity declarations or external references (a DefusedXmlException is a ValueError)
+                    return src, None, FeedError("entities")
+                except SyntaxError:  # xml.etree ParseError
+                    return src, None, FeedError("parse")
+                except httpx.TimeoutException:
+                    return src, None, FeedError("timeout")
+                except httpx.HTTPError as exc:
+                    return src, None, FeedError("network", detail=exc.__class__.__name__)
+                except Exception as exc:  # anything unexpected: one feed must not stop the others
+                    log.warning("feed %s: %s", src.id, exc.__class__.__name__, exc_info=True)
+                    return src, None, FeedError("other", detail=exc.__class__.__name__)
 
         results = await asyncio.gather(*(one(x) for x in self.sources))
+        await self._check_image_hosts([raw for _, items, _ in results for raw in items or []])
         ctx = self._context()
         new_total = 0
         failed = []
@@ -368,7 +406,7 @@ class News:
                 if self._store(src, raw, ctx):
                     n += 1
             new_total += n
-            self._source_status(src, True, "", n)
+            self._source_status(src, True, None, n)
         if self.s.news_images:
             await self._og_images(client)
         self._prune()
@@ -380,21 +418,28 @@ class News:
                        code="news_partial" if partial else None, params={"failed": ", ".join(failed)[:300]} if partial else None)
         return new_total
 
-    def _source_status(self, src: Source, ok: bool, message: str, new: int = 0) -> None:
+    def _source_status(self, src: Source, ok: bool, err: FeedError | None, new: int = 0) -> None:
+        """Stored language-neutral: an error code and its parameters, rendered by the interface (wl.feed_err.*)."""
         prev = json.loads(self.db.meta_get(f"news_src:{src.id}") or "{}")
         now = utcnow()
         self.db.meta_set(f"news_src:{src.id}", json.dumps({
-            "ok": ok, "last_run": now, "last_ok": now if ok else prev.get("last_ok"), "message": message[:200],
-            "new": new}))
+            "ok": ok, "last_run": now, "last_ok": now if ok else prev.get("last_ok"),
+            "code": err.code if err else None, "params": err.params if err else {}, "new": new}))
 
     def source_list(self) -> list[dict[str, Any]]:
         counts = {r["source"]: r["n"] for r in self.db.query("SELECT source, COUNT(*) AS n FROM news WHERE published >= ? GROUP BY source",
                                                              (_cutoff(7),))}
         out = []
         for x in self.sources:
-            st = json.loads(self.db.meta_get(f"news_src:{x.id}") or "{}")
+            try:
+                st = json.loads(self.db.meta_get(f"news_src:{x.id}") or "{}")
+            except ValueError:
+                st = {}
+            code = st.get("code") if st.get("code") in FeedError.CODES else ("other" if st.get("ok") is False else None)
+            params = st.get("params") if code and isinstance(st.get("params"), dict) else {}
             out.append({"id": x.id, "name": x.name, "tier": x.tier, "lang": x.lang, "home": x.home or None,
-                        "ok": st.get("ok"), "last_ok": st.get("last_ok"), "message": st.get("message") or "",
+                        "ok": st.get("ok"), "last_ok": st.get("last_ok"), "error": code,
+                        "error_params": {k: str(v)[:60] for k, v in params.items() if k in ("status", "detail")},
                         "items_7d": counts.get(x.id, 0)})
         return out
 
@@ -407,33 +452,40 @@ class News:
             name = str(r["m"] or "").strip()
             if name and not name.lower().startswith(("unknown", "win.", "elf.", "apk.", "osx.", "js.")):
                 malware.add(name, name)
-        prods = self.db.query("SELECT id, vendor, product FROM products")
-        prod_phrase = {}
+        prods = self.db.query("SELECT id, vendor, product FROM products ORDER BY id")
+        prod_phrase: dict[str, list[dict[str, Any]]] = {}  # one name can be watched for several vendors ("Firewall")
+        vendors: dict[str, list[dict[str, Any]]] = {}
         for p in prods:  # products watched with a product name; a vendor alone is a vendor mention (no alert)
             phrase = (p["product"] or "").strip()
             if phrase:
-                prod_phrase[phrase.lower()] = p
-        vendors = {(p["vendor"] or "").strip().lower(): p for p in prods if (p["vendor"] or "").strip()}
+                prod_phrase.setdefault(phrase.lower(), []).append(p)
+            vendor = (p["vendor"] or "").strip()
+            if vendor:
+                vendors.setdefault(vendor.lower(), []).append(p)
         doms = {}
         for w in self.db.query("SELECT id, value FROM watchlist WHERE kind = 'domain'"):
             doms[w["value"].lower()] = w["id"]
         prod_cves: dict[str, int] = {}
         for r in self.db.query("SELECT product_id, cve FROM product_cves"):
             prod_cves.setdefault(r["cve"], r["product_id"])
-        recent = []
-        for r in self.db.query("SELECT id, title, cluster, cves, published FROM news WHERE published >= ? ORDER BY id DESC LIMIT 2000",
-                               (_cutoff(CLUSTER_HOURS / 24),)):
-            recent.append({"id": r["id"], "tok": nlp.title_tokens(r["title"]), "cluster": r["cluster"] or r["id"],
-                           "cves": set(nlp.as_list(r["cves"])), "published": r["published"]})
+        # grouping candidates for reports of the last three days: everything up to three days before them
+        recent = [self._candidate(r) for r in self.db.query(
+            "SELECT id, title, cluster, cves, published FROM news WHERE published >= ? ORDER BY id DESC LIMIT 3000",
+            (_cutoff(2 * CLUSTER_HOURS / 24),))]
         return {
             "actors": self.actors.index(), "malware": malware,
             "prod_rx": nlp.word_matcher(prod_phrase), "prod": prod_phrase,
-            "vendor_rx": nlp.word_matcher(vendors), "vendors": vendors,
+            "vendor_rx": nlp.word_matcher(vendors, min_len=2), "vendors": vendors,
             "dom_rx": nlp.word_matcher(doms, domains=True), "doms": doms, "prod_cves": prod_cves, "recent": recent,
         }
 
+    @staticmethod
+    def _candidate(r: dict[str, Any]) -> dict[str, Any]:
+        return {"id": r["id"], "tok": nlp.title_tokens(r["title"]), "cluster": r["cluster"] or r["id"],
+                "cves": set(nlp.as_list(r["cves"])), "published": r["published"]}
+
     def analyse(self, title: str, text: str, ctx: dict[str, Any]) -> dict[str, Any]:
-        """Recognition on headline + teaser. Pure function of the text and the indexes."""
+        """Recognition on the headline and the feed text (at most ANALYSE_CHARS). Pure function of the text and the indexes."""
         body = f"{title}. {text}"
         origin, mentioned = nlp.countries(body, self.places)
         origin_by = "text" if origin else None
@@ -446,19 +498,22 @@ class News:
                     mentioned.remove(origin)
         cves = nlp.cves(body)
         mine: list[dict[str, Any]] = []
+        # vendors named as whole words ("HP" is not in "https", "SAP" not in "Sapphire")
+        named = list(dict.fromkeys(x.lower() for x in ctx["vendor_rx"].findall(body))) if ctx["vendor_rx"] else []
+        covered: set[str] = set()  # vendors with a matched product: no extra vendor mention
         if ctx["prod_rx"]:
-            low = body.lower()
             for m in dict.fromkeys(x.lower() for x in ctx["prod_rx"].findall(body)):
-                p = ctx["prod"].get(m)
-                # as configured: "FortiOS", "PAN-OS", "Exchange Server" count alone; a plain word ("Firewall") only with its vendor
-                if p and (nlp.distinctive(p["product"]) or (p["vendor"] or "").strip().lower() in low):
-                    mine.append({"type": "product", "id": p["id"], "label": f"{p['vendor']} {p['product']}".strip()})
-        if ctx["vendor_rx"]:
-            seen = {x.get("id") for x in mine}
-            for m in dict.fromkeys(x.lower() for x in ctx["vendor_rx"].findall(body)):
-                p = ctx["vendors"].get(m)
-                if p and p["id"] not in seen:
-                    mine.append({"type": "vendor", "id": p["id"], "label": p["vendor"]})
+                for p in ctx["prod"].get(m, ()):
+                    vendor = (p["vendor"] or "").strip().lower()
+                    # as configured: "FortiOS", "PAN-OS", "Exchange Server" count alone; a plain word ("Firewall") only
+                    # with its vendor named in the same text
+                    if nlp.distinctive(p["product"]) or (vendor and vendor in named):
+                        mine.append({"type": "product", "id": p["id"], "label": f"{p['vendor']} {p['product']}".strip()})
+                        covered.add(vendor)
+        for vendor in named:
+            ps = ctx["vendors"].get(vendor)
+            if ps and vendor not in covered:
+                mine.append({"type": "vendor", "id": ps[0]["id"], "label": ps[0]["vendor"]})
         for c in cves:
             if c in ctx["prod_cves"]:
                 mine.append({"type": "cve", "id": ctx["prod_cves"][c], "label": c})
@@ -502,7 +557,13 @@ class News:
         cves = set(found["cves"])
         cluster = new_id
         window = timedelta(hours=CLUSTER_HOURS)
-        for r in ctx["recent"]:
+        if pub >= now - window:
+            candidates = ctx["recent"]
+        else:  # a late report (new source, delayed feed): its neighbours are older than the run's candidates
+            candidates = [self._candidate(r) for r in self.db.query(
+                "SELECT id, title, cluster, cves, published FROM news WHERE published BETWEEN ? AND ? AND id != ? "
+                "ORDER BY id DESC LIMIT 1000", (_iso(pub - window), _iso(pub + window), new_id))]
+        for r in candidates:
             if abs(pub - _parse_iso(r["published"])) > window:
                 continue  # the same event is reported within three days
             # a shared CVE only joins reports about a few CVEs (round-ups such as patch days name dozens)
@@ -559,6 +620,37 @@ class News:
         return True
 
     # --- preview images -------------------------------------------------------------------------------------------------
+    async def _public_hosts(self, hosts: set[str]) -> set[str]:
+        """The image hosts whose every address is public (resolved once per run; failures count as not public)."""
+        sem = asyncio.Semaphore(5)
+
+        async def check(host: str) -> str | None:
+            async with sem:
+                try:
+                    await resolve(host, False)
+                    return host
+                except Exception:  # ToolError (private, unresolvable) and DNS library errors
+                    return None
+        return {h for h in await asyncio.gather(*(check(h) for h in sorted(hosts)[:200])) if h}
+
+    def _drop_bad_images(self) -> None:
+        """Once (3.2.1): image addresses stored by 3.2.0 that the stricter rules refuse (address literals, internal names)."""
+        if self.db.meta_get("news_images_v2") == "1":
+            return
+        bad = [(r["id"],) for r in self.db.query("SELECT id, image FROM news WHERE image IS NOT NULL")
+               if clean_url(r["image"], image=True) is None]
+        if bad:
+            self.db.execmany("UPDATE news SET image = NULL WHERE id = ?", bad)
+        self.db.meta_set("news_images_v2", "1")
+
+    async def _check_image_hosts(self, items: list[dict[str, Any]]) -> None:
+        """Drops feed images whose host does not resolve to public addresses (the browser would request them in the LAN)."""
+        hosts = {(urlsplit(x["image"]).hostname or "") for x in items if x.get("image")}
+        ok = await self._public_hosts(hosts) if hosts else set()
+        for x in items:
+            if x.get("image") and (urlsplit(x["image"]).hostname or "") not in ok:
+                x["image"] = None
+
     async def _og_images(self, client: httpx.AsyncClient) -> None:
         rows = self.db.query("SELECT id, source, url FROM news WHERE image IS NULL AND og_tried = 0 AND published >= ? "
                              "ORDER BY id DESC LIMIT ?", (_cutoff(3), OG_PER_RUN))
@@ -574,7 +666,7 @@ class News:
             except Exception as exc:  # e.g. httpx.InvalidURL from a broken Location header: one page must not stop the run
                 log.warning("preview image of %s: %s", r["url"][:200], exc.__class__.__name__)
                 img = None
-            if img:
+            if img and await self._public_hosts({urlsplit(img).hostname or ""}):
                 self.db.execute("UPDATE news SET image = ? WHERE id = ?", (img, r["id"]))
             await asyncio.sleep(0.3)
 

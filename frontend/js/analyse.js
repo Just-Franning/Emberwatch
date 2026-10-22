@@ -17,7 +17,8 @@ const debounce = (fn, ms) => {
   let h = null;
   return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); };
 };
-const navLink = (path, label, on, extra = null) => el("a", { href: href(path), class: on ? "on" : null }, label, extra);
+const navLink = (path, label, on, extra = null) =>
+  el("a", { href: href(path), class: on ? "on" : null, title: label }, el("span", { class: "lbl" }, label), extra);
 const typeChip = (type) => el("span", { class: "kind" }, t(`obj.type.${type}`));
 
 /** Target string a tool needs for an object (AS numbers with prefix). */

@@ -307,7 +307,8 @@ def test_collect_store_cluster_alerts_images(m):
     assert st["news"]["message"] == "" and m.i18n.render_status(st["news"], "de").startswith("nicht erreichbar: ")
     srcs = {s["id"]: s for s in m.news.source_list()}
     assert set(srcs) == {"bsi", "therecord", "bleepingcomputer", "krebs", "certx"}
-    assert srcs["certx"]["ok"] is False and "redirect refused" in srcs["certx"]["message"]
+    assert srcs["certx"]["ok"] is False and srcs["certx"]["error"] == "redirect_private" and "message" not in srcs["certx"]
+    assert srcs["krebs"]["error"] == "http" and srcs["krebs"]["error_params"] == {"status": "503"}
     assert srcs["therecord"]["items_7d"] == 4
     # second run: conditional request, nothing new, no duplicate alerts
     n_alerts = len(al)
@@ -541,3 +542,136 @@ def test_own_products_and_grouping_rules(m):
     assert news._date("Mon, 01 Jan 99999 00:00:00 GMT") is None and news._date("not a date") is None
     assert news.clean_url("http://[2001:db8::1]:8443/x") == "https://[2001:db8::1]:8443/x"
     assert [s.lang for s in news.parse_extra("a1|A|https://a.example/f|gov|<s;b2|B|https://b.example/f|press|DE")] == ["en", "de"]
+
+
+# --- 3.2.1: findings of the independent review --------------------------------------------------------------------------
+def test_preview_images_never_point_into_the_lan(m):
+    """The browser loads preview images from inside the LAN: address literals, internal names, odd ports and names that
+    resolve to private addresses are dropped (feed images, og:image, and images stored by 3.2.0)."""
+    from app import news
+    for bad in ("https://10.0.0.1/a.jpg", "https://192.168.178.1/cgi-bin/x", "https://[fd00::1]/a", "https://router.lan:8443/x",
+                "https://nas/x.png", "https://nas.fritz.box/x.png", "https://0x7f.0.0.1/x", "https://2130706433/x",
+                "https://8.8.8.8/x.png", "https://cdn.example:8443/x.png", "https://intranet.corp/i.png"):
+        assert news.clean_url(bad, image=True) is None, bad
+    assert news.clean_url("http://cdn.example:80/i.png", image=True) == "https://cdn.example/i.png"
+    assert news.clean_url("https://10.0.0.1/article") == "https://10.0.0.1/article"  # links are not loaded by the browser
+    assert news._img_from_html('<img width="600" src="https://192.168.178.1/cgi-bin/x"><img src="https://cdn.example/b.jpg">') \
+        == "https://cdn.example/b.jpg"
+    assert news.og_image("<head><meta property='og:image' content='https://10.0.0.1/x.jpg'></head>") is None
+    # a public-looking name that resolves to a private address (stub: "internal." hosts are private)
+    feed = (b"<rss><channel><item><title>Report with a sneaky image</title><link>https://therecord.media/sneaky</link>"
+            b"<enclosure url='https://internal.cdn.example/x.jpg' type='image/jpeg'/></item>"
+            b"<item><title>Report with a good image</title><link>https://therecord.media/good</link>"
+            b"<enclosure url='https://cdn.therecord.media/g.jpg' type='image/jpeg'/></item>"
+            b"<item><title>Report with an og image inside</title><link>https://therecord.media/og-internal</link></item>"
+            b"</channel></rss>")
+    page = b"<html><head><meta property='og:image' content='https://internal.therecord.media/o.jpg'></head>"
+
+    def h(request):
+        if request.url.path == "/feed/":
+            return httpx.Response(200, content=feed)
+        if request.url.path == "/og-internal":
+            return httpx.Response(200, content=page, headers={"content-type": "text/html"})
+        return httpx.Response(404)
+    m.news.sources = [m.news.by_id["therecord"]]
+    m.news.by_id = {"therecord": m.news.sources[0]}
+    old = m.db.insert("INSERT INTO news(source, url, title, image, published, fetched_at, lang, tier) VALUES(?,?,?,?,?,?,?,?)",
+                      ("therecord", "https://therecord.media/old", "Stored by 3.2.0", "https://10.0.0.1/old.jpg", iso(2), iso(2),
+                       "en", "press"))
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+            return await m.news.collect(c)
+    assert asyncio.run(go()) == 3
+    img = {r["url"].rsplit("/", 1)[1]: r["image"] for r in m.db.query("SELECT url, image FROM news")}
+    assert img == {"sneaky": None, "good": "https://cdn.therecord.media/g.jpg", "og-internal": None, "old": None}
+    assert m.db.meta_get("news_images_v2") == "1" and old
+
+
+def test_own_products_match_whole_words_and_every_watch(m):
+    m.products.add("HP", "Printer")
+    m.products.add("SAP", "Router")
+    m.products.add("Cisco", "Firewall")
+    m.products.add("Zyxel", "Firewall")
+    ctx = m.news._context()
+    mine = lambda title, text="": {(x["type"], x["label"]) for x in m.news.analyse(title, text, ctx)["mine"]}  # noqa: E731
+    assert mine("Critical PHP bug lets attackers hijack printer fleets", "Details at https://example.org") == set()
+    assert mine("Sapphire Sleet targets router admins") == set()
+    assert mine("HP printers hit by flaw") == {("vendor", "HP")}  # "printers" is not the watched word "Printer"
+    assert mine("HP Printer firmware flaw exploited") == {("product", "HP Printer")}
+    assert mine("Cisco firewall flaw exploited") == {("product", "Cisco Firewall")}  # not hidden by Zyxel Firewall
+    assert mine("Zyxel and Cisco firewall flaws") == {("product", "Cisco Firewall"), ("product", "Zyxel Firewall")}
+    assert mine("SAP patches NetWeaver") == {("vendor", "SAP")}  # a vendor named without a watched product: no alert
+
+
+def test_home_region_of_any_size_and_late_reports(tmp_path, monkeypatch):
+    region = "DE,AT,CH,FR,NL,BE,LU,PL,CZ,DK,SE,NO,FI,IT"
+    m = v3.load_app(tmp_path, monkeypatch, HOME_REGION=region, NEWS_DISABLE="ncsc_uk,securityweek,golem,krebs")
+    src = m.news.by_id["therecord"]
+    ctx = m.news._context()
+    now = dt.datetime.now(dt.timezone.utc)
+    base = {"desc": "", "content": "", "image": None}
+    assert m.news._store(src, {**base, "title": "Hackers hit Italian water utility", "link": "https://therecord.media/it1",
+                               "date": now - dt.timedelta(hours=1)}, ctx)
+    assert m.news._store(src, {**base, "title": "Ransomware hits Finnish city", "link": "https://therecord.media/fi1",
+                               "date": now - dt.timedelta(hours=2)}, ctx)
+    from fastapi.testclient import TestClient
+    with TestClient(m.app) as tc:
+        r = tc.get("/api/welt", params={"days": 7, "country": "region"})
+        assert r.status_code == 200 and r.json()["kpis"]["events"] == 2 and r.json()["kpis"]["home"] == 2
+        assert tc.get("/api/news", params={"days": 7, "country": "region"}).json()["total"] == 2
+        assert tc.get("/api/welt", params={"days": 7, "country": ",".join(region.split(",")[:13])}).status_code == 400
+        # ids beyond SQLite integers are bad requests, not server errors
+        assert tc.get("/api/news/99999999999999999999").status_code == 422
+        assert tc.post("/api/ai/news", json={"id": 10 ** 20}).status_code == 422
+        assert tc.get("/api/assets/99999999999999999999").status_code == 400
+    # a late report (new source, delayed feed) joins its stored counterpart from four and a half days ago
+    assert m.news._store(src, {**base, "title": "Hackers breach water utility in Texas", "link": "https://therecord.media/t1",
+                               "date": now - dt.timedelta(days=4, hours=12)}, ctx)
+    ctx = m.news._context()
+    assert m.news._store(src, {**base, "title": "Hackers breach a water utility in Texas", "link": "https://therecord.media/t2",
+                               "date": now - dt.timedelta(days=4)}, ctx)
+    t1, t2 = m.db.query("SELECT cluster FROM news WHERE url LIKE '%/t_' ORDER BY id")
+    assert t1["cluster"] == t2["cluster"]
+
+
+def test_validators_are_stored_only_after_a_successful_parse(m):
+    """A feed that fails to parse is fetched in full again (no 304 that would hide the error) and its error is a code."""
+    bad = b'<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY nbsp "&#160;">]><rss><channel><item><title>x&nbsp;</title></item></channel></rss>'
+    good = b"<rss><channel><item><title>Fine report</title><link>https://therecord.media/fine</link></item></channel></rss>"
+    seen = []
+    body = {"v": bad}
+
+    def h(request):
+        if request.url.path == "/feed/":
+            seen.append(request.headers.get("if-none-match"))
+            if request.headers.get("if-none-match") == '"v1"' and body["v"] is good:
+                return httpx.Response(304)
+            return httpx.Response(200, content=body["v"], headers={"etag": '"v1"'})
+        return httpx.Response(404)
+    m.news.sources = [m.news.by_id["therecord"]]
+    m.news.by_id = {"therecord": m.news.sources[0]}
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+            return await m.news.collect(c)
+    for _ in range(2):
+        assert asyncio.run(go()) == 0
+        assert m.news.source_list()[0]["ok"] is False and m.news.source_list()[0]["error"] == "entities"
+    assert seen == [None, None] and m.db.meta_get("news_etag:therecord") is None
+    body["v"] = good
+    assert asyncio.run(go()) == 1 and m.db.meta_get("news_etag:therecord") == '"v1"'
+    assert asyncio.run(go()) == 0 and seen[-1] == '"v1"' and m.news.source_list()[0]["ok"] is True
+
+
+def test_outage_detail_and_cable_sentence_are_separated():
+    from app import i18n
+    pr = {"event": {}, "cables": {"count": 7, "snapshot": "2021-06", "names": ["C-Lion1"]}}
+    orig = i18n.render_infra_detail
+    try:
+        i18n.render_infra_detail = lambda ev, lang: "Submarine cable damaged; Germany; Networks: DTAG"
+        p = i18n.render_pattern({"key": "infra.critical", "params": pr, "severity": "medium", "category": "infra"}, "en",
+                                lambda cc, lang: cc or "")
+    finally:
+        i18n.render_infra_detail = orig
+    assert "Networks: DTAG. 7 submarine cables land there" in p["detail"]

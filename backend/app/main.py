@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, Query, Request
+from fastapi import Path as FPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -516,6 +517,12 @@ async def app_error(request: Request, exc: AppError) -> JSONResponse:
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     return JSONResponse({"detail": t(_lang(request), "err.bad_request"), "key": "err.bad_request"}, 422)
+
+
+@app.exception_handler(OverflowError)
+async def overflow_error(request: Request, exc: OverflowError) -> JSONResponse:
+    """An id beyond SQLite's 64-bit integers (/api/assets/99999999999999999999): a bad request, not a server error."""
+    return JSONResponse({"detail": t(_lang(request), "err.bad_request"), "key": "err.bad_request"}, 400)
 
 
 @app.exception_handler(Exception)
@@ -1296,7 +1303,7 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
     elif scope.startswith("news:"):
         ctx = news_ai_context(_news_item(_int_or_404(scope[5:])))
     elif scope.startswith("welt:"):
-        ctx = welt_ai_context(_int_or_404(scope[5:]))
+        ctx = await asyncio.to_thread(welt_ai_context, _int_or_404(scope[5:]))
     else:
         cc = scope.split(":", 1)[1] if ":" in scope else None
         country = country_localized(await country_data(request, cc), lang) if cc and CC_RE.match(cc) else None
@@ -1309,6 +1316,7 @@ async def api_followup(request: Request, body: FollowupIn) -> dict[str, Any]:
 
 # --- Weltlage (news) --------------------------------------------------------------------------------------------------
 WELT_DAYS = (1, 7, 30, 90)
+SQLITE_MAX_INT = 2**63 - 1
 
 
 def _int_or_404(v: str) -> int:
@@ -1326,7 +1334,12 @@ def _welt_filters(tier: str | None, source: str | None, kind: str | None, countr
         raise AppError("err.bad_request")
     if source and source not in news.by_id:
         raise AppError("err.bad_request")
-    ccs = [_cc(c) for c in (country or "").split(",") if c.strip()][:12]  # a country or a region ("DE,AT,CH")
+    if (country or "").strip() == "region":  # the home region, however many countries HOME_REGION lists
+        ccs = list(S.home_region)
+    else:  # a country or a short list ("DE,AT,CH")
+        ccs = [_cc(c) for c in (country or "").split(",") if c.strip()]
+        if len(ccs) > 12:
+            raise AppError("err.bad_request")
     return {"tier": tier, "source": source, "kind": ",".join(kinds) or None, "country": ",".join(ccs) or None, "confirmed": confirmed,
             "origin": _cc(origin) if origin else None, "target": _cc(target) if target else None,
             "actor": (actor or "").strip() or None, "mine": mine, "q": (q or "").strip() or None}
@@ -1382,7 +1395,7 @@ def _news_item(item_id: int) -> dict[str, Any]:
 
 
 @app.get("/api/news/{item_id}")
-def api_news_item(item_id: int) -> dict[str, Any]:
+def api_news_item(item_id: int = FPath(..., ge=1, le=SQLITE_MAX_INT)) -> dict[str, Any]:
     return _news_item(item_id)
 
 
@@ -1401,7 +1414,7 @@ def welt_ai_context(days: int) -> dict[str, Any]:
 
 
 class NewsAiIn(BaseModel):
-    id: int = Field(..., ge=1)
+    id: int = Field(..., ge=1, le=SQLITE_MAX_INT)
     question: str | None = Field(None, max_length=600)
 
 
@@ -1432,7 +1445,7 @@ async def api_ai_news(request: Request, body: NewsAiIn) -> dict[str, Any]:
 @app.post("/api/ai/welt")
 async def api_ai_welt(request: Request, body: WeltAiIn) -> dict[str, Any]:
     lang = _lang(request)
-    ctx = welt_ai_context(body.days)
+    ctx = await asyncio.to_thread(welt_ai_context, body.days)  # reads up to 90 days of reports: not on the event loop
     q = (body.question or "").strip()
     task = TASKS[lang]["welt_question"] + q if q else TASKS[lang]["welt"]
     return await _ai_report(request, task, ctx, f"welt:{body.days}", q, lang)
