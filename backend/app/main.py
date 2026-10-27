@@ -28,11 +28,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import alerts, analytics, i18n, nlp, watchlist
+from . import alerts, analytics, api_account, i18n, nlp, watchlist
 from .actors import Actors
 from .ai import TASKS, Gemini, build_context
 from .attack import Attack
-from .auth import COOKIE, Auth
+from .auth import COOKIE, Auth, allowed
 from .bgp import BgpMonitor
 from .cables import Cables
 from .config import OPTIONAL_SOURCES, load
@@ -77,7 +77,7 @@ domains = Domains(S, db)
 bgp = BgpMonitor(S, db)
 matcher = Matcher(db, reputation)
 syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
-auth = Auth(S)
+auth = Auth(S, db)
 myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
 actors = Actors(db)
 news = News(S, db, actors, S.static_dir / "data" / "centroids.json", cables)
@@ -358,6 +358,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
 
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
+        auth.prune()  # expired sessions, audit entries beyond AUDIT_RETENTION_DAYS
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
@@ -404,7 +405,8 @@ async def lifespan(app: FastAPI):
     if syslog is not None:
         await syslog.start()
     log.info("Emberwatch %s started. Auth: %s, language: %s, Gemini: %s, Matrix: %s, tools: %s, scans: %s, syslog: %s, BGP live: %s",
-             S.version, S.auth_mode, S.language, "on" if ai.enabled else "off", "on" if notifier.enabled else "off",
+             S.version, f"{S.auth_mode} ({db.query('SELECT COUNT(*) AS n FROM users')[0]['n']} accounts)" if auth.enabled else S.auth_mode,
+             S.language, "on" if ai.enabled else "off", "on" if notifier.enabled else "off",
              "on" if S.tools_enabled else "off", "on" if S.scan_enabled else "off", "on" if syslog else "off",
              "on" if S.bgp_live else "off")
     try:
@@ -455,9 +457,13 @@ CSP = (
     f"worker-src 'self'; connect-src 'self' {BASEMAP_HOST}; font-src 'self'; "
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
-PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg", "/styles.css",
+PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/favicon.svg", "/styles.css",
+                # sign-in steps (each checks its ticket; the session cookie is only set after the second factor)
+                "/api/auth/login", "/api/auth/status", "/api/auth/password", "/api/auth/enroll", "/api/auth/enroll/confirm",
+                "/api/auth/totp",
                 # the login page and the modules it imports (i18n.js loads all text catalogues)
-                "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/texts_33.js", "/js/boot.js",
+                "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/texts_33.js", "/js/texts_v4.js",
+                "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
@@ -516,15 +522,20 @@ async def guard(request: Request, call_next):
         or (request.method not in ("GET", "HEAD", "OPTIONS") and not origin_ok(request))
     ):
         resp = JSONResponse({"detail": t(lang, "err.csrf"), "key": "err.csrf"}, 403)
-    elif auth.enabled and not public and not auth.valid(request.cookies.get(COOKIE)):
-        if path.startswith("/api/"):
-            resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
-        elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
-            resp = RedirectResponse("/login", 303)
-        else:
-            resp = PlainTextResponse("401 Unauthorized", 401)
     else:
-        resp = await call_next(request)
+        user = None if public else auth.session_user(request.cookies.get(COOKIE))  # AUTH_MODE=none: the proxy account
+        request.state.user = user
+        if not public and user is None:
+            if path.startswith("/api/"):
+                resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
+            elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
+                resp = RedirectResponse("/login", 303)
+            else:
+                resp = PlainTextResponse("401 Unauthorized", 401)
+        elif user is not None and not allowed(user["role"], request.method, path):
+            resp = JSONResponse({"detail": t(lang, "err.role"), "key": "err.role"}, 403)
+        else:
+            resp = await call_next(request)
     resp.headers["Content-Security-Policy"] = CSP
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -571,43 +582,13 @@ async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
     return JSONResponse({"detail": t(_lang(request), key), "key": key}, exc.status_code)
 
 
-# --- auth ------------------------------------------------------------------------------------------------
-class LoginIn(BaseModel):
-    password: str = Field(..., min_length=1, max_length=1024)
-
-
+# --- accounts: sign-in steps, own account, user administration (api_account.py) ----------------------------
 @app.get("/login")
 def login_page() -> FileResponse:
     return FileResponse(S.static_dir / "login.html", media_type="text/html")
 
 
-@app.get("/api/auth/status")
-def api_auth_status(request: Request) -> dict[str, Any]:
-    return {"mode": S.auth_mode, "authenticated": auth.valid(request.cookies.get(COOKIE)), "version": S.version}
-
-
-@app.post("/api/auth/login")
-async def api_login(request: Request, body: LoginIn) -> JSONResponse:
-    if not auth.enabled:
-        return JSONResponse({"ok": True})
-    client = request.client.host if request.client else "?"
-    wait = auth.locked_for(client)
-    if wait:
-        raise AppError("err.login_locked", 429, seconds=wait)
-    if not await asyncio.to_thread(auth.verify, body.password, client):
-        await asyncio.sleep(0.4)
-        raise AppError("err.login_failed", 401)
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(COOKIE, auth.issue(), max_age=S.session_hours * 3600, httponly=True, samesite="strict",
-                    secure=_secure(request), path="/")
-    return resp
-
-
-@app.post("/api/auth/logout")
-def api_logout(request: Request) -> JSONResponse:
-    resp = JSONResponse({"ok": True})
-    resp.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict", secure=_secure(request))
-    return resp
+app.include_router(api_account.make_router(S, auth, _secure))
 
 
 # --- base data -------------------------------------------------------------------------------------------

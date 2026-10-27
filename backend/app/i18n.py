@@ -166,7 +166,7 @@ T: dict[str, dict[str, str]] = {
         "err.not_found": "Nicht gefunden.",
         "err.forbidden": "Nicht erlaubt.",
         "err.auth_required": "Anmeldung erforderlich.",
-        "err.login_failed": "Passwort falsch.",
+        "err.login_failed": "Benutzername oder Passwort falsch.",
         "err.login_locked": "Zu viele Fehlversuche. Bitte {seconds} s warten.",
         "err.csrf": "Anfrage von fremder Seite abgelehnt.",
         "err.invalid_country": "Ungültiger Ländercode.",
@@ -395,7 +395,7 @@ T: dict[str, dict[str, str]] = {
         "err.not_found": "Not found.",
         "err.forbidden": "Not allowed.",
         "err.auth_required": "Login required.",
-        "err.login_failed": "Wrong password.",
+        "err.login_failed": "Wrong user name or password.",
         "err.login_locked": "Too many failed attempts. Please wait {seconds} s.",
         "err.csrf": "Cross-site request rejected.",
         "err.invalid_country": "Invalid country code.",
@@ -751,3 +751,7 @@ _merge(_WT)
 from .texts_33 import T33 as _T33  # noqa: E402
 
 _merge(_T33)
+
+from .texts_v4 import T4 as _T4  # noqa: E402
+
+_merge(_T4)

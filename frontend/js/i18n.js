@@ -4,6 +4,7 @@
 import { TEXTS } from "./texts.js";
 import { TEXTS_WELT } from "./texts_welt.js";
 import { TEXTS_33 } from "./texts_33.js";
+import { TEXTS_V4 } from "./texts_v4.js";
 
 const KEY = "emberwatch.lang";
 export const LANGS = ["de", "en"];
@@ -428,7 +429,7 @@ const T = {
   },
 };
 
-for (const l of LANGS) Object.assign(T[l], TEXTS[l], TEXTS_WELT[l], TEXTS_33[l]);
+for (const l of LANGS) Object.assign(T[l], TEXTS[l], TEXTS_WELT[l], TEXTS_33[l], TEXTS_V4[l]);
 
 const PLURAL = /\{(\w+)\|([^{}|]*)\|([^{}|]*)\}/g;
 

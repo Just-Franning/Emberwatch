@@ -1,0 +1,46 @@
+"""Texts of the 4.0 additions (accounts, "who owns this IP", people search, Telegram). Merged into i18n.T."""
+from __future__ import annotations
+
+T4: dict[str, dict[str, str]] = {
+    "de": {
+        # accounts
+        "err.role": "Nur für Administratoren. Dein Konto hat Lesezugriff.",
+        "err.login_expired": "Die Anmeldung ist abgelaufen. Bitte neu anmelden.",
+        "err.totp_invalid": "Code ungültig oder schon verwendet.",
+        "err.totp_reenroll": "Der zweite Faktor muss neu eingerichtet werden.",
+        "err.acct.off": "Ohne Anmeldung (AUTH_MODE=none) gibt es keine Konten.",
+        "err.acct.disabled": "Dieses Konto ist gesperrt.",
+        "err.acct.not_found": "Konto nicht gefunden.",
+        "err.acct.name": "Benutzername: 2 bis 32 Zeichen, Kleinbuchstaben, Ziffern, Punkt, Binde- und Unterstrich.",
+        "err.acct.role": "Unbekannte Rolle.",
+        "err.acct.exists": "Diesen Benutzernamen gibt es schon.",
+        "err.acct.self": "Das eigene Konto wird unter „Mein Konto“ verwaltet.",
+        "err.acct.last_admin": "Das letzte aktive Admin-Konto kann nicht entfernt, gesperrt oder herabgestuft werden.",
+        "err.acct.pw_short": "Das Passwort braucht mindestens {min} Zeichen.",
+        "err.acct.pw_long": "Das Passwort darf höchstens {max} Zeichen haben.",
+        "err.acct.pw_weak": "Dieses Passwort ist zu schwach (gleich dem Benutzernamen oder zu wenige verschiedene Zeichen).",
+        "err.acct.pw_same": "Das neue Passwort muss sich vom bisherigen unterscheiden.",
+        "err.acct.pw_wrong": "Passwort falsch.",
+        "err.acct.enroll_expired": "Die Einrichtung ist abgelaufen. Bitte neu starten.",
+    },
+    "en": {
+        "err.role": "Administrators only. Your account has read access.",
+        "err.login_expired": "The sign-in has expired. Please sign in again.",
+        "err.totp_invalid": "Invalid or already used code.",
+        "err.totp_reenroll": "The second factor has to be set up again.",
+        "err.acct.off": "Without sign-in (AUTH_MODE=none) there are no accounts.",
+        "err.acct.disabled": "This account is disabled.",
+        "err.acct.not_found": "Account not found.",
+        "err.acct.name": "User name: 2 to 32 characters, lower-case letters, digits, dot, hyphen and underscore.",
+        "err.acct.role": "Unknown role.",
+        "err.acct.exists": "This user name already exists.",
+        "err.acct.self": "Your own account is managed under “My account”.",
+        "err.acct.last_admin": "The last active administrator account cannot be removed, disabled or demoted.",
+        "err.acct.pw_short": "The password needs at least {min} characters.",
+        "err.acct.pw_long": "The password may have at most {max} characters.",
+        "err.acct.pw_weak": "This password is too weak (equal to the user name or too few different characters).",
+        "err.acct.pw_same": "The new password must differ from the current one.",
+        "err.acct.pw_wrong": "Wrong password.",
+        "err.acct.enroll_expired": "The setup has expired. Please start again.",
+    },
+}
