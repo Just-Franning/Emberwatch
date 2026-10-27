@@ -67,6 +67,12 @@ Emberwatch hat fünf Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, r
 
 ![Werkzeugkasten](docs/toolbox.webp)
 
+![Personen: Konten hinter einem Benutzernamen, Verknüpfungsgraph und Treffer](docs/people.webp)
+
+![Wem gehört die IP? Die Firma hinter einer Adresse mit Kontakt und Belegen](docs/owner.webp)
+
+![Telegram-Kanäle von Hacktivisten in der Weltlage](docs/telegram.webp)
+
 ## Voraussetzungen
 
 - Docker mit Docker Compose oder Portainer

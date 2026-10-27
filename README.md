@@ -67,6 +67,12 @@ Emberwatch has five areas: **Cyber** (the world map with attack data, red), **Wo
 
 ![Tool box](docs/toolbox.webp)
 
+![People: accounts behind a user name, the link graph and the hits](docs/people.webp)
+
+![Who owns this IP? The company behind an address, with contact and evidence](docs/owner.webp)
+
+![Telegram channels of hacktivist groups in the world view](docs/telegram.webp)
+
 ## Requirements
 
 - Docker with Docker Compose, or Portainer
