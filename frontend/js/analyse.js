@@ -7,6 +7,7 @@ import { GROUPS, LEVELS, cyberChefUrl, detect, flags, loadRegistry, objectOf, pa
 import { destroyIn, findingsNode, relatedNode, renderResult, sectionNode } from "./result.js";
 import { go, href, isPinned, objLink, pinned, recent, remember, routes, togglePin } from "./router.js";
 import { RunStack } from "./runstack.js";
+import { isAdmin } from "./session.js";
 import { api, countryName, dateOnly, dateTime, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
 const VIEWS = ["kev", "infra", "c2", "ransom", "platforms"];
@@ -163,15 +164,17 @@ export class Analyse {
     const tools = (page.tools || []).map((id) => reg.byId[id]).filter((x) => x && !x.client_only);
     const groups = GROUPS.map((g) => [g, tools.filter((x) => x.group === g)]).filter(([, l]) => l.length);
     const actions = el("section", { class: "obj-actions" },
-      ...(page.recipes || []).map((r) => el("button", { type: "button", class: "primary", title: t(`an.recipe_hint`),
+      ...(page.recipes || []).map((r) => el("button", { type: "button", class: "primary", title: t(`an.recipe_hint`), disabled: !isAdmin(),
         onclick: () => this.stack.recipe(r, toolTarget(o), t(`tb.recipe.${r}`)) }, t(`tb.recipe.${r}`))),
       ...groups.map(([g, list]) => el("div", { class: "act-group" }, el("span", { class: "act-label" }, t(`tb.group.${g}`)),
-        ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available, title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
+        ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available || !isAdmin(), title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
           class: `lvl-btn lvl-${x.level}`, onclick: () => this.stack.tool(x.id, toolTarget(o)) }, x.name)))),
       page.map ? el("button", { type: "button", onclick: () => this.onMap(page.map, `${t(`obj.type.${page.type}`)}: ${page.title}`) }, t("common.show_map")) : null,
+      page.type === "ip" ? el("button", { type: "button", title: t("ow.title"), onclick: () => go(routes.owner(page.value)) }, t("an.owner")) : null,
       page.type === "actor" ? el("a", { class: "btn", href: href(routes.welt({ actor: page.title, days: 90 })) }, t("an.actor_welt")) : null,
       page.type === "country" ? el("a", { class: "btn", href: href(routes.welt({ country: page.value })) }, t("an.country_welt")) : null,
-      tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null);
+      tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null,
+      tools.length ? el("span", { class: "note viewer-only" }, t("role.viewer_tools")) : null);
     const reasons = page.risk.reasons?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.assessment")), findingsNode(page.risk.reasons)) : null;
     const sections = (page.sections || []).map(sectionNode);
     const alerts = page.alerts?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.own_alerts", { n: num(page.alerts.length) })),
@@ -195,8 +198,9 @@ export class Analyse {
     const scope = `obj:${page.type}:${page.value}`;
     const out = el("div", { class: "ai-out" });
     const q = el("input", { type: "text", maxlength: 600, placeholder: t("an.ai_q_ph"), "aria-label": t("an.ai_q_ph") });
-    const run = el("button", { type: "button", class: "primary", disabled: !enabled }, t("an.ai_run"));
-    const ask = el("button", { type: "submit", disabled: !enabled }, t("ai.ask"));
+    const canRun = enabled && isAdmin();
+    const run = el("button", { type: "button", class: "primary admin-only", disabled: !canRun }, t("an.ai_run"));
+    const ask = el("button", { type: "submit", disabled: !canRun }, t("ai.ask"));
     let thread = [];
     let current = null;
     const show = () => {
@@ -230,11 +234,11 @@ export class Analyse {
       } catch (e) {
         kids(out, el("p", { class: "state err" }, t("ai.failed", { msg: e.message })));
       } finally {
-        run.disabled = ask.disabled = !enabled;
+        run.disabled = ask.disabled = !canRun;
       }
     };
     run.addEventListener("click", () => analyse(null));
-    const form = el("form", { class: "ai-ask" }, q, ask);
+    const form = el("form", { class: "ai-ask admin-only" }, q, ask);
     form.addEventListener("submit", (e) => { e.preventDefault(); if (q.value.trim()) analyse(q.value.trim()); });
     if (enabled) {
       api(`api/ai/reports?limit=1&scope=${encodeURIComponent(scope)}`).then(async (list) => {
@@ -267,7 +271,7 @@ export class Analyse {
 
     const drawRecipes = () => kids(recipes, el("span", { class: "act-label" }, t("an.recipes")),
       ...reg.recipes.map((r) => el("button", {
-        type: "button", class: "primary", disabled: !reg.enabled || !(det?.recipes || []).includes(r.id), title: r.desc,
+        type: "button", class: "primary", disabled: !reg.enabled || !isAdmin() || !(det?.recipes || []).includes(r.id), title: r.desc,
         onclick: () => this.stack.recipe(r.id, r.id === "mail" ? input.value : (det?.value || input.value.trim()), r.name),
       }, r.name)));
 
@@ -276,16 +280,19 @@ export class Analyse {
       groupsBox.querySelectorAll(".tool-row").forEach((n) => n.classList.toggle("on", n.dataset.id === tool?.id));
       if (!tool) { kids(panel); return; }
       const pf = paramForm(tool);
-      const runBtn = el("button", { type: "submit", class: "primary", disabled: !reg.enabled || !tool.available }, tool.client_only ? t("an.open_cyberchef") : t("common.run"));
+      const allowed = tool.client_only || isAdmin(); // CyberChef opens in the browser; everything else runs on the server
+      const runBtn = el("button", { type: "submit", class: "primary", disabled: !reg.enabled || !tool.available || !allowed }, tool.client_only ? t("an.open_cyberchef") : t("common.run"));
       const err = el("p", { class: "state err", hidden: true });
       const form = el("form", { class: "tool-run" },
         el("div", { class: "tool-run-head" }, el("strong", {}, tool.name), flags(tool)),
         el("p", { class: "note" }, tool.desc),
         !tool.available ? el("p", { class: "warn-txt" }, tool.reason) : null,
+        !allowed ? el("p", { class: "note" }, t("role.viewer_tools")) : null,
         pf.node, el("div", { class: "btnrow" }, runBtn), err);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         err.hidden = true;
+        if (!allowed) return;
         const raw = input.value.trim();
         if (!raw) { input.focus(); return; }
         if (tool.id !== "mailhdr" && raw.length > MAX_INPUT) { err.textContent = t("tb.too_long", { n: MAX_INPUT }); err.hidden = false; return; }
@@ -353,7 +360,7 @@ export class Analyse {
       if (internal && query.get("run") === "1" && input.value.trim() && form) form.requestSubmit();
     }
     const recipe = start?.recipe || (internal && reg.recipes.some((r) => r.id === query.get("recipe")) ? query.get("recipe") : null);
-    if (recipe && input.value.trim() && reg.enabled) this.stack.recipe(recipe, recipe === "mail" ? input.value : (det?.value || input.value.trim()), t(`tb.recipe.${recipe}`));
+    if (recipe && input.value.trim() && reg.enabled && isAdmin()) this.stack.recipe(recipe, recipe === "mail" ? input.value : (det?.value || input.value.trim()), t(`tb.recipe.${recipe}`));
     if (!pre) input.focus();
   }
 
@@ -368,7 +375,7 @@ export class Analyse {
           el("td", {}, r.obj_type ? objLink(r.obj_type, r.obj_value, r.target || r.obj_value) : el("span", { class: "mono" }, r.target || "–")),
           el("td", {}, r.sev ? sevTag(r.sev) : "–"),
           el("td", { class: "num" }, el("a", { class: "btn small", href: href(routes.run(r.id)) }, t("common.open")),
-            withDelete ? el("button", { type: "button", class: "small danger", onclick: async () => {
+            withDelete && isAdmin() ? el("button", { type: "button", class: "small danger", onclick: async () => {
               try { await api(`api/tb/history/${r.id}`, { method: "DELETE" }); row.remove(); } catch (e) { row.after(el("tr", {}, el("td", { colspan: 5, class: "state err" }, e.message))); }
             } }, "×") : null));
         return row;

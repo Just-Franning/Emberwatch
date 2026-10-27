@@ -3,6 +3,10 @@
 //   incidents, tool results.
 // Weltlage: country pairs and countries named in security reports, submarine cables named in them, internet blocking
 //   (OONI, government-directed shutdowns), the selected report; borders and labels in indigo.
+// Personen (4.0): black and white; countries of the platform operators with hits, the country a profile states and lines
+//   between them.
+// Globe (4.0): the projection is stored per browser (default: globe). The globe turns slowly while nobody uses the map;
+//   any interaction or camera move stops it, it starts again after SPIN_IDLE_MS (settings: emberwatch.spin).
 import { t } from "./i18n.js";
 import { href, objLink, routes } from "./router.js";
 import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion, safeLink } from "./util.js";
@@ -13,12 +17,16 @@ export const WELT = { line: "#818cf8", dot: "#a5b4fc", ring: "#6366f1", sel: "#e
   state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff", cable: "#c7d2fe",
   shutdown: "rgba(251, 113, 133, 0.62)", blocking: "rgba(251, 113, 133, 0.2)" };
 // basemap paint values that follow the mode: [layer, property, Weltlage value]
+// Personen colours (black and white; the canvas is also drawn in grey, see styles.css)
+export const OSINT = { border: "rgba(255, 255, 255, 0.42)", state: "#1c1c1c", label: "#a3a3a3", labelState: "#5c5c5c", outline: "#ffffff",
+  dot: "#ffffff", line: "rgba(230, 230, 230, 0.55)", ring: "#ffffff", halo: "#000000" };
+// basemap paint values that follow the mode: [layer, property, Weltlage value, Personen value]
 const MODE_PAINT = [
-  ["boundary_country_z0-4", "line-color", WELT.border], ["boundary_country_z5-", "line-color", WELT.border2],
-  ["boundary_state", "line-color", WELT.state], ["ne-borders", "line-color", WELT.border],
-  ["place_country_other", "text-color", WELT.label], ["place_country_minor", "text-color", WELT.label],
-  ["place_country_major", "text-color", WELT.label], ["place_state", "text-color", WELT.labelState],
-  ["selected", "line-color", WELT.outline],
+  ["boundary_country_z0-4", "line-color", WELT.border, OSINT.border], ["boundary_country_z5-", "line-color", WELT.border2, OSINT.border],
+  ["boundary_state", "line-color", WELT.state, OSINT.state], ["ne-borders", "line-color", WELT.border, OSINT.border],
+  ["place_country_other", "text-color", WELT.label, OSINT.label], ["place_country_minor", "text-color", WELT.label, OSINT.label],
+  ["place_country_major", "text-color", WELT.label, OSINT.label], ["place_state", "text-color", WELT.labelState, OSINT.labelState],
+  ["selected", "line-color", WELT.outline, OSINT.outline],
 ];
 const CYBER_LAYERS = {
   arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"], infra: ["infra"],
@@ -28,11 +36,18 @@ const WELT_LAYERS = {
   pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], cables: ["welt-cables"], block: ["welt-block"],
   sel: ["welt-sel-cable", "welt-sel-line", "welt-sel-pt", "welt-sel-label"],
 };
+const OSINT_LAYERS = { ops: ["osint-ops", "osint-ops-count"], locs: ["osint-loc"], lines: ["osint-lines"], sel: ["osint-sel"] };
 const NONE = ["==", ["get", "iso"], "\u0000"]; // a filter that matches no feature
 const PAIR_OPACITY = ["interpolate", ["linear"], ["get", "w"], 0, 0.4, 1, 0.9];
 const CHORO_OPACITY = ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7];
 const FONT = ["Noto Sans Regular"];
 const PREF_KEY = "emberwatch.basemap";
+const PROJ_KEY = "emberwatch.projection";
+const SPIN_KEY = "emberwatch.spin";
+const SPIN_DEG_S = 2.4; // one turn in 2.5 minutes
+const SPIN_IDLE_MS = 30000;
+const SPIN_MAX_ZOOM = 3.2;
+const GLOBE_VIEW = { center: [15, 28], zoom: 1.8 };
 
 export const METRICS = Object.fromEntries(
   [["l7_target", pct], ["l3_target", pct], ["l7_origin", pct], ["l3_origin", pct], ["ransomware_7d", num], ["c2", num], ["outages_7d", num]]
@@ -46,6 +61,17 @@ export function setBasemapPref(v) {
   try { localStorage.setItem(PREF_KEY, v); } catch { /* ignore */ }
 }
 export const basemapPref = pref;
+
+function projPref() {
+  try { return localStorage.getItem(PROJ_KEY) === "mercator" ? "mercator" : "globe"; } catch { return "globe"; }
+}
+/** Turning globe: on unless switched off (or the system asks for reduced motion). */
+export function spinPref() {
+  try {
+    const v = localStorage.getItem(SPIN_KEY);
+    return v ? v === "on" : !reduceMotion;
+  } catch { return !reduceMotion; }
+}
 
 // --- geometry ----------------------------------------------------------------
 const rad = (d) => (d * Math.PI) / 180;
@@ -149,7 +175,9 @@ export class Emberwatch {
     this.arcsVisible = true;
     this.c2All = EMPTY;
     this.c2Filter = {};
-    this.projection = "mercator";
+    this.projection = projPref();
+    this.ovis = { ops: true, locs: true, lines: true, sel: true };
+    this.spin = { on: spinPref(), idleUntil: 0, raf: null, last: 0, jumped: 0 };
     this.offline = pref() === "offline";
     this.basemapFailed = false;
     this.tip = document.getElementById("map-tip");
@@ -166,11 +194,12 @@ export class Emberwatch {
     }
     if (!base) this.offline = true;
     window.maplibregl.setWorkerUrl("vendor/maplibre-gl-csp-worker.js");
+    const globe = this.projection === "globe";
     this.map = new window.maplibregl.Map({
       container,
       style: this._style(base),
-      bounds: [[-168, -52], [178, 76]],
-      fitBoundsOptions: { padding: 20 },
+      ...(globe ? { center: GLOBE_VIEW.center, zoom: window.innerWidth <= 900 ? 1.1 : GLOBE_VIEW.zoom }
+        : { bounds: [[-168, -52], [178, 76]], fitBoundsOptions: { padding: 20 } }),
       minZoom: 0.6,
       maxZoom: 12,
       attributionControl: { compact: true },
@@ -183,8 +212,10 @@ export class Emberwatch {
     await new Promise((res) => this.map.on("load", res));
     for (const [id, draw] of Object.entries(ICONS)) this.map.addImage(id, icon(draw), { pixelRatio: 2 });
     // the Cyberlage values of the mode-dependent paint properties, read from the style
-    this.cyberPaint = MODE_PAINT.filter(([id]) => this.map.getLayer(id)).map(([id, prop, w]) => [id, prop, this.map.getPaintProperty(id, prop), w]);
+    this.cyberPaint = MODE_PAINT.filter(([id]) => this.map.getLayer(id)).map(([id, prop, w, o]) => [id, prop, this.map.getPaintProperty(id, prop), w, o]);
+    if (globe) this.map.setProjection({ type: "globe" });
     this._bind();
+    this._spinInit();
   }
 
   _style(base) {
@@ -203,6 +234,10 @@ export class Emberwatch {
       "welt-pairs": { type: "geojson", data: EMPTY },
       "welt-dots": { type: "geojson", data: EMPTY },
       "welt-sel": { type: "geojson", data: EMPTY },
+      "osint-ops": { type: "geojson", data: EMPTY },
+      "osint-loc": { type: "geojson", data: EMPTY },
+      "osint-lines": { type: "geojson", data: EMPTY },
+      "osint-sel": { type: "geojson", data: EMPTY },
     };
     const vis = (on) => ({ visibility: on ? "visible" : "none" });
     const under = [ // below the basemap's boundaries and labels
@@ -391,6 +426,30 @@ export class Emberwatch {
         layout: { ...vis(false), "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1.4], "text-allow-overlap": true },
         paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.5 },
       }] : []),
+      // Personen (hidden in the other modes): profile country -> operator countries, operators, profile countries
+      {
+        id: "osint-lines", type: "line", source: "osint-lines", layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": OSINT.line, "line-width": ["case", ["get", "found"], 1.3, 0.9], "line-opacity": ["case", ["get", "found"], 0.8, 0.35] },
+      },
+      {
+        id: "osint-loc", type: "circle", source: "osint-loc", layout: vis(false),
+        paint: { "circle-radius": ["+", 9, ["*", 1.6, ["sqrt", ["get", "n"]]]], "circle-color": "rgba(255, 255, 255, 0.06)",
+          "circle-stroke-color": OSINT.ring, "circle-stroke-width": 2 },
+      },
+      {
+        id: "osint-ops", type: "circle", source: "osint-ops", layout: vis(false),
+        paint: { "circle-radius": ["+", 4, ["*", 2.4, ["sqrt", ["get", "n"]]]], "circle-color": ["case", ["get", "found"], OSINT.dot, OSINT.halo],
+          "circle-stroke-color": ["case", ["get", "found"], OSINT.halo, "#bdbdbd"], "circle-stroke-width": 1.5 },
+      },
+      ...(withText ? [{
+        id: "osint-ops-count", type: "symbol", source: "osint-ops", filter: ["all", [">", ["get", "n"], 1], ["get", "found"]],
+        layout: { ...vis(false), "text-field": ["to-string", ["get", "n"]], "text-font": FONT, "text-size": 9.5, "text-allow-overlap": true },
+        paint: { "text-color": "#000000" },
+      }] : []),
+      {
+        id: "osint-sel", type: "circle", source: "osint-sel", layout: vis(false),
+        paint: { "circle-radius": 16, "circle-color": "rgba(0, 0, 0, 0)", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2.5 },
+      },
     ];
     if (!base) {
       return {
@@ -445,7 +504,8 @@ export class Emberwatch {
   _bind() {
     const m = this.map;
     let hovered = null;
-    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "cloud", "tool-points", "landing", "welt-dots", "welt-origins"];
+    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "cloud", "tool-points", "landing", "welt-dots", "welt-origins",
+      "osint-ops", "osint-loc"];
     m.on("mousemove", "choro", (e) => {
       const f = e.features?.[0];
       if (!f) return;
@@ -453,8 +513,8 @@ export class Emberwatch {
       hovered = f.id;
       m.setFeatureState({ source: "countries", id: hovered }, { hover: true });
       if (m.queryRenderedFeatures(e.point, { layers: pointLayers.filter((l) => m.getLayer(l)) }).length) return;
-      if (this.mode === "welt") {
-        this._tipShow(e, countryName(f.id) || f.properties.name, this._weltTip(f.id));
+      if (this.mode === "welt" || this.mode === "osint") {
+        this._tipShow(e, countryName(f.id) || f.properties.name, this.mode === "welt" ? this._weltTip(f.id) : this._osintTip(f.id));
         m.getCanvas().style.cursor = "pointer";
         return;
       }
@@ -528,6 +588,11 @@ export class Emberwatch {
       this._tipShow(e, `${countryName(p.o)} → ${countryName(p.t)}`, t("wl.map.pair_tip", { n: num(p.n) }));
     });
     m.on("mouseleave", "welt-pairs", () => this._tipHide());
+    for (const id of ["osint-ops", "osint-loc"]) {
+      m.on("click", id, (e) => { const cc = e.features[0].properties.cc; if (cc) this.onCountry(cc); });
+      m.on("mousemove", id, (e) => this._tipShow(e, countryName(e.features[0].properties.cc), this._osintTip(e.features[0].properties.cc)));
+      m.on("mouseleave", id, () => this._tipHide());
+    }
     m.on("click", "tool-points", (e) => {
       const p = e.features[0].properties;
       if (p.ip) this.onIp?.(p.ip);
@@ -751,19 +816,61 @@ export class Emberwatch {
     if (this.mode === "welt") this._layers(WELT_LAYERS[layer], on);
   }
 
-  /** Cyberlage (red) or Weltlage (indigo): swaps the data layers and recolours borders and country labels. */
+  /** Cyberlage (red), Weltlage (indigo) or Personen (black and white): swaps the data layers and recolours borders and
+   * country labels. */
   setMode(mode) {
     if (mode === this.mode) return;
     this.mode = mode;
-    const welt = mode === "welt";
     const m = this.map;
-    for (const [id, prop, cyber, w] of this.cyberPaint) m.setPaintProperty(id, prop, welt ? w : cyber);
-    m.setPaintProperty("choro", "fill-opacity", welt ? 0 : CHORO_OPACITY); // stays for hover and clicks
-    for (const [k, ids] of Object.entries(CYBER_LAYERS)) this._layers(ids, !welt && this.vis[k]);
-    for (const [k, ids] of Object.entries(WELT_LAYERS)) this._layers(ids, welt && this.wvis[k]);
+    for (const [id, prop, cyber, w, o] of this.cyberPaint) m.setPaintProperty(id, prop, mode === "welt" ? w : mode === "osint" ? o : cyber);
+    m.setPaintProperty("choro", "fill-opacity", mode === "cyber" ? CHORO_OPACITY : 0); // stays for hover and clicks
+    for (const [k, ids] of Object.entries(CYBER_LAYERS)) this._layers(ids, mode === "cyber" && this.vis[k]);
+    for (const [k, ids] of Object.entries(WELT_LAYERS)) this._layers(ids, mode === "welt" && this.wvis[k]);
+    for (const [k, ids] of Object.entries(OSINT_LAYERS)) this._layers(ids, mode === "osint" && this.ovis[k]);
     if (this._popup) this._popup.remove();
     this._tipHide();
     this.animate();
+  }
+
+  /** Layer switch of the Personen mode (ops, locs, lines). */
+  setOsintVisible(layer, on) {
+    this.ovis[layer] = on;
+    if (this.mode === "osint") this._layers(OSINT_LAYERS[layer], on);
+  }
+
+  /** Personen: ops {cc: {n, found, sites}}, locs {cc: n}; lines from each profile country to the operator countries. */
+  setOsint({ ops = {}, locs = {} } = {}) {
+    this.osint = { ops, locs };
+    const pt = (cc, props) => {
+      const c = geo.centroids[cc];
+      return c ? { type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { cc, ...props } } : null;
+    };
+    this.map.getSource("osint-ops").setData({ type: "FeatureCollection", features: Object.entries(ops).map(([cc, o]) => pt(cc, { n: o.n, found: o.found > 0 })).filter(Boolean) });
+    this.map.getSource("osint-loc").setData({ type: "FeatureCollection", features: Object.entries(locs).map(([cc, n]) => pt(cc, { n })).filter(Boolean) });
+    const lines = [];
+    const path = this.projection === "globe" ? greatCircle : bezierArc;
+    for (const from of Object.keys(locs)) {
+      const a = geo.centroids[from];
+      for (const [cc, o] of Object.entries(ops)) {
+        const b = geo.centroids[cc];
+        if (a && b && cc !== from) lines.push({ type: "Feature", geometry: { type: "LineString", coordinates: path([a.lon, a.lat], [b.lon, b.lat]) }, properties: { found: o.found > 0 } });
+      }
+    }
+    this.map.getSource("osint-lines").setData({ type: "FeatureCollection", features: lines.slice(0, 400) });
+  }
+
+  /** Personen: ring around one country (the operator of the selected account). */
+  selectOsint(cc) {
+    const c = cc && geo.centroids[cc];
+    this.map.getSource("osint-sel")?.setData(c ? { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: {} }] } : EMPTY);
+  }
+
+  _osintTip(cc) {
+    const o = this.osint?.ops?.[cc];
+    const parts = [];
+    if (o) parts.push(t("os.map.ops", { n: num(o.n), list: o.sites.slice(0, 5).join(", ") + (o.sites.length > 5 ? " …" : "") }));
+    if (this.osint?.locs?.[cc]) parts.push(t("os.map.loc", { n: num(this.osint.locs[cc]) }));
+    return parts.join(" · ") || t("os.map.none");
   }
 
   _weltTip(cc) {
@@ -864,6 +971,7 @@ export class Emberwatch {
 
   focus(cc) {
     const c = geo.centroids[cc];
+    this.nudge();
     if (c) this.map.easeTo({ center: [c.lon, c.lat], zoom: Math.max(this.map.getZoom(), 2.4), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
   }
 
@@ -881,20 +989,27 @@ export class Emberwatch {
     const visible = shown(panel);
     const dock = document.getElementById("kpidock");
     const dockH = shown(dock) ? dock.getBoundingClientRect().height : 0;
+    // the left edge: a docked window of the Weltlage (Telegram) or of the Personen (graph) covers that part of the map
+    const leftWin = ["panel-tg", "panel-graph"].map((id) => document.getElementById(id))
+      .find((n) => n && !n.hidden && !n.classList.contains("floating") && shown(n));
+    const right = small || !visible ? 20 : Math.round(window.innerWidth - panel.getBoundingClientRect().left + 20);
+    const left = small || !leftWin ? 20 : Math.round(leftWin.getBoundingClientRect().right + 20);
     return {
       top: Math.round(top + 10),
       bottom: Math.max(40, toolsH + 40, small ? 40 : dockH + 24),
-      left: 20,
-      right: small || !visible ? 20 : Math.round(window.innerWidth - panel.getBoundingClientRect().left + 20),
+      left: left + right > window.innerWidth - 160 ? 20 : left, // too little map left between the windows: centre as before
+      right,
     };
   }
 
   flyTo(lon, lat, zoom = 4) {
+    this.nudge();
     this.map.easeTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), zoom), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
   }
 
   fitTo(points, maxZoom = 5) {
     if (!points.length) return;
+    this.nudge();
     const lons = points.map((x) => x[0]), lats = points.map((x) => x[1]);
     try {
       this.map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
@@ -904,14 +1019,54 @@ export class Emberwatch {
 
   toggleProjection() {
     this.projection = this.projection === "globe" ? "mercator" : "globe";
+    try { localStorage.setItem(PROJ_KEY, this.projection); } catch { /* ignore */ }
     this.map.setProjection({ type: this.projection });
+    this.nudge();
     const opts = { duration: reduceMotion ? 0 : 700 };
-    if (this.projection === "globe") this.map.easeTo({ center: [15, 28], zoom: 1.8, ...opts });
+    if (this.projection === "globe") this.map.easeTo({ ...GLOBE_VIEW, ...opts });
     else this.map.fitBounds([[-168, -52], [178, 76]], { padding: 20, ...opts });
     this.setArcs(this.arcRows);
     if (this._weltPairs) this.setWelt({ pairs: this._weltPairs, ...this.welt });
+    if (this.osint) this.setOsint(this.osint);
     this.onProjection?.();
     return this.projection;
+  }
+
+  // --- turning globe ----------------------------------------------------------------------
+  _spinInit() {
+    const stop = () => this.nudge();
+    for (const ev of ["mousedown", "touchstart", "wheel", "dragstart"]) this.map.on(ev, stop);
+    this.map.on("movestart", (e) => { if (e.originalEvent) stop(); }); // keyboard and buttons; not our own steps
+    this.map.getContainer().addEventListener("keydown", stop);
+    this.nudge(6000); // the first turn starts a few seconds after loading
+    this._spinLoop();
+  }
+
+  /** Pause the turning (any interaction or camera move); it starts again after ms without one. */
+  nudge(ms = SPIN_IDLE_MS) {
+    this.spin.idleUntil = performance.now() + ms;
+  }
+
+  setSpin(on) {
+    this.spin.on = Boolean(on);
+    try { localStorage.setItem(SPIN_KEY, on ? "on" : "off"); } catch { /* ignore */ }
+    if (on) this.nudge(1500);
+  }
+
+  _spinLoop() {
+    if (this.spin.raf) return;
+    const frame = (ts) => {
+      this.spin.raf = requestAnimationFrame(frame);
+      const idle = this.spin.on && !this.paused && this.projection === "globe" && performance.now() >= this.spin.idleUntil
+        && this.map.getZoom() <= SPIN_MAX_ZOOM && !this.map.isMoving() && !document.body.classList.contains("dragging");
+      if (!idle) { this.spin.last = ts; return; }
+      const dt = ts - this.spin.last;
+      if (dt < 33) return; // about 30 steps per second
+      this.spin.last = ts;
+      const c = this.map.getCenter();
+      this.map.jumpTo({ center: [c.lng - (SPIN_DEG_S * Math.min(dt, 100)) / 1000, c.lat] });
+    };
+    this.spin.raf = requestAnimationFrame(frame);
   }
 
   // --- tool results -----------------------------------------------------------------
@@ -941,15 +1096,19 @@ export class Emberwatch {
     return points.length;
   }
 
-  /** Stops the arc animation while the map is covered by a page (analysis, my network). */
+  /** Stops the animations (arcs, turning globe) while the map is covered by a page (analysis, my network, account). */
   pause(on) {
     this.paused = on;
     if (on) {
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = null;
+      if (this.spin.raf) cancelAnimationFrame(this.spin.raf);
+      this.spin.raf = null;
     } else {
       this.animate();
       this.map.resize();
+      this.nudge(4000);
+      this._spinLoop();
     }
   }
 

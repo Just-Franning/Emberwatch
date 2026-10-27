@@ -11,16 +11,66 @@
   <script type="module" src="js/login.js"></script>
 </head>
 <body class="login-page">
-  <main class="login-card">
+  <main class="login-card" id="login-card">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>Emberwatch</h1></div>
     <p class="login-sub" data-i18n="app.tagline"></p>
-    <form id="login-form" autocomplete="on">
+    <ol class="login-steps" id="login-steps" aria-hidden="true">
+      <li data-step="1" class="on" data-i18n="login.step_password"></li>
+      <li data-step="2" data-i18n="login.step_factor"></li>
+    </ol>
+
+    <!-- 1: user name and password -->
+    <form id="f-login" autocomplete="on">
+      <label for="user" data-i18n="login.user"></label>
+      <input id="user" name="username" type="text" autocomplete="username" required maxlength="64" autocapitalize="none" spellcheck="false" autofocus>
       <label for="password" data-i18n="login.password"></label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" autofocus>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024">
       <button type="submit" class="primary" data-i18n="login.submit"></button>
-      <p class="state err" id="login-error" role="alert" hidden></p>
     </form>
-    <p class="note" data-i18n="login.hint"></p>
+
+    <!-- a new password is due -->
+    <form id="f-newpw" hidden autocomplete="on">
+      <p class="login-lead" data-i18n="login.newpw_lead"></p>
+      <label for="newpw" data-i18n="login.newpw"></label>
+      <input id="newpw" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+      <label for="newpw2" data-i18n="login.newpw2"></label>
+      <input id="newpw2" type="password" autocomplete="new-password" required minlength="12" maxlength="256">
+      <button type="submit" class="primary" data-i18n="login.newpw_save"></button>
+    </form>
+
+    <!-- set up the authenticator app -->
+    <form id="f-enroll" hidden autocomplete="off">
+      <p class="login-lead" data-i18n="login.enroll_lead"></p>
+      <div class="qr-box"><img id="qr" alt="" width="190" height="190"></div>
+      <p class="note" data-i18n="login.enroll_manual"></p>
+      <p class="secret" id="secret" translate="no"></p>
+      <label for="enroll-code" data-i18n="login.code"></label>
+      <input id="enroll-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <button type="submit" class="primary" data-i18n="login.enroll_confirm"></button>
+    </form>
+
+    <!-- code of the authenticator app or a recovery code -->
+    <form id="f-code" hidden autocomplete="off">
+      <label for="code" id="code-label" data-i18n="login.code"></label>
+      <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <button type="submit" class="primary" data-i18n="login.code_submit"></button>
+      <button type="button" class="plain" id="use-recovery" data-i18n="login.use_recovery"></button>
+    </form>
+
+    <!-- recovery codes: shown once -->
+    <section id="f-recovery" hidden>
+      <p class="login-lead" data-i18n="login.recovery_lead"></p>
+      <ol class="codes" id="codes" translate="no"></ol>
+      <div class="row">
+        <button type="button" id="codes-copy" data-i18n="login.codes_copy"></button>
+        <button type="button" id="codes-save" data-i18n="login.codes_save"></button>
+      </div>
+      <label class="row check"><input type="checkbox" id="codes-ok"> <span data-i18n="login.codes_ok"></span></label>
+      <button type="button" class="primary" id="codes-done" disabled data-i18n="login.continue"></button>
+    </section>
+
+    <p class="state err" id="login-error" role="alert" hidden></p>
+    <p class="note" id="login-hint" data-i18n="login.hint"></p>
     <div class="login-lang">
       <button type="button" data-lang="de">Deutsch</button>
       <button type="button" data-lang="en">English</button>

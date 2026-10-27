@@ -81,6 +81,8 @@ def test_parse_and_analyse():
     assert b["countries"] == ["LT", "PL"] and "ddos" in b["kinds"] and {"kind": "ip", "value": "185.220.101.7"} in b["targets"]
     c = monitor.analyse(p.posts[2].text, p.posts[2].links, places)
     assert c["targets"] == [{"kind": "domain", "value": "news.example"}] and not c["countries"]
+    d = monitor.analyse("Down: portal.example.de and 192.0.2.44. Next: 198.51.100.7, not 1.2.3.4.5 or 10.0.0.300", [], places)
+    assert [x["value"] for x in d["targets"] if x["kind"] == "ip"] == ["192.0.2.44", "198.51.100.7"]
 
 
 def seed_radar(m, cc: str, event: float, base: float) -> None:

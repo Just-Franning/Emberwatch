@@ -1,7 +1,9 @@
-// Hash router for the four areas:
-//   #/lage                                 Cyberlage (world map with attack data)
+// Hash router for the areas:
+//   #/lage[?owner=<ip>]                    Cyberlage (world map with attack data; owner: "who owns this IP" for the address)
 //   #/welt[?country=…&actor=…&kind=…]       Weltlage (security news on the world map)
 //   #/welt/n/<id>                          one report in its context
+//   #/personen[/<case id>]                 people search (black and white globe), administrators only
+//   #/konto[/users|/audit]                 own account; users and audit log for administrators
 //   #/analyse                              start page of the analysis area
 //   #/analyse/obj/<type>/<value>           object page (IP, network, AS, domain, URL, hash, CVE, country, …)
 //   #/analyse/tools[?q=…&tool=…&run=1]     tool box
@@ -11,8 +13,8 @@
 // Object values are URI-encoded, so values with "/" (networks, URLs) survive.
 import { el } from "./util.js";
 
-export const AREAS = ["lage", "welt", "analyse", "netz"];
-export const MAP_AREAS = ["lage", "welt"]; // areas that show the world map
+export const AREAS = ["lage", "welt", "personen", "analyse", "netz", "konto"];
+export const MAP_AREAS = ["lage", "welt", "personen"]; // areas that show the world map
 export const OBJ_TYPES = ["ip", "cidr", "asn", "domain", "url", "hash", "cve", "country", "malware", "group", "vendor", "actor"];
 const listeners = new Set();
 let internal = false; // set by go(): only in-app navigation may start tool runs from the URL (run=1, recipe=…)
@@ -73,6 +75,9 @@ export const routes = {
   },
   asset: (id) => `netz/assets/${enc(id)}`,
   product: (id) => `netz/products/${enc(id)}`,
+  owner: (ip) => `lage?owner=${enc(ip)}`,
+  personen: (caseId) => (caseId ? `personen/${enc(caseId)}` : "personen"),
+  konto: (view) => (view ? `konto/${enc(view)}` : "konto"),
 };
 
 export const href = (path) => `#/${path}`;

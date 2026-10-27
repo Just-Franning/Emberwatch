@@ -1,11 +1,12 @@
 // Collapsible panels (click, shortcuts, stored), status popover and settings popover.
 import { LANGS, lang, setLang, t } from "./i18n.js";
-import { basemapPref, setBasemapPref } from "./map.js";
+import { basemapPref, setBasemapPref, spinPref } from "./map.js";
 import { ago, api, el, kids, num } from "./util.js";
 import { getOpacity, resetLayout, setOpacity } from "./windows.js";
 
 const KEY = "emberwatch.panels";
 const BOOT_KEY = "emberwatch.boot";
+let shortcutAreas = ["lage", "welt", "analyse", "netz"];
 
 function saved() {
   try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch { return {}; }
@@ -44,7 +45,9 @@ export function toggle(id) {
   setCollapsed(id, !document.getElementById(id).classList.contains("collapsed"));
 }
 
-export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, isMap }) {
+/** Keyboard: 1 … n switch between the areas (the list depends on the role), ] side panel, T tools, / search. */
+export function initShortcuts({ areas, onPalette, onArea, onTools, onSearch, onEscape, isMap }) {
+  shortcutAreas = areas;
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K")) { onPalette(); e.preventDefault(); return; }
     const tgt = e.target;
@@ -52,8 +55,10 @@ export function initShortcuts({ onPalette, onArea, onTools, onSearch, onEscape, 
       if (e.key === "Escape") tgt.blur();
       return;
     }
+    if (tgt instanceof Element && tgt.closest(".graph-svg")) return; // the graph has its own keys (arrows, +, -, 0, Esc)
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (["1", "2", "3", "4"].includes(e.key)) { onArea(["lage", "welt", "analyse", "netz"][Number(e.key) - 1]); e.preventDefault(); }
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= 1 && n <= areas.length && e.key.length === 1) { onArea(areas[n - 1]); e.preventDefault(); }
     else if (e.key === "]" && isMap()) { toggle("side"); e.preventDefault(); }
     else if (e.key === "t" || e.key === "T") { onTools(); e.preventDefault(); }
     else if (e.key === "/") { onSearch(); e.preventDefault(); }
@@ -101,7 +106,7 @@ export function renderStatusPanel(status, { basemapFailed, stampText = "–" }) 
   const yes = (v) => t(v ? "common.set" : "common.missing");
   const opt = (v) => t(v ? "common.set" : "st.optional");
   const notifyMsg = el("span", { class: "note" });
-  const testBtn = el("button", { type: "button", disabled: !status.matrix?.enabled, onclick: async () => {
+  const testBtn = el("button", { type: "button", class: "admin-only", disabled: !status.matrix?.enabled, onclick: async () => {
     notifyMsg.textContent = t("st.matrix_sending");
     try { await api("api/notify/test", { method: "POST" }); notifyMsg.textContent = t("st.matrix_sent"); } catch (e) { notifyMsg.textContent = e.message; }
   } }, t("st.matrix_test"));
@@ -130,7 +135,7 @@ export function renderStatusPanel(status, { basemapFailed, stampText = "–" }) 
       row(t("st.cables"), status.cables?.snapshot ? `TeleGeography ${status.cables.snapshot}` : t("common.missing")),
       row(t("st.news"), status.news?.enabled ? t("st.news_on", { n: num(status.news.sources), a: num(status.news.actors),
         img: t(status.news.images ? "st.news_img_on" : "st.news_img_off") }) : t("common.off")),
-      row(t("st.optional"), optionalTxt(status.optional)),
+      row(t("st.optional_src"), optionalTxt(status.optional)),
       row(t("st.attack"), status.attack?.version ? `Enterprise ${status.attack.version}` : t("st.not_fetched")),
       row(t("st.stamp"), stampText))),
     el("div", { class: "row" }, testBtn, notifyMsg),
@@ -146,7 +151,8 @@ export function bootEnabled() {
   try { return localStorage.getItem(BOOT_KEY) !== "off"; } catch { return true; }
 }
 
-export function renderSettings(status) {
+/** Settings (per browser): language, window opacity and layout, start animation, turning globe; the keyboard keys. */
+export function renderSettings(status, { map } = {}) {
   const panel = document.getElementById("settings-panel");
   const langSel = el("select", { "aria-label": t("set.language") },
     ...LANGS.map((l) => el("option", { value: l, selected: l === lang }, l === "de" ? "Deutsch" : "English")));
@@ -156,21 +162,21 @@ export function renderSettings(status) {
   op.addEventListener("input", () => { setOpacity(Number(op.value) / 100); opVal.textContent = `${op.value} %`; });
   const boot = el("input", { type: "checkbox", checked: bootEnabled() });
   boot.addEventListener("change", () => { try { localStorage.setItem(BOOT_KEY, boot.checked ? "on" : "off"); } catch { /* ignore */ } });
-  const logout = status?.auth?.mode === "password"
-    ? [el("h3", {}, t("set.session")), el("div", { class: "row" }, el("button", { type: "button", onclick: async () => {
-        try { await api("api/auth/logout", { method: "POST" }); } finally { window.location.assign("login"); }
-      } }, t("set.logout")))]
-    : [];
+  const spin = el("input", { type: "checkbox", checked: spinPref() });
+  spin.addEventListener("change", () => map?.setSpin(spin.checked));
+  const areaKeys = shortcutAreas.map((_, i) => String(i + 1)).join(" · ");
+  const areaNames = shortcutAreas.map((a) => t(`area.${a}`)).join(" · ");
   kids(panel,
     el("h3", {}, t("set.language")), el("div", { class: "row" }, langSel),
     el("h3", {}, t("set.opacity")), el("div", { class: "row" }, op, opVal),
     el("h3", {}, t("set.layout")), el("p", { class: "note" }, t("set.layout_note")),
     el("div", { class: "row" }, el("button", { type: "button", onclick: () => resetLayout() }, t("set.reset_layout"))),
     el("h3", {}, t("set.animation")), el("label", { class: "row" }, boot, t("set.animation_on")),
-    ...logout,
+    el("h3", {}, t("set.spin")), el("label", { class: "row" }, spin, t("set.spin_on")), el("p", { class: "note" }, t("set.spin_note")),
     el("h3", {}, t("st.shortcuts")),
     el("table", {}, el("tbody", {},
-      ...[[t("st.kbd_palette"), "st.k_palette"], ["1 · 2 · 3 · 4", "st.k_areas"], ["/", "st.k_search"], ["T", "st.k_tools"], ["]", "st.k_side"], ["Esc", "st.k_esc"]]
-        .map(([a, b]) => el("tr", {}, el("td", {}, el("kbd", {}, a)), el("td", {}, t(b)))))),
+      ...[[t("st.kbd_palette"), t("st.k_palette")], [areaKeys, areaNames], ["/", t("st.k_search")], ["T", t("st.k_tools")], ["]", t("st.k_side")], ["Esc", t("st.k_esc")]]
+        .map(([a, b]) => el("tr", {}, el("td", {}, el("kbd", {}, a)), el("td", {}, b))))),
+    status?.version ? el("p", { class: "note" }, t("set.version", { v: status.version })) : null,
   );
 }

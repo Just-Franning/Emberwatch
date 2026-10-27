@@ -236,7 +236,7 @@ const T = {
     "boot.feeds": "Lese Bedrohungsdaten", "boot.ready": "Bereit", "boot.sources": "{ok} von {n} {n|Quelle|Quellen} aktiv",
     "boot.c2": "{n} C2-Server", "boot.patterns": "{n} Muster", "boot.alerts": "{n} {n|Alarm|Alarme} (7 T)",
     // login
-    "login.title": "Anmeldung", "login.password": "Passwort", "login.submit": "Anmelden", "login.hint": "Das Passwort steht in der Variable AUTH_PASSWORD oder beim ersten Start im Log und in /data/initial-password.txt.",
+    "login.title": "Anmeldung", "login.password": "Passwort", "login.submit": "Anmelden", "login.hint": "Erster Start: Benutzer admin (oder AUTH_USER), Passwort aus AUTH_PASSWORD oder /data/initial-password.txt. Weitere Konten legen Administratoren an.",
     "login.failed": "Anmeldung fehlgeschlagen: {msg}",
   },
   en: {
@@ -424,7 +424,7 @@ const T = {
     "boot.skip": "Click or press any key to skip", "boot.init": "Initialising threat picture", "boot.map": "Loading world map",
     "boot.feeds": "Reading threat data", "boot.ready": "Ready", "boot.sources": "{ok} of {n} {n|source|sources} active",
     "boot.c2": "{n} C2 {n|server|servers}", "boot.patterns": "{n} {n|pattern|patterns}", "boot.alerts": "{n} {n|alert|alerts} (7 d)",
-    "login.title": "Sign in", "login.password": "Password", "login.submit": "Sign in", "login.hint": "The password is set in AUTH_PASSWORD, or printed to the log on first start and stored in /data/initial-password.txt.",
+    "login.title": "Sign in", "login.password": "Password", "login.submit": "Sign in", "login.hint": "First start: user admin (or AUTH_USER), password from AUTH_PASSWORD or /data/initial-password.txt. Administrators create further accounts.",
     "login.failed": "Sign-in failed: {msg}",
   },
 };

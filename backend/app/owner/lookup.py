@@ -354,7 +354,8 @@ class Owner:
             loc = {**out["ip_location"], "label": ", ".join(x for x in (out["ip_location"].get("city"), out["ip_location"].get("country")) if x),
                    "precision": "ip", "source": "dbip"}
         out["location"] = loc
-        self.db.execute("INSERT INTO owner_cache(ip, active, fetched_at, payload) VALUES(?,?,?,?) "
-                        "ON CONFLICT(ip, active) DO UPDATE SET fetched_at=excluded.fetched_at, payload=excluded.payload",
-                        (ip, int(active), out["fetched_at"], json.dumps(out)))
+        if not any(n["code"] == "rdap_failed" for n in notes):  # an unreachable registry is temporary: ask again next time
+            self.db.execute("INSERT INTO owner_cache(ip, active, fetched_at, payload) VALUES(?,?,?,?) "
+                            "ON CONFLICT(ip, active) DO UPDATE SET fetched_at=excluded.fetched_at, payload=excluded.payload",
+                            (ip, int(active), out["fetched_at"], json.dumps(out)))
         yield {"type": "result", "result": out}

@@ -38,6 +38,7 @@
     <nav class="areas" id="areas" data-i18n-aria="area.nav">
       <a href="#/lage" data-area="lage" class="ar-cyber" data-i18n="area.lage" data-i18n-title="area.lage_title"></a>
       <a href="#/welt" data-area="welt" class="ar-welt" data-i18n="area.welt" data-i18n-title="area.welt_title"></a>
+      <a href="#/personen" data-area="personen" class="ar-osint admin-only" data-i18n="area.personen" data-i18n-title="area.personen_title"></a>
       <a href="#/analyse" data-area="analyse" data-i18n="area.analyse" data-i18n-title="area.analyse_title"></a>
       <a href="#/netz" data-area="netz" data-i18n="area.netz" data-i18n-title="area.netz_title"></a>
     </nav>
@@ -53,12 +54,14 @@
       <button type="button" id="btn-alerts" class="alert-btn" data-i18n-title="btn.alerts_title"><span id="alert-badge"></span></button>
       <button type="button" id="btn-status" class="status-btn" data-i18n-title="btn.status_title"><span class="dots" id="status-dots"></span><span data-i18n="btn.status"></span></button>
       <button type="button" id="btn-settings" class="icon-btn" data-i18n-title="btn.settings_title"><span aria-hidden="true">⚙</span><span class="sr-only" data-i18n="btn.settings"></span></button>
+      <button type="button" id="btn-user" class="user-btn" hidden aria-haspopup="true" aria-expanded="false"><span class="u-mark" id="user-mark" aria-hidden="true"></span><span class="u-name" id="user-name"></span><span class="u-role" id="user-role"></span></button>
     </div>
   </header>
 
   <!-- popovers -->
   <section class="panel popover" id="status-panel" hidden data-i18n-aria="btn.status"></section>
   <section class="panel popover" id="settings-panel" hidden data-i18n-aria="set.title"></section>
+  <section class="panel popover user-panel" id="user-panel" hidden data-i18n-aria="acct.menu"></section>
 
   <!-- mode band: layers and controls of the map view -->
   <div class="hud modebar" id="modebar">
@@ -84,8 +87,8 @@
         </select>
       </label>
       <button type="button" class="pill" id="btn-timeline" aria-pressed="false" data-i18n="mb.timeline" data-i18n-title="mb.timeline_title"></button>
-      <button type="button" class="pill" id="btn-maptools" aria-pressed="false" data-i18n="mb.tools" data-i18n-title="mb.tools_title"></button>
-      <button type="button" class="pill" id="btn-projection" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
+      <button type="button" class="pill admin-only" id="btn-maptools" aria-pressed="false" data-i18n="mb.tools" data-i18n-title="mb.tools_title"></button>
+      <button type="button" class="pill proj-btn" id="btn-projection" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
     </div>
     <div class="mb-side mb-welt layers" role="group" data-i18n-aria="wl.layers">
       <label class="chip" data-i18n-title="wl.chip.pairs_title"><input type="checkbox" id="wl-arcs" checked><i class="sw sw-wpair" aria-hidden="true"></i><span data-i18n="wl.chip.pairs"></span></label>
@@ -97,6 +100,7 @@
       <label class="pill-select"><span data-i18n="wl.sources"></span><select id="wl-source"></select></label>
     </div>
     <div class="mb-side mb-welt mb-right">
+      <button type="button" class="pill" id="btn-telegram" aria-pressed="false" data-i18n="tg.pill" data-i18n-title="tg.pill_title"></button>
       <label class="pill-select"><span data-i18n="wl.focus"></span><select id="wl-focus"></select></label>
       <label class="pill-select"><span data-i18n="wl.period"></span>
         <select id="wl-days">
@@ -106,6 +110,27 @@
           <option value="90" data-i18n="wl.d90"></option>
         </select>
       </label>
+      <button type="button" class="pill proj-btn" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
+    </div>
+    <!-- Personen: search in a case, map layers -->
+    <form class="mb-side mb-osint os-search" id="os-form" autocomplete="off">
+      <label class="pill-select"><span data-i18n="os.case"></span><select id="os-case"></select></label>
+      <label class="pill-select"><span data-i18n="os.kind"></span>
+        <select id="os-kind">
+          <option value="username" data-i18n="os.kind.username"></option>
+          <option value="email" data-i18n="os.kind.email"></option>
+          <option value="name" data-i18n="os.kind.name"></option>
+        </select>
+      </label>
+      <label for="os-q" class="sr-only" data-i18n="os.query"></label>
+      <input id="os-q" type="search" maxlength="254" spellcheck="false" data-i18n-placeholder="os.query_ph">
+      <button type="submit" class="primary" id="os-go" data-i18n="os.search"></button>
+    </form>
+    <div class="mb-side mb-osint mb-right layers" role="group" data-i18n-aria="layer.group">
+      <label class="chip" data-i18n-title="os.chip.ops_title"><input type="checkbox" id="os-ops" checked><i class="sw sw-oops" aria-hidden="true"></i><span data-i18n="os.chip.ops"></span></label>
+      <label class="chip" data-i18n-title="os.chip.locs_title"><input type="checkbox" id="os-locs" checked><i class="sw sw-oloc" aria-hidden="true"></i><span data-i18n="os.chip.locs"></span></label>
+      <button type="button" class="pill" id="btn-graph" aria-pressed="false" data-i18n="os.graph" data-i18n-title="os.graph_title"></button>
+      <button type="button" class="pill proj-btn" data-i18n="btn.globe" data-i18n-title="btn.projection_title"></button>
     </div>
   </div>
 
@@ -117,6 +142,7 @@
         <button role="tab" aria-selected="false" data-side="rank" data-i18n="side.rank"></button>
         <button role="tab" aria-selected="false" data-side="patterns" data-i18n="side.patterns"></button>
         <button role="tab" aria-selected="false" data-side="ai" data-i18n="side.ai"></button>
+        <button role="tab" aria-selected="false" data-side="owner" data-i18n="side.owner" data-i18n-title="ow.title"></button>
       </nav>
       <nav class="tabs side-tabs mb-welt" role="tablist" id="tabs-welt">
         <button role="tab" aria-selected="true" data-side="news" data-i18n="wl.tab.news"></button>
@@ -124,6 +150,11 @@
         <button role="tab" aria-selected="false" data-side="pairs" data-i18n="wl.tab.pairs"></button>
         <button role="tab" aria-selected="false" data-side="block" data-i18n="wl.tab.block"></button>
         <button role="tab" aria-selected="false" data-side="brief" data-i18n="wl.tab.brief"></button>
+      </nav>
+      <nav class="tabs side-tabs mb-osint" role="tablist" id="tabs-osint">
+        <button role="tab" aria-selected="true" data-side="o-hits" data-i18n="os.tab.hits"></button>
+        <button role="tab" aria-selected="false" data-side="o-links" data-i18n="os.tab.links"></button>
+        <button role="tab" aria-selected="false" data-side="o-cases" data-i18n="os.tab.cases"></button>
       </nav>
       <button type="button" class="collapse" data-collapse="side" aria-expanded="true"><span aria-hidden="true">–</span><span class="sr-only"></span></button>
     </div>
@@ -156,12 +187,13 @@
 
       <section class="tp mb-cyber" id="tp-ai" role="tabpanel" hidden>
         <div class="tp-row"><h3 class="tp-h" data-i18n="sect.ai"></h3><select id="ai-history" data-i18n-aria="ai.history"><option value="" data-i18n="ai.history"></option></select></div>
-        <div class="ai-actions">
+        <div class="ai-actions admin-only">
           <button type="button" data-scope="global" data-i18n="ai.global"></button>
           <button type="button" data-scope="region" id="ai-region" hidden></button>
           <button type="button" data-scope="country" id="ai-country" disabled data-i18n="ai.country"></button>
         </div>
-        <form class="ai-ask" id="ai-ask">
+        <p class="note viewer-only" data-i18n="role.viewer_ai"></p>
+        <form class="ai-ask admin-only" id="ai-ask">
           <label for="ai-question" class="sr-only" data-i18n="ai.question_label"></label>
           <textarea id="ai-question" rows="2" maxlength="600" data-i18n-placeholder="ai.question_ph"></textarea>
           <button type="submit" data-i18n="ai.ask"></button>
@@ -174,8 +206,41 @@
       <section class="tp mb-welt" id="tp-pairs" role="tabpanel" hidden></section>
       <section class="tp mb-welt" id="tp-block" role="tabpanel" hidden></section>
       <section class="tp mb-welt" id="tp-brief" role="tabpanel" hidden></section>
+
+      <section class="tp mb-cyber owner" id="tp-owner" role="tabpanel" hidden></section>
+
+      <section class="tp mb-osint" id="tp-o-hits" role="tabpanel"></section>
+      <section class="tp mb-osint" id="tp-o-links" role="tabpanel" hidden></section>
+      <section class="tp mb-osint" id="tp-o-cases" role="tabpanel" hidden></section>
     </div>
   </aside>
+
+  <!-- Personen: one account in its context -->
+  <section class="panel drawer osint-drawer" id="osint-drawer" hidden data-i18n-aria="os.drawer">
+    <div class="panel-head">
+      <h2 data-i18n="os.drawer"></h2>
+      <button type="button" class="collapse" id="osint-drawer-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
+    </div>
+    <div class="panel-body" id="osint-drawer-body"></div>
+  </section>
+
+  <!-- Personen: link graph (window) -->
+  <section class="panel panel-graph" id="panel-graph" hidden data-i18n-aria="os.graph">
+    <div class="panel-head">
+      <h2 data-i18n="os.graph"></h2>
+      <button type="button" class="collapse" id="graph-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
+    </div>
+    <div class="panel-body graph-body" id="graph-body"></div>
+  </section>
+
+  <!-- Weltlage: Telegram channels (window) -->
+  <section class="panel panel-tg" id="panel-tg" hidden data-i18n-aria="tg.title">
+    <div class="panel-head">
+      <h2 data-i18n="tg.title"></h2>
+      <button type="button" class="collapse" id="tg-close" data-i18n-title="panel.close"><span aria-hidden="true">×</span><span class="sr-only" data-i18n="panel.close"></span></button>
+    </div>
+    <div class="panel-body" id="tg-body"></div>
+  </section>
 
   <!-- Weltlage: one report in its context -->
   <section class="panel drawer" id="news-drawer" hidden data-i18n-aria="wl.drawer">
@@ -228,6 +293,12 @@
     <div class="page-main" id="nz-main"></div>
   </main>
 
+  <!-- account area: own account, users, audit log -->
+  <main class="page" id="area-konto" hidden data-i18n-aria="acct.area">
+    <nav class="page-nav" id="ko-nav" data-i18n-aria="acct.area"></nav>
+    <div class="page-main" id="ko-main"></div>
+  </main>
+
   <!-- timeline (Cyberlage, on demand) and credits -->
   <footer class="hud hud-bottom">
     <div class="timeline mb-cyber" id="timeline" hidden>
@@ -263,6 +334,13 @@
       <a href="https://ooni.org/data/" rel="noopener noreferrer" target="_blank">OONI</a> (CC BY-NC-SA 4.0) ·
       <a href="https://www.gdeltproject.org/" rel="noopener noreferrer" target="_blank">GDELT Project</a> ·
       <a href="https://www.submarinecablemap.com" rel="noopener noreferrer" target="_blank">TeleGeography</a> (CC BY-NC-SA 3.0, 2021)
+    </p>
+    <p class="credits mb-osint">
+      <a href="https://openfreemap.org" rel="noopener noreferrer" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org" rel="noopener noreferrer" target="_blank">OpenMapTiles</a>
+      © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> · Natural Earth ·
+      <span data-i18n="os.credits"></span>
+      <a href="https://github.com/sherlock-project/sherlock" rel="noopener noreferrer" target="_blank">Sherlock</a> (MIT) ·
+      <span data-i18n="os.credits_wmn"></span> <a href="https://github.com/WebBreacher/WhatsMyName" rel="noopener noreferrer" target="_blank">WhatsMyName</a> <span data-i18n="os.credits_wmn2"></span> (CC BY-SA 4.0)
     </p>
   </footer>
 

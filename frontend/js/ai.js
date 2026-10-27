@@ -134,7 +134,7 @@ export function reportArticle(r, thread, { onFollowup }) {
   });
   const md = el("button", { type: "button", onclick: () => download(`${t("ai.file")}-${(r.generated_at || "").slice(0, 10)}.md`, toMarkdown(r, thread), "text/markdown;charset=utf-8") }, t("ai.markdown"));
   const pdf = el("button", { type: "button", onclick: () => printReport(r, thread) }, t("ai.print"));
-  const followForm = el("form", { class: "followup" },
+  const followForm = el("form", { class: "followup admin-only" },
     el("label", { class: "sr-only" }, t("ai.followup_label")),
     el("input", { type: "text", maxlength: 600, placeholder: t("ai.followup_ph"), "aria-label": t("ai.followup_label") }),
     el("button", { type: "submit", disabled: !r.id }, t("ai.send")));

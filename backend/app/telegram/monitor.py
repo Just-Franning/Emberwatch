@@ -57,7 +57,8 @@ KIND_EXTRA = {
     "sabotage": ("вайпер",),
 }
 HOST_RE = re.compile(r"(?<![\w@.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.|\[\.\]|\(\.\)))+(?:[a-z]{2,24}))(?![\w-])", re.I)
-IP_RE = re.compile(r"(?<![\d.])((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})(?![\d.])")
+# an address may end a sentence ("… down: 192.0.2.4."), but must not continue as a longer number or a fifth group
+IP_RE = re.compile(r"(?<![\d.])((?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3})(?!\d|\.\d)")
 IGNORE_HOSTS = ("t.me", "telegram.me", "telegram.org", "telegra.ph", "youtube.com", "youtu.be", "x.com", "twitter.com",
                 "instagram.com", "facebook.com", "vk.com", "tiktok.com", "google.com", "check-host.net", "web.archive.org")
 FILE_ENDINGS = (".jpg", ".png", ".gif", ".mp4", ".pdf", ".zip", ".rar", ".txt", ".exe", ".html", ".php", ".js", ".css")

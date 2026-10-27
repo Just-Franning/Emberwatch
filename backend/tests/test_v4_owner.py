@@ -336,6 +336,21 @@ def test_owner_provider_block_is_marked_shared(m, monkeypatch):
     assert not lookup.generic_ptr("mail.muster-technik.de", "198.51.100.7")
 
 
+def test_owner_registry_unreachable_is_not_stored(m, monkeypatch):
+    from app.i18n import AppError
+
+    async def down(client, ip):
+        raise AppError("err.tool.network", detail="timeout")
+
+    monkeypatch.setattr(m.owner.toolkit, "rdap", down)
+    with TestClient(m.app) as tc:
+        m.app.state.web = site()
+        m.app.state.client = nominatim([])
+        res = stream(tc, {"ip": IP, "active": False})[-1]["result"]
+        assert res["network"] is None and {"code": "rdap_failed", "params": {"key": "err.tool.network"}} in res["notes"]
+        assert not res.get("cached") and tc.get(f"/api/owner?ip={IP}").json()["result"] is None  # temporary: asked again next time
+
+
 def test_owner_viewer_reads_only(tmp_path, monkeypatch):
     m = v3.load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="correct horse battery staple")
     from app.auth import allowed

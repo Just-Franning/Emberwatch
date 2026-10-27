@@ -675,6 +675,8 @@ def api_status(request: Request) -> dict[str, Any]:
                  "web": news.web_enabled},
         "optional": {name: S.source_on(name) for name in OPTIONAL_SOURCES},
         "attack": {"version": attack.version()},
+        "accounts": {"audit_days": S.audit_retention_days},
+        "v4": {"osint": S.osint_enabled, "telegram": S.telegram_enabled, "geocoding": bool(S.nominatim_url)},
         "keys": {
             "cloudflare": bool(S.cf_api_token), "abusech": bool(S.abusech_auth_key),
             "ransomware_live": bool(S.ransomware_live_api_key), "gemini": bool(S.gemini_api_key),

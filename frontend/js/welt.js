@@ -45,6 +45,47 @@ function thumb(url, cls, fallback) {
 
 const initials = (name) => (name || "?").replace(/[^A-Za-zÄÖÜäöü0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
+/** Title of one comparison with our own measurements (corroborate.py); also used by the Telegram window. */
+export function checkTitle(c) {
+  const s = String(c.subject ?? "");
+  const name = ccOk(s) ? countryName(s) : s;
+  if (c.type === "cve") return objLink("cve", s, s);
+  if (c.type === "malware") return objLink("malware", s, t("wl.chk.malware", { m: s }));
+  if (c.type === "ransomware") return objLink("group", s, t("wl.chk.ransomware", { g: s }));
+  return t(`wl.chk.${c.type}`, { name });
+}
+
+/** The numbers behind one comparison. */
+export function checkLines(c) {
+  const p = c.params || {};
+  if (c.type === "ddos") {
+    return ["l7", "l3"].filter((k) => p[k]).map((k) => {
+      const x = p[k], layer = k.toUpperCase();
+      if (x.reason) return el("span", {}, t(`wl.chk.ddos_${x.reason === "not_visible" ? "not_visible" : "no_data"}`, { layer }));
+      if (x.entered) return el("span", {}, t("wl.chk.ddos_entered", { layer, v: pct(x.value) }));
+      return el("span", {}, t("wl.chk.ddos_val", { layer, v: pct(x.value), b: pct(x.baseline) }));
+    });
+  }
+  if (c.type === "ransomware") {
+    return [el("span", {}, p.posts > 0 ? t("wl.chk.ransomware_posts", { n: num(p.posts), c: num(p.in_countries || 0) }) : t("wl.chk.ransomware_none"))];
+  }
+  if (c.type === "outage") {
+    if (p.events > 0) {
+      const causes = (p.causes || []).map(causeLabel).join(", ");
+      return [el("span", {}, t("wl.chk.outage_n", { n: num(p.events), causes }))];
+    }
+    return [el("span", {}, t(c.result === "not_supported" ? "wl.chk.outage_none" : "wl.chk.outage_open"))];
+  }
+  if (c.type === "ooni") { // the 7 days up to the report against the 4 weeks before (corroborate.py)
+    if (c.result === "unclear") return [el("span", {}, t("wl.chk.ooni_few", { m: num(p.measurements || 0) }))];
+    return [el("span", {}, t("wl.chk.ooni_val", { p: pct(p.anomaly_pct), b: pct(p.anomaly_pct_before), c: num(p.confirmed || 0),
+      m: num(p.measurements) }))];
+  }
+  if (c.type === "cve") return [el("span", {}, t(p.by === "euvd" ? "wl.chk.cve_euvd" : "wl.chk.cve_kev", { d: dateOnly(p.since) }))];
+  if (c.type === "malware") return [el("span", {}, t("wl.chk.malware_c2", { n: num(p.c2 || 0) }))];
+  return [];
+}
+
 function pairLabel(it) {
   if (!it.origin) return null;
   const to = it.countries.slice(0, 3).join(", ");
@@ -508,10 +549,10 @@ export class Welt {
     const enabled = Boolean(this.status?.ai?.enabled);
     const scope = `welt:${this.f.days}`;
     const out = el("div", { class: "ai-out" });
-    const run = el("button", { type: "button", class: "primary", disabled: !enabled }, t("wl.brief_run", { d: num(this.f.days) }));
+    const run = el("button", { type: "button", class: "primary admin-only", disabled: !enabled }, t("wl.brief_run", { d: num(this.f.days) }));
     const q = el("input", { type: "text", maxlength: 600, placeholder: t("wl.brief_q"), "aria-label": t("wl.brief_q") });
     const ask = el("button", { type: "submit", disabled: !enabled }, t("ai.ask"));
-    const form = el("form", { class: "ai-ask" }, q, ask);
+    const form = el("form", { class: "ai-ask admin-only" }, q, ask);
     let current = null, thread = [];
     const show = () => { destroyIn(out); kids(out, reportArticle(current, thread, { onFollowup: (fm) => follow(fm) })); };
     const follow = async (fm) => {
@@ -647,7 +688,7 @@ export class Welt {
     const mineLink = (m) => (m.type === "domain" ? el("a", { href: href(routes.asset(m.id)) }, m.label) : el("a", { href: href(routes.product(m.id)) }, m.label));
     const enabled = Boolean(this.status?.ai?.enabled);
     const aiOut = el("div", { class: "ai-out" });
-    const aiBtn = el("button", { type: "button", disabled: !enabled, title: enabled ? t("wl.d.ai_title") : t("an.ai_off") }, t("wl.d.ai"));
+    const aiBtn = el("button", { type: "button", class: "admin-only", disabled: !enabled, title: enabled ? t("wl.d.ai_title") : t("an.ai_off") }, t("wl.d.ai"));
     aiBtn.addEventListener("click", () => this.aiNews(it, aiBtn, aiOut));
     const target = it.countries[0] || it.origin;
     const firstObj = it.actor_info?.[0] ? ["actor", it.actor_info[0].canonical || it.actor_info[0].name] : it.cves[0] ? ["cve", it.cves[0]]
@@ -713,44 +754,9 @@ export class Welt {
       el("p", { class: "note" }, t("wl.chk.note")));
   }
 
-  checkTitle(c) {
-    const s = String(c.subject ?? "");
-    const name = ccOk(s) ? countryName(s) : s;
-    if (c.type === "cve") return objLink("cve", s, s);
-    if (c.type === "malware") return objLink("malware", s, t("wl.chk.malware", { m: s }));
-    if (c.type === "ransomware") return objLink("group", s, t("wl.chk.ransomware", { g: s }));
-    return t(`wl.chk.${c.type}`, { name });
-  }
+  checkTitle(c) { return checkTitle(c); }
 
-  checkLines(c) {
-    const p = c.params || {};
-    if (c.type === "ddos") {
-      return ["l7", "l3"].filter((k) => p[k]).map((k) => {
-        const x = p[k], layer = k.toUpperCase();
-        if (x.reason) return el("span", {}, t(`wl.chk.ddos_${x.reason === "not_visible" ? "not_visible" : "no_data"}`, { layer }));
-        if (x.entered) return el("span", {}, t("wl.chk.ddos_entered", { layer, v: pct(x.value) }));
-        return el("span", {}, t("wl.chk.ddos_val", { layer, v: pct(x.value), b: pct(x.baseline) }));
-      });
-    }
-    if (c.type === "ransomware") {
-      return [el("span", {}, p.posts > 0 ? t("wl.chk.ransomware_posts", { n: num(p.posts), c: num(p.in_countries || 0) }) : t("wl.chk.ransomware_none"))];
-    }
-    if (c.type === "outage") {
-      if (p.events > 0) {
-        const causes = (p.causes || []).map(causeLabel).join(", ");
-        return [el("span", {}, t("wl.chk.outage_n", { n: num(p.events), causes }))];
-      }
-      return [el("span", {}, t(c.result === "not_supported" ? "wl.chk.outage_none" : "wl.chk.outage_open"))];
-    }
-    if (c.type === "ooni") { // the 7 days up to the report against the 4 weeks before (corroborate.py)
-      if (c.result === "unclear") return [el("span", {}, t("wl.chk.ooni_few", { m: num(p.measurements || 0) }))];
-      return [el("span", {}, t("wl.chk.ooni_val", { p: pct(p.anomaly_pct), b: pct(p.anomaly_pct_before), c: num(p.confirmed || 0),
-        m: num(p.measurements) }))];
-    }
-    if (c.type === "cve") return [el("span", {}, t(p.by === "euvd" ? "wl.chk.cve_euvd" : "wl.chk.cve_kev", { d: dateOnly(p.since) }))];
-    if (c.type === "malware") return [el("span", {}, t("wl.chk.malware_c2", { n: num(p.c2 || 0) }))];
-    return [];
-  }
+  checkLines(c) { return checkLines(c); }
 
   /** Submarine cables named in the report (TeleGeography dataset). */
   cablesSection(cables, sect) {
