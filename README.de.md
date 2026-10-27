@@ -88,8 +88,8 @@ Emberwatch hat fünf Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, r
 ### Variante B: Docker Compose mit fertigem Image
 
 ```bash
-git clone https://github.com/SaturdayNetLab/emberwatch.git
-cd emberwatch
+git clone https://github.com/Just-Franning/Emberwatch.git
+cd Emberwatch
 cp .env.example .env    # Keys eintragen
 docker compose pull
 docker compose up -d
@@ -109,7 +109,7 @@ Mit Portainer: im geklonten Repository `git archive -o emberwatch.tar HEAD` ausf
 
 ### Image-Tags
 
-Das Image `ghcr.io/saturdaynetlab/emberwatch` wird für `linux/amd64` und `linux/arm64` gebaut.
+Das Image `ghcr.io/just-franning/emberwatch` wird für `linux/amd64` und `linux/arm64` gebaut.
 
 | Tag | Inhalt |
 |---|---|
@@ -122,14 +122,14 @@ Das Image `ghcr.io/saturdaynetlab/emberwatch` wird für `linux/amd64` und `linux
 
 ## Aktualisieren
 
-Die Daten bleiben im Volume `/data`. Datenbankänderungen werden beim Start automatisch übernommen; vor einer neuen Hauptversion das [Änderungsprotokoll](CHANGELOG.md) lesen. **Von 3.x auf 4.0** wechselt die Anmeldung zu Konten mit zweitem Faktor: dein Passwort gilt weiter für das Konto `admin`, die Authenticator-App richtest du bei der ersten Anmeldung ein (siehe [Konten und Anmeldung](#konten-und-anmeldung)).
+Die Daten bleiben im Volume `/data`. Datenbankänderungen werden beim Start automatisch übernommen; vor einer neuen Hauptversion das [Änderungsprotokoll](CHANGELOG.md) lesen. **Von 3.x auf 4.0** wechselt die Anmeldung zu Konten mit zweitem Faktor: dein Passwort gilt weiter für das Konto `admin`, die Authenticator-App richtest du bei der ersten Anmeldung ein (siehe [Konten und Anmeldung](#konten-und-anmeldung)). Das Image heißt jetzt `ghcr.io/just-franning/emberwatch` (das Repository ist zu Just-Franning umgezogen): `image:` bzw. `EMBERWATCH_IMAGE` anpassen.
 
 - **Docker Compose:** `docker compose pull && docker compose up -d`. Vorher `git pull`, wenn du Änderungen an `compose.yml` und `.env.example` übernehmen willst.
 - **Portainer:** *Stacks → emberwatch → Editor → Update the stack*, dabei die Option zum erneuten Ziehen des Images aktivieren.
 - **Automatisch:** ein Werkzeug wie Watchtower kann neue Images ziehen. Eine Versionslinie (z. B. `4`) festlegen, wenn nur Updates ohne inkompatible Änderungen kommen sollen.
 - **Selbst gebaut:** `git pull`, dann neu bauen.
 
-Neue Versionen stehen auf der [Releases-Seite](https://github.com/SaturdayNetLab/emberwatch/releases); auf GitHub benachrichtigt *Watch → Custom → Releases*.
+Neue Versionen stehen auf der [Releases-Seite](https://github.com/Just-Franning/Emberwatch/releases); auf GitHub benachrichtigt *Watch → Custom → Releases*.
 
 ## Erste Schritte
 

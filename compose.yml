@@ -6,7 +6,7 @@
 # (see README) or change the port binding.
 services:
   emberwatch:
-    image: ${EMBERWATCH_IMAGE:-ghcr.io/saturdaynetlab/emberwatch:latest}
+    image: ${EMBERWATCH_IMAGE:-ghcr.io/just-franning/emberwatch:latest}
     build: .
     container_name: emberwatch
     restart: unless-stopped

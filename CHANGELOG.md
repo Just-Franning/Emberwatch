@@ -11,6 +11,7 @@ Emberwatch gets accounts with roles and a second factor, a third map view for pe
 - Every session of 3.x ends; everybody signs in again.
 - New features are switched on by default: people search (`OSINT_ENABLED`), Telegram channels (`TELEGRAM_ENABLED`, no channels until an administrator adds them) and the geocoding of company addresses via OpenStreetMap Nominatim (`NOMINATIM_URL=off` switches it off).
 - With `AUTH_MODE=none` (sign-in at the reverse proxy) every visitor counts as administrator, as before.
+- The repository moved to `Just-Franning/Emberwatch`, the image to `ghcr.io/just-franning/emberwatch` (the owner SaturdayNetLab no longer exists, so `ghcr.io/saturdaynetlab/emberwatch` gets no new versions). Change `image:` in your stack or `EMBERWATCH_IMAGE`.
 
 ### Added
 **Accounts and roles**

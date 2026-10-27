@@ -5,7 +5,7 @@
 # Own image (built from the repository tar): set EMBERWATCH_IMAGE, e.g. emberwatch:local.
 services:
   emberwatch:
-    image: ${EMBERWATCH_IMAGE:-ghcr.io/saturdaynetlab/emberwatch:latest}
+    image: ${EMBERWATCH_IMAGE:-ghcr.io/just-franning/emberwatch:latest}
     container_name: emberwatch
     restart: unless-stopped
     networks:

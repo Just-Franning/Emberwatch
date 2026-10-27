@@ -88,8 +88,8 @@ Emberwatch has five areas: **Cyber** (the world map with attack data, red), **Wo
 ### Option B: Docker Compose with the prebuilt image
 
 ```bash
-git clone https://github.com/SaturdayNetLab/emberwatch.git
-cd emberwatch
+git clone https://github.com/Just-Franning/Emberwatch.git
+cd Emberwatch
 cp .env.example .env    # add your keys
 docker compose pull
 docker compose up -d
@@ -109,7 +109,7 @@ With Portainer: run `git archive -o emberwatch.tar HEAD` in the cloned repositor
 
 ### Image tags
 
-The image `ghcr.io/saturdaynetlab/emberwatch` is built for `linux/amd64` and `linux/arm64`.
+The image `ghcr.io/just-franning/emberwatch` is built for `linux/amd64` and `linux/arm64`.
 
 | Tag | Content |
 |---|---|
@@ -122,14 +122,14 @@ The image `ghcr.io/saturdaynetlab/emberwatch` is built for `linux/amd64` and `li
 
 ## Updating
 
-Your data stays in the `/data` volume. Database changes are applied automatically on start; read the [changelog](CHANGELOG.md) before a new major version. **From 3.x to 4.0** the sign-in changes to accounts with a second factor: your password keeps working for the account `admin`, the authenticator app is set up at the first sign-in (see [Accounts and sign-in](#accounts-and-sign-in)).
+Your data stays in the `/data` volume. Database changes are applied automatically on start; read the [changelog](CHANGELOG.md) before a new major version. **From 3.x to 4.0** the sign-in changes to accounts with a second factor: your password keeps working for the account `admin`, the authenticator app is set up at the first sign-in (see [Accounts and sign-in](#accounts-and-sign-in)). The image is now `ghcr.io/just-franning/emberwatch` (the repository moved to Just-Franning): change `image:` or `EMBERWATCH_IMAGE`.
 
 - **Docker Compose:** `docker compose pull && docker compose up -d`. Run `git pull` beforehand if you want changes to `compose.yml` and `.env.example`.
 - **Portainer:** *Stacks → emberwatch → Editor → Update the stack* with the option to re-pull the image enabled.
 - **Automatic:** a tool such as Watchtower can pull new images. Pin a version line (for example `4`) if you only want updates without breaking changes.
 - **Built from source:** `git pull`, then build again.
 
-New releases are listed on the [releases page](https://github.com/SaturdayNetLab/emberwatch/releases); *Watch → Custom → Releases* on GitHub notifies you.
+New releases are listed on the [releases page](https://github.com/Just-Franning/Emberwatch/releases); *Watch → Custom → Releases* on GitHub notifies you.
 
 ## Quickstart
 
