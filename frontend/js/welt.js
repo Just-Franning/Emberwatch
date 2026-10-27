@@ -1,17 +1,25 @@
 // Weltlage: security reports of authorities and specialist media on the world map (indigo mode).
-// Band: layers (country pairs, countries), "corroborated" and "law & sanctions" filters, sources, focus, period.
-// Side panel: reports, actors, country pairs, briefing (Gemini) with the source list.
-// Drawer (#/welt/n/<id>): one report in its context with the local data on it.
+// Band: layers (country pairs, countries, submarine cables named, internet blocking), "corroborated" and
+//   "law & sanctions" filters, sources (curated, optionally the worldwide press via GDELT), focus, period.
+// Side panel: reports, actors, country pairs, blocking (OONI, shutdowns), briefing (Gemini) with the source list.
+// Drawer (#/welt/n/<id>): one report in its context: the comparison with our own measurements, cables named, local data.
 // Origin and actors are recognised automatically from headline and teaser; attributions are statements of the sources.
 import { reportArticle } from "./ai.js";
 import { destroy, lineChart } from "./charts.js";
 import { locale, t } from "./i18n.js";
+import { setCollapsed } from "./layout.js";
 import { kpiTile } from "./panels.js";
 import { go, href, objLink, routes } from "./router.js";
 import { ago, api, countryName, dateOnly, dateTime, dec2, el, kids, num, pct, safeLink } from "./util.js";
 
 export const KINDS = ["ransomware", "ddos", "espionage", "sabotage", "phishing", "breach", "vulnerability", "supply_chain", "botnet",
-  "disinfo", "law", "sanctions", "policy"];
+  "disinfo", "cable", "shutdown", "law", "sanctions", "policy"];
+const CHECK_TYPES = ["ddos", "ransomware", "outage", "ooni", "cve", "malware"];
+const VERDICTS = ["supported", "not_supported", "unclear"];
+const OONI_MIN = 100; // countries with fewer web measurements are listed only with confirmed blocking
+const BLOCKING_TTL = 15 * 60 * 1000; // OONI and Cloudflare update within hours: reload at most every 15 minutes
+const ccOk = (cc) => typeof cc === "string" && /^[A-Z]{2}$/.test(cc);
+const causeLabel = (x) => { const l = t(`cause.${x}`); return l === `cause.${x}` ? String(x || "?") : l; };
 const LAW = "law,sanctions";
 const PAGE = 40;
 const httpsImg = (u) => (typeof u === "string" && /^https:\/\/[^\s"'<>]+$/.test(u) ? u : null);
@@ -37,6 +45,47 @@ function thumb(url, cls, fallback) {
 
 const initials = (name) => (name || "?").replace(/[^A-Za-zÄÖÜäöü0-9 ]/g, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
+/** Title of one comparison with our own measurements (corroborate.py); also used by the Telegram window. */
+export function checkTitle(c) {
+  const s = String(c.subject ?? "");
+  const name = ccOk(s) ? countryName(s) : s;
+  if (c.type === "cve") return objLink("cve", s, s);
+  if (c.type === "malware") return objLink("malware", s, t("wl.chk.malware", { m: s }));
+  if (c.type === "ransomware") return objLink("group", s, t("wl.chk.ransomware", { g: s }));
+  return t(`wl.chk.${c.type}`, { name });
+}
+
+/** The numbers behind one comparison. */
+export function checkLines(c) {
+  const p = c.params || {};
+  if (c.type === "ddos") {
+    return ["l7", "l3"].filter((k) => p[k]).map((k) => {
+      const x = p[k], layer = k.toUpperCase();
+      if (x.reason) return el("span", {}, t(`wl.chk.ddos_${x.reason === "not_visible" ? "not_visible" : "no_data"}`, { layer }));
+      if (x.entered) return el("span", {}, t("wl.chk.ddos_entered", { layer, v: pct(x.value) }));
+      return el("span", {}, t("wl.chk.ddos_val", { layer, v: pct(x.value), b: pct(x.baseline) }));
+    });
+  }
+  if (c.type === "ransomware") {
+    return [el("span", {}, p.posts > 0 ? t("wl.chk.ransomware_posts", { n: num(p.posts), c: num(p.in_countries || 0) }) : t("wl.chk.ransomware_none"))];
+  }
+  if (c.type === "outage") {
+    if (p.events > 0) {
+      const causes = (p.causes || []).map(causeLabel).join(", ");
+      return [el("span", {}, t("wl.chk.outage_n", { n: num(p.events), causes }))];
+    }
+    return [el("span", {}, t(c.result === "not_supported" ? "wl.chk.outage_none" : "wl.chk.outage_open"))];
+  }
+  if (c.type === "ooni") { // the 7 days up to the report against the 4 weeks before (corroborate.py)
+    if (c.result === "unclear") return [el("span", {}, t("wl.chk.ooni_few", { m: num(p.measurements || 0) }))];
+    return [el("span", {}, t("wl.chk.ooni_val", { p: pct(p.anomaly_pct), b: pct(p.anomaly_pct_before), c: num(p.confirmed || 0),
+      m: num(p.measurements) }))];
+  }
+  if (c.type === "cve") return [el("span", {}, t(p.by === "euvd" ? "wl.chk.cve_euvd" : "wl.chk.cve_kev", { d: dateOnly(p.since) }))];
+  if (c.type === "malware") return [el("span", {}, t("wl.chk.malware_c2", { n: num(p.c2 || 0) }))];
+  return [];
+}
+
 function pairLabel(it) {
   if (!it.origin) return null;
   const to = it.countries.slice(0, 3).join(", ");
@@ -48,7 +97,8 @@ export class Welt {
     this.map = map;
     this.onCyber = onCyber; // (cc) => switch to the Cyberlage with this country
     this.onMap = onMap; // () => the map must be visible
-    this.f = { days: 7, source: "", focus: "", kind: "", q: "", mine: false, confirmed: false, actor: "", origin: "", target: "" };
+    this.f = { days: 7, source: "", focus: "", kind: "", q: "", mine: false, confirmed: false, supported: false, actor: "", origin: "", target: "" };
+    this.blocking = null; // {days, data | error}: OONI and shutdowns, loaded when the layer or the tab needs them
     this.tab = "news";
     this.ov = null;
     this.items = [];
@@ -61,10 +111,13 @@ export class Welt {
     this.side = document.getElementById("side");
     this.drawer = document.getElementById("news-drawer");
     this.drawerBody = document.getElementById("drawer-body");
-    this.panels = Object.fromEntries(["news", "actors", "pairs", "brief"].map((k) => [k, document.getElementById(`tp-${k}`)]));
+    this.panels = Object.fromEntries(["news", "actors", "pairs", "block", "brief"].map((k) => [k, document.getElementById(`tp-${k}`)]));
     this.sel = { source: document.getElementById("wl-source"), focus: document.getElementById("wl-focus"), days: document.getElementById("wl-days") };
     this.bindBand();
-    document.querySelectorAll("#tabs-welt button").forEach((b) => b.addEventListener("click", () => this.setTab(b.dataset.side)));
+    document.querySelectorAll("#tabs-welt button").forEach((b) => b.addEventListener("click", () => {
+      setCollapsed("side", false); // a tab of the collapsed panel opens it (as in the Cyberlage)
+      this.setTab(b.dataset.side);
+    }));
     document.getElementById("drawer-close").addEventListener("click", () => go(routes.welt()));
   }
 
@@ -76,6 +129,16 @@ export class Welt {
     // the browser may restore checkbox states on reload: the map follows the boxes from the start
     this.map.setWeltVisible("pairs", arcs.checked);
     this.map.setWeltVisible("dots", dots.checked);
+    const cables = document.getElementById("wl-cables"), block = document.getElementById("wl-block");
+    const layer = (name, box) => {
+      this.map.setWeltVisible(name, box.checked);
+      if (name === "block" && box.checked) this.loadBlocking();
+      if (this.ov) this.renderHint();
+    };
+    cables.addEventListener("change", () => layer("cables", cables));
+    block.addEventListener("change", () => layer("block", block));
+    this.map.setWeltVisible("cables", cables.checked);
+    this.map.setWeltVisible("block", block.checked);
     const confirmed = document.getElementById("wl-confirmed"), law = document.getElementById("wl-law");
     confirmed.addEventListener("change", () => this.set({ confirmed: confirmed.checked }));
     law.addEventListener("change", () => this.set({ kind: law.checked ? LAW : "" }));
@@ -94,7 +157,9 @@ export class Welt {
 
   fillSources() {
     const srcs = this.ov?.sources || [];
-    const opts = [["", t("wl.src.all")], ["gov", t("wl.src.gov")], ["press", t("wl.src.press")], ...srcs.map((s) => [s.id, s.name])];
+    const web = srcs.some((s) => s.tier === "web") || this.f.source === "web";
+    const opts = [["", t("wl.src.all")], ["gov", t("wl.src.gov")], ["press", t("wl.src.press")],
+      ...(web ? [["web", t("wl.src.web")]] : []), ...srcs.filter((s) => s.tier !== "web").map((s) => [s.id, s.name])];
     kids(this.sel.source, ...opts.map(([v, l]) => el("option", { value: v, selected: v === this.f.source }, l)));
   }
 
@@ -130,7 +195,7 @@ export class Welt {
   params(extra = {}) {
     const f = this.f;
     const p = new URLSearchParams({ days: String(f.days) });
-    if (f.source === "gov" || f.source === "press") p.set("tier", f.source);
+    if (f.source === "gov" || f.source === "press" || f.source === "web") p.set("tier", f.source);
     else if (f.source) p.set("source", f.source);
     const region = this.status?.region?.codes || [];
     if (f.focus === "region" && region.length) p.set("country", "region"); // the server expands HOME_REGION (any size)
@@ -138,6 +203,7 @@ export class Welt {
     for (const k of ["kind", "q", "actor", "origin", "target"]) if (f[k]) p.set(k, f[k]);
     if (f.mine) p.set("mine", "true");
     if (f.confirmed) p.set("confirmed", "true");
+    if (f.supported) p.set("supported", "true");
     for (const [k, v] of Object.entries(extra)) p.set(k, String(v));
     return p.toString();
   }
@@ -157,8 +223,10 @@ export class Welt {
       this.total = ov.kpis.events;
       this.fillSources();
       this.map.setWelt({ pairs: ov.pairs, mentioned: ov.countries, origins: ov.origins });
+      this.map.setWeltCables(ov.cables || {});
       this.renderKpis();
       this.renderTab();
+      if (document.getElementById("wl-block").checked || this.tab === "block") this.loadBlocking();
     } catch (e) {
       if (seq !== this.seq || !this.active) return;
       const msg = e.status === 404 ? t("wl.off") : t("common.error", { msg: e.message });
@@ -199,7 +267,7 @@ export class Welt {
     if (first && ctx.days && !fromLink.days && ctx.days !== this.f.days) fromLink.days = ctx.days;
     if (fromLink.actor || fromLink.kind || fromLink.focus) {
       // a link from elsewhere ("reports on actor X") starts from a clean selection; source and period stay
-      Object.assign(this.f, { q: "", mine: false, origin: "", target: "", kind: "", actor: "", confirmed: false });
+      Object.assign(this.f, { q: "", mine: false, origin: "", target: "", kind: "", actor: "", confirmed: false, supported: false });
       if (fromLink.actor && !fromLink.focus) fromLink.focus = "";
       this.tab = "news";
     }
@@ -267,9 +335,17 @@ export class Welt {
       { key: "mine", label: t("wl.kpi.mine"), value: num(k.mine), sub: t("wl.kpi.mine_sub", { n: num(k.vendor) }), hot: k.mine > 0 },
     ];
     kids(document.getElementById("kpis"), ...tiles.map((x) => kpiTile(x, (key) => this.onKpi(key))));
+    this.renderHint();
+  }
+
+  /** Legend line: the symbols of the layers that are switched on. */
+  renderHint() {
+    const sym = (cls, label) => [el("i", { class: `sw ${cls}`, "aria-hidden": "true" }), label];
+    const on = (id) => document.getElementById(id)?.checked;
     kids(document.getElementById("maphint"),
-      el("span", { class: "lg-sym" }, el("i", { class: "sw sw-wpair", "aria-hidden": "true" }), t("wl.hint.pairs"),
-        el("i", { class: "sw sw-wdot", "aria-hidden": "true" }), t("wl.hint.dots"), el("i", { class: "sw sw-wring", "aria-hidden": "true" }), t("wl.hint.rings")),
+      el("span", { class: "lg-sym" }, ...sym("sw-wpair", t("wl.hint.pairs")), ...sym("sw-wdot", t("wl.hint.dots")), ...sym("sw-wring", t("wl.hint.rings")),
+        ...(on("wl-cables") && Object.keys(this.ov?.cables || {}).length ? sym("sw-wcable", t("wl.hint.cables")) : []),
+        ...(on("wl-block") ? [...sym("sw-wshut", t("wl.hint.shutdown")), ...sym("sw-wblock", t("wl.hint.blocking"))] : [])),
       el("span", { class: "lg-stamp" }, t("wl.hint.auto")));
   }
 
@@ -288,6 +364,7 @@ export class Welt {
     if (this.tab === "news") this.renderNews(node);
     else if (this.tab === "actors") this.renderActors(node);
     else if (this.tab === "pairs") this.renderPairs(node);
+    else if (this.tab === "block") this.renderBlock(node);
     else this.renderBrief(node);
   }
 
@@ -298,6 +375,7 @@ export class Welt {
     if (f.actor) chips.push(el("span", { class: "fchip" }, t("wl.f.actor", { name: f.actor }), clear({ actor: "" })));
     if (f.origin || f.target) chips.push(el("span", { class: "fchip" }, `${f.origin || "*"} → ${f.target || "*"}`, clear({ origin: "", target: "" })));
     if (f.mine) chips.push(el("span", { class: "fchip" }, t("wl.f.mine"), clear({ mine: false })));
+    if (f.supported) chips.push(el("span", { class: "fchip" }, t("wl.f.supported"), clear({ supported: false })));
     if (f.q) chips.push(el("span", { class: "fchip" }, `„${f.q}“`, clear({ q: "" })));
     return chips.length ? el("div", { class: "fchips" }, ...chips) : null;
   }
@@ -313,6 +391,9 @@ export class Welt {
     form.addEventListener("submit", (e) => { e.preventDefault(); this.set({ q: q.value.trim() }); });
     const mine = el("input", { type: "checkbox", checked: this.f.mine });
     mine.addEventListener("change", () => this.set({ mine: mine.checked }));
+    const supported = el("input", { type: "checkbox", checked: this.f.supported });
+    supported.addEventListener("change", () => this.set({ supported: supported.checked }));
+    const nSupported = this.ov.kpis.supported || 0;
     const items = this.items;
     const list = items.length
       ? el("ol", { class: "news" }, items.map((it) => this.card(it)))
@@ -321,9 +402,13 @@ export class Welt {
     moreBtn.addEventListener("click", () => this.more(moreBtn));
     kids(node,
       form,
-      el("label", { class: "pcheck wl-mine" }, mine, t("wl.f.mine_label")),
+      el("div", { class: "wl-checks" },
+        el("label", { class: "pcheck wl-mine" }, mine, t("wl.f.mine_label")),
+        el("label", { class: "pcheck wl-supported" }, supported, t("wl.f.supported_label"))),
       this.activeFilters(),
-      el("p", { class: "note" }, t("wl.count", { n: num(this.total || 0), d: num(this.f.days) })),
+      this.f.source === "web" ? el("p", { class: "note web-note" }, t("wl.web_note")) : null,
+      el("p", { class: "note" }, t("wl.count", { n: num(this.total || 0), d: num(this.f.days) }),
+        nSupported && !this.f.supported ? ` · ${t("wl.kpi.supported", { n: num(nSupported) })}` : ""),
       list,
       this.total > items.length ? el("p", { class: "more-link" }, moreBtn) : null);
   }
@@ -335,6 +420,7 @@ export class Welt {
     if (pl) tags.push(el("span", { class: "wtag pair", title: it.origin_by === "actor" ? t("wl.origin_by_actor") : t("wl.origin_by_text") }, pl));
     for (const k of it.kinds.slice(0, 2)) tags.push(el("span", { class: "wtag" }, kindLabel(k)));
     for (const c of it.cves.slice(0, 1)) tags.push(el("span", { class: "wtag mono" }, c));
+    if (it.checks?.verdict === "supported") tags.push(el("span", { class: "wtag chk", title: t("wl.tag.supported_title") }, t("wl.tag.supported")));
     const mine = it.mine.filter((m) => m.type !== "vendor");
     if (mine.length) tags.push(el("span", { class: "wtag mine", title: mine.map((m) => m.label).join(", ") }, t("wl.tag.mine")));
     else if (it.mine.length) tags.push(el("span", { class: "wtag vendor", title: it.mine.map((m) => m.label).join(", ") }, t("wl.tag.vendor")));
@@ -343,9 +429,82 @@ export class Welt {
         thumb(it.image, "nthumb", initials(it.source.name)),
         el("span", { class: "nbody" },
           el("span", { class: "ntitle", lang: it.lang || null }, it.title),
-          el("span", { class: "nmeta" }, it.source.tier === "gov" ? el("span", { class: "gov" }, t("wl.gov")) : null, it.source.name, " · ", ago(it.latest),
+          el("span", { class: "nmeta" }, this.tierBadge(it.source.tier), it.source.name, " · ", ago(it.latest),
             it.n > 1 ? ` · ${t("wl.n_sources", { n: num(it.sources.length), r: num(it.n) })}` : ""),
           tags.length ? el("span", { class: "ntags" }, tags) : null)));
+  }
+
+  /** Badge of a source tier: authorities and the unverified worldwide press are marked. */
+  tierBadge(tier) {
+    if (tier === "gov") return el("span", { class: "gov" }, t("wl.gov"));
+    if (tier === "web") return el("span", { class: "gov web", title: t("wl.web_title") }, t("wl.web"));
+    return null;
+  }
+
+  // --- internet blocking (OONI, shutdowns) -----------------------------------------------------------------------------
+  async loadBlocking() {
+    const days = this.f.days;
+    const b = this.blocking;
+    if (b?.days === days && (b.loading || (b.data && Date.now() - b.at < BLOCKING_TTL))) return;
+    this.blocking = { days, loading: true, data: b?.days === days ? b.data : null, at: b?.at || 0 };
+    try {
+      const data = await api(`api/welt/blocking?days=${days}`);
+      if (this.blocking.days !== days) return; // the period changed meanwhile
+      this.blocking = { days, data, at: Date.now() };
+      const info = {};
+      for (const r of data.countries) if (ccOk(r.cc)) info[r.cc] = { confirmed: r.confirmed, anomaly_pct: r.measurements >= OONI_MIN ? r.anomaly_pct : null };
+      const shutdown = data.shutdowns.flatMap((x) => x.countries).filter(ccOk);
+      for (const cc of shutdown) info[cc] = { ...(info[cc] || {}), shutdown: true };
+      this.map.setWeltBlocking({ shutdown, confirmed: data.countries.filter((r) => r.confirmed > 0).map((r) => r.cc), info, days: data.ooni_days });
+    } catch (e) {
+      if (this.blocking.days === days) this.blocking = { days, error: e.message, data: this.blocking.data, at: this.blocking.at };
+    }
+    if (this.active && this.tab === "block") this.renderTab();
+  }
+
+  renderBlock(node) {
+    const b = this.blocking;
+    if (!b || b.days !== this.f.days || (b.loading && !b.data)) {
+      kids(node, el("p", { class: "state" }, t("wl.loading")));
+      this.loadBlocking();
+      return;
+    }
+    if (b.error && !b.data) {
+      kids(node, el("p", { class: "state err" }, t("common.error", { msg: b.error })));
+      return;
+    }
+    const d = b.data;
+    const links = (cc) => el("span", { class: "blk-links" },
+      safeLink(`https://explorer.ooni.org/country/${cc}`, "OONI"), " ", safeLink(`https://ioda.inetintel.cc.gatech.edu/country/${cc}`, "IODA"));
+    const ccCell = (cc) => el("button", { type: "button", class: "link", onclick: () => this.pickCountry(cc) }, countryName(cc));
+    const shut = d.shutdowns.filter((x) => x.countries.some(ccOk));
+    const shutList = shut.length
+      ? el("ul", { class: "plain blk-shut" }, shut.slice(0, 30).map((x) => el("li", {},
+        ...x.countries.filter(ccOk).flatMap((cc, i) => [i ? ", " : null, ccCell(cc)]),
+        el("span", { class: "muted" }, ` · ${causeLabel(x.cause)} · ${dateTime(x.start)} – ${x.end ? dateTime(x.end) : t("wl.block_ongoing")} `),
+        safeLink(x.url, "↗"))))
+      : el("p", { class: "empty" }, t("wl.block_shut_none"));
+    const rows = d.countries.filter((r) => ccOk(r.cc) && (r.confirmed > 0 || r.measurements >= OONI_MIN));
+    const rest = d.countries.length - rows.length;
+    // compact for the side panel: the number of measurements and the links go under the country
+    // compact for the side panel: measurements and links under the country, previous period and messengers under the share
+    const table = rows.length ? el("table", { class: "res blk" },
+      el("thead", {}, el("tr", {}, [t("wl.block_c.country"), t("wl.block_c.confirmed"), t("wl.block_c.anomaly")]
+        .map((h, i) => el("th", { class: i ? "num" : null }, h)))),
+      el("tbody", {}, rows.slice(0, 60).map((r) => el("tr", {},
+        el("td", {}, ccCell(r.cc), el("div", { class: "muted" }, `${num(r.measurements)} ${t("wl.block_c.measured")} · `, links(r.cc))),
+        el("td", { class: `num${r.confirmed > 0 ? " bad-txt" : ""}` }, num(r.confirmed)),
+        el("td", { class: "num" }, pct(r.anomaly_pct),
+          r.anomaly_pct_prev !== null && r.anomaly_pct_prev !== undefined ? el("div", { class: "muted" }, t("wl.block_prev", { p: pct(r.anomaly_pct_prev) })) : null,
+          r.im_measurements ? el("div", { class: "muted" }, t("wl.block_im", { p: pct(r.im_anomaly_pct) })) : null))))) : el("p", { class: "empty" }, t("wl.block_ooni_none"));
+    kids(node,
+      el("h3", { class: "tp-h" }, t("wl.block_h")),
+      el("p", { class: "note" }, t("wl.block_lead")),
+      el("h3", { class: "tp-h" }, t("wl.block_shut_h")), shutList,
+      el("h3", { class: "tp-h" }, t("wl.block_ooni_h", { d: num(d.ooni_days) })),
+      d.enabled ? table : el("p", { class: "note" }, t("wl.block_off")),
+      d.enabled && rest > 0 ? el("p", { class: "note" }, t("wl.block_more", { n: num(rest) })) : null,
+      el("ul", { class: "plain method" }, ["wl.block_m1", "wl.block_m2", "wl.block_m3", "wl.block_m4"].map((k) => el("li", {}, t(k)))));
   }
 
   renderActors(node) {
@@ -390,10 +549,10 @@ export class Welt {
     const enabled = Boolean(this.status?.ai?.enabled);
     const scope = `welt:${this.f.days}`;
     const out = el("div", { class: "ai-out" });
-    const run = el("button", { type: "button", class: "primary", disabled: !enabled }, t("wl.brief_run", { d: num(this.f.days) }));
+    const run = el("button", { type: "button", class: "primary admin-only", disabled: !enabled }, t("wl.brief_run", { d: num(this.f.days) }));
     const q = el("input", { type: "text", maxlength: 600, placeholder: t("wl.brief_q"), "aria-label": t("wl.brief_q") });
     const ask = el("button", { type: "submit", disabled: !enabled }, t("ai.ask"));
-    const form = el("form", { class: "ai-ask" }, q, ask);
+    const form = el("form", { class: "ai-ask admin-only" }, q, ask);
     let current = null, thread = [];
     const show = () => { destroyIn(out); kids(out, reportArticle(current, thread, { onFollowup: (fm) => follow(fm) })); };
     const follow = async (fm) => {
@@ -440,11 +599,11 @@ export class Welt {
       el("h3", { class: "tp-h" }, t("wl.sources_h")),
       el("table", { class: "res srcs" }, el("tbody", {}, srcs.map((s) => el("tr", {},
         el("td", {}, el("i", { class: `dot ${s.ok === true ? "ok" : s.ok === false ? "fail" : ""}`, "aria-hidden": "true" }), s.name,
-          s.tier === "gov" ? el("span", { class: "gov" }, t("wl.gov")) : null),
+          this.tierBadge(s.tier)),
         el("td", { class: "num" }, t("wl.src_items", { n: num(s.items_7d) })),
         el("td", { class: s.ok === false ? "warn-txt" : "muted" }, s.ok === false ? feedError(s) : s.last_ok ? ago(s.last_ok) : t("st.not_fetched")))))),
       el("h3", { class: "tp-h" }, t("wl.method_h")),
-      el("ul", { class: "plain method" }, ["wl.method1", "wl.method2", "wl.method3", "wl.method4"].map((k) => el("li", {}, t(k)))));
+      el("ul", { class: "plain method" }, ["wl.method1", "wl.method2", "wl.method3", "wl.method4", "wl.method5", "wl.method6"].map((k) => el("li", {}, t(k)))));
   }
 
   // --- drawer: one report in its context ------------------------------------------------------------------------------
@@ -517,8 +676,11 @@ export class Welt {
       if (pair.radar.some((v) => v !== null && v !== undefined)) pairCanvas = el("canvas", { role: "img", "aria-label": t("wl.d.pair_aria", { o: pair.origin, t: pair.target }) });
     }
     for (const c of it.cve_info || []) {
-      data.push([c.cve, [c.kev ? t("wl.d.kev", { d: dateOnly(c.kev_added) }) : t("wl.d.no_kev"), c.epss !== null && c.epss !== undefined ? ` · EPSS ${dec2(c.epss)}` : "",
-        c.ransomware ? ` · ${t("wl.d.ransom")}` : ""].join("")]);
+      const xp = (c.exploits || []).map((x) => ({ metasploit: "Metasploit", nuclei: "Nuclei" })[x]).filter(Boolean);
+      data.push([c.cve, [c.kev ? t("wl.d.kev", { d: dateOnly(c.kev_added) }) : t("wl.d.no_kev"),
+        c.euvd ? ` · ${t("wl.d.euvd", { d: dateOnly(c.euvd_exploited) })}` : "",
+        c.epss !== null && c.epss !== undefined ? ` · EPSS ${dec2(c.epss)}` : "",
+        c.ransomware ? ` · ${t("wl.d.ransom")}` : "", xp.length ? ` · ${t("wl.d.exploit", { list: xp.join(", ") })}` : ""].join("")]);
     }
     for (const m of it.malware_info || []) data.push([m.name, t("wl.d.c2", { n: num(m.c2_30d) })]);
     const mineReal = it.mine.filter((m) => m.type !== "vendor");
@@ -526,7 +688,7 @@ export class Welt {
     const mineLink = (m) => (m.type === "domain" ? el("a", { href: href(routes.asset(m.id)) }, m.label) : el("a", { href: href(routes.product(m.id)) }, m.label));
     const enabled = Boolean(this.status?.ai?.enabled);
     const aiOut = el("div", { class: "ai-out" });
-    const aiBtn = el("button", { type: "button", disabled: !enabled, title: enabled ? t("wl.d.ai_title") : t("an.ai_off") }, t("wl.d.ai"));
+    const aiBtn = el("button", { type: "button", class: "admin-only", disabled: !enabled, title: enabled ? t("wl.d.ai_title") : t("an.ai_off") }, t("wl.d.ai"));
     aiBtn.addEventListener("click", () => this.aiNews(it, aiBtn, aiOut));
     const target = it.countries[0] || it.origin;
     const firstObj = it.actor_info?.[0] ? ["actor", it.actor_info[0].canonical || it.actor_info[0].name] : it.cves[0] ? ["cve", it.cves[0]]
@@ -536,7 +698,7 @@ export class Welt {
       img ? this.figure(img, it.image_source || it.source.name) : null,
       el("header", { class: "dhead" },
         el("h2", { lang: it.lang || null }, it.title),
-        el("p", { class: "nmeta" }, it.source.tier === "gov" ? el("span", { class: "gov" }, t("wl.gov")) : null, it.source.name, " · ", dateTime(it.published), " · ",
+        el("p", { class: "nmeta" }, this.tierBadge(it.source.tier), it.source.name, " · ", dateTime(it.published), " · ",
           safeLink(it.url, t("wl.d.open")) || ""),
         it.summary ? el("p", { class: "dlead", lang: it.lang || null }, it.summary) : null),
       sect(t("wl.d.class"),
@@ -546,6 +708,8 @@ export class Welt {
           ...actorRows]),
         el("p", { class: "note" }, t("wl.d.auto"))),
       same,
+      this.checksSection(it.checks, sect),
+      this.cablesSection(it.cable_info, sect),
       sect(t("wl.d.data"), data.length ? kv(data) : el("p", { class: "note" }, t("wl.d.data_none")),
         pairCanvas ? el("div", { class: "chart-box small" }, pairCanvas) : null,
         pair ? el("p", { class: "note" }, t("wl.d.pair_note")) : null),
@@ -575,6 +739,32 @@ export class Welt {
       }).catch(() => {});
     }
     return nodes.filter(Boolean);
+  }
+
+  /** Comparison with our own measurements (corroborate.py): each check with its result and the numbers behind it. */
+  checksSection(chk, sect) {
+    if (!chk || !VERDICTS.includes(chk.verdict)) return null;
+    const checks = (chk.checks || []).filter((c) => CHECK_TYPES.includes(c.type) && VERDICTS.includes(c.result));
+    if (!checks.length) return null;
+    return sect(t("wl.chk.h"),
+      el("p", { class: `chk-verdict ${chk.verdict}` }, t(`wl.chk.v.${chk.verdict}`)),
+      el("ul", { class: "chk-list" }, checks.map((c) => el("li", {},
+        el("span", { class: `chk-r ${c.result}` }, t(`wl.chk.r.${c.result}`)),
+        el("span", { class: "chk-body" }, el("strong", {}, this.checkTitle(c)), el("span", { class: "chk-detail" }, ...this.checkLines(c)))))),
+      el("p", { class: "note" }, t("wl.chk.note")));
+  }
+
+  checkTitle(c) { return checkTitle(c); }
+
+  checkLines(c) { return checkLines(c); }
+
+  /** Submarine cables named in the report (TeleGeography dataset). */
+  cablesSection(cables, sect) {
+    if (!cables?.length) return null;
+    return sect(t("wl.d.cables"),
+      el("ul", { class: "plain cable-list" }, cables.map((c) => el("li", {}, el("strong", {}, c.name),
+        el("span", { class: "muted" }, ` · ${(c.countries || []).filter(ccOk).map(countryName).join(", ")}${c.rfs ? ` · ${t("wl.d.cable_rfs", { rfs: c.rfs })}` : ""}`)))),
+      el("p", { class: "note" }, t("wl.d.cables_note")));
   }
 
   /** To the Cyberlage with this country: it becomes the focus here, so the Cyberlage takes it over as context. */

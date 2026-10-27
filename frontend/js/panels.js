@@ -278,7 +278,8 @@ export function renderLegend(info, { historicalDay, stamp } = {}) {
     parts.push(el("span", {}, t("legend.no_data", { label: info.meta.label })));
   }
   parts.push(el("span", { class: "lg-sym" }, el("i", { class: "sw sw-infra", "aria-hidden": "true" }), t("legend.outage"),
-    el("i", { class: "sw sw-diamond", "aria-hidden": "true" }), t("legend.bgp"), el("i", { class: "sw sw-square", "aria-hidden": "true" }), t("legend.anomaly")));
+    el("i", { class: "sw sw-diamond", "aria-hidden": "true" }), t("legend.bgp"), el("i", { class: "sw sw-square", "aria-hidden": "true" }), t("legend.anomaly"),
+    ...(info.cloud ? [el("i", { class: "sw sw-cloud", "aria-hidden": "true" }), t("legend.cloud_short")] : [])));
   if (stamp) parts.push(el("span", { class: "lg-stamp" }, stamp));
   kids(box, ...parts);
 }

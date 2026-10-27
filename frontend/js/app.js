@@ -1,21 +1,31 @@
-// Emberwatch web interface. Four areas, switched by the hash router (router.js):
-//   CYBERLAGE  world map with attack data: layers, key figures, side panel (today, rankings, patterns, Gemini), map tools
-//   WELTLAGE   the same map in indigo with security reports, actors and country pairs (welt.js)
+// Emberwatch web interface. Six areas, switched by the hash router (router.js):
+//   CYBERLAGE  world map with attack data: layers, key figures, side panel (today, rankings, patterns, Gemini, company
+//              behind an IP address), map tools
+//   WELTLAGE   the same map in indigo with security reports, actors, country pairs and the Telegram window (welt.js,
+//              telegram.js)
+//   PERSONEN   the map in black and white: people search with cases and the link graph (personen.js, administrators)
 //   ANALYSE    object pages, tool box, deep views, run history (analyse.js)
 //   MEIN NETZ  overview, own IPs, assets, products, alerts, logs (netz.js, assets.js)
-// The selected country and the period carry over between Cyberlage and Weltlage.
+//   KONTO      own account; users and audit log for administrators (konto.js, opened from the user menu)
+// The selected country and the period carry over between Cyberlage and Weltlage. The role of the account (session.js)
+// decides what is offered; the server checks it on every request.
 import { AIPanel } from "./ai.js";
 import { Analyse } from "./analyse.js";
 import { hideCountry, renderCountry } from "./country.js";
 import { applyStatic, t } from "./i18n.js";
+import { Konto, renderUserMenu } from "./konto.js";
 import { initPanels, initShortcuts, renderSettings, renderStatusDots, renderStatusPanel, setCollapsed } from "./layout.js";
 import { Emberwatch } from "./map.js";
 import { MapTools } from "./maptools.js";
 import { Netz } from "./netz.js";
+import { Owner } from "./owner.js";
 import { Palette } from "./palette.js";
 import { renderKpis, renderLegend, renderPatterns, renderTab, renderToday } from "./panels.js";
+import { Personen } from "./personen.js";
 import { AREAS, go, MAP_AREAS, onRoute, routes, start as startRouter } from "./router.js";
 import { Search } from "./search.js";
+import { accounts, isAdmin, loadSession, me } from "./session.js";
+import { TelegramWindow } from "./telegram.js";
 import { Timeline } from "./timeline.js";
 import { api, dateTime, el, kids, loadCentroids, num } from "./util.js";
 import { Welt } from "./welt.js";
@@ -23,10 +33,11 @@ import { initWindows } from "./windows.js";
 
 const REFRESH_MS = 5 * 60 * 1000;
 const TOOLBAR_KEY = "emberwatch.maptools";
+const MODE = { lage: "cyber", welt: "welt", personen: "osint" }; // colour mode of the map per map area
 const boot = window.EmberBoot || { step() {}, progress() {}, done() {} };
 const state = {
   ov: null, victims: [], status: null, alerts: null, today: null, tab: "targets", side: "today", country: null, historical: null, area: "lage",
-  mapArea: "lage", // the map view shown last (Cyberlage or Weltlage)
+  mapArea: "lage", // the map view shown last (Cyberlage, Weltlage or Personen)
   c2Filter: { days: 30, source: "all", minConf: 0, family: null }, families: [], stamp: "–",
 };
 
@@ -50,11 +61,14 @@ const store = (key, v) => { try { localStorage.setItem(key, v); } catch { /* ign
 async function main() {
   applyStatic();
   boot.step(t("boot.init"), "ok");
+  boot.progress(0.05);
+  await loadSession(); // the role decides what is offered; without a session api() sends to the login page
+  boot.step(accounts() ? t("boot.user", { name: me.name || "–", role: t(`acct.role.${me.role}`) }) : t("boot.proxy"), "ok");
   boot.progress(0.1);
   await waitForLibs();
   await loadCentroids();
   initPanels();
-  initWindows(["side", "panel-tools"]);
+  initWindows(["side", "panel-tools", "panel-graph", "panel-tg"]);
   // header and mode band heights vary with width and language: panels and pages start below them
   const header = document.querySelector(".hud-top");
   const band = document.getElementById("modebar");
@@ -71,7 +85,7 @@ async function main() {
 
   boot.step(t("boot.map"), "run");
   const map = new Emberwatch(document.getElementById("map"), {
-    onCountry: (cc) => (state.area === "welt" ? welt.pickCountry(cc) : selectCountry(cc)),
+    onCountry: (cc) => (state.area === "welt" ? welt.pickCountry(cc) : state.area === "personen" ? personen.pickCountry(cc) : selectCountry(cc)),
     onIp: (ip) => mapTool("ipinfo", ip),
   });
   await map.ready;
@@ -81,6 +95,9 @@ async function main() {
   const ai = new AIPanel({ onShow: () => setSide("ai") });
   const statusPanel = document.getElementById("status-panel");
   const settingsPanel = document.getElementById("settings-panel");
+  const userPanel = document.getElementById("user-panel");
+  const userBtn = document.getElementById("btn-user");
+  const popovers = [statusPanel, settingsPanel, userPanel];
 
   // --- map tool bar (Cyberlage, on demand) ------------------------------------------------------------------------
   const toolbar = document.getElementById("maptools");
@@ -90,7 +107,7 @@ async function main() {
     toolbarBtn.setAttribute("aria-pressed", String(on));
     if (persist) store(TOOLBAR_KEY, on ? "1" : "0");
   }
-  showToolbar(stored(TOOLBAR_KEY, "0") === "1", false);
+  showToolbar(isAdmin() && stored(TOOLBAR_KEY, "0") === "1", false); // the tools run on the server: administrators only
   toolbarBtn.addEventListener("click", () => {
     showToolbar(toolbar.hidden);
     if (!toolbar.hidden) maptools.focus();
@@ -108,8 +125,9 @@ async function main() {
     }));
   }
 
-  /** Runs a map tool (Cyberlage) with a target. */
+  /** Runs a map tool (Cyberlage) with a target; readers get the object page instead. */
   function mapTool(tool, target) {
+    if (!isAdmin()) { go(routes.obj("ip", target)); return; }
     if (state.area !== "lage") go("lage");
     showToolbar(true);
     maptools.open(tool, target, true);
@@ -118,20 +136,25 @@ async function main() {
   /** Tool from the palette or a link: map tools stay on the map, everything else runs in the tool box. */
   function runTool(toolId, target) {
     const tool = (maptools.reg || {}).byId?.[toolId];
-    if (tool?.bar && state.area === "lage") { showToolbar(true); maptools.open(toolId, target, true); } else go(routes.tools(target, toolId, true));
+    if (tool?.bar && state.area === "lage" && isAdmin()) { showToolbar(true); maptools.open(toolId, target, true); } else go(routes.tools(target, toolId, true));
   }
 
   const analyse = new Analyse({ nav: document.getElementById("an-nav"), main: document.getElementById("an-main"), onMap: showOnMap });
   const netz = new Netz({ nav: document.getElementById("nz-nav"), main: document.getElementById("nz-main"), onMap: showOnMap, onChange: () => refresh() });
+  const konto = new Konto({ nav: document.getElementById("ko-nav"), main: document.getElementById("ko-main") });
   const palette = new Palette({ onTool: runTool });
   const welt = new Welt({
     map,
     onCyber: () => go("lage"), // the country comes along as context (enterCyber)
     onMap: () => { if (state.area !== "welt") go("welt"); },
   });
+  const telegram = new TelegramWindow({ map, onMap: () => { if (state.area !== "welt") go("welt"); } });
+  const personen = new Personen({ map });
+  const owner = new Owner({ box: document.getElementById("tp-owner"), onMap: (m, label) => showOnMap(m, label),
+    onClear: () => { map.clearTool(); note.hidden = true; } });
 
   // --- side panel (Cyberlage) ---------------------------------------------------------------------------------------
-  const sidePanels = { today: "tp-today", rank: "tp-rank", patterns: "tp-patterns", ai: "tp-ai" };
+  const sidePanels = { today: "tp-today", rank: "tp-rank", patterns: "tp-patterns", ai: "tp-ai", owner: "tp-owner" };
   function setSide(tab) {
     state.side = tab;
     setCollapsed("side", false);
@@ -163,13 +186,12 @@ async function main() {
   }
 
   // --- areas --------------------------------------------------------------------------------------------------------
-  const pages = { analyse: document.getElementById("area-analyse"), netz: document.getElementById("area-netz") };
+  const pages = { analyse: document.getElementById("area-analyse"), netz: document.getElementById("area-netz"), konto: document.getElementById("area-konto") };
+  const leaving = { analyse: () => analyse.leave(), netz: () => netz.leave(), konto: () => konto.leave(),
+    welt: () => { welt.leave(); telegram.leave(); }, personen: () => personen.leave() };
   function setArea(area) {
     if (state.area === area) return;
-    const prev = state.area;
-    if (prev === "analyse") analyse.leave();
-    if (prev === "netz") netz.leave();
-    if (prev === "welt") welt.leave();
+    leaving[state.area]?.();
     state.area = area;
     for (const a of AREAS) document.body.classList.toggle(`area-${a}`, a === area);
     for (const [a, node] of Object.entries(pages)) node.hidden = a !== area;
@@ -177,36 +199,47 @@ async function main() {
     const onMap = MAP_AREAS.includes(area);
     map.pause(!onMap);
     if (onMap) {
-      const mode = area === "welt" ? "welt" : "cyber";
-      document.body.classList.toggle("mode-welt", mode === "welt");
-      document.body.classList.toggle("mode-cyber", mode === "cyber");
+      const mode = MODE[area];
+      for (const m of Object.values(MODE)) document.body.classList.toggle(`mode-${m}`, m === mode);
       map.setMode(mode);
       band.scrollLeft = 0; // small screens: the band scrolls; start at its beginning in each mode
       if (mode === "cyber") enterCyber(state.mapArea); // also after a detour: Weltlage → Analyse → Cyberlage
       state.mapArea = area;
     }
-    statusPanel.hidden = true;
-    settingsPanel.hidden = true;
+    for (const p of popovers) p.hidden = true;
+    userBtn.setAttribute("aria-expanded", "false");
   }
 
-  /** Back in the Cyberlage: take over the country of the Weltlage, the period for the C2 filter. */
+  /** Back in the Cyberlage: take over the country of the Weltlage, the period for the C2 filter; draw its legend again. */
   function enterCyber(prevMap) {
-    if (prevMap !== "welt") return;
-    const ctx = welt.context();
-    if (ctx.days) setC2({ days: Math.min(30, ctx.days) });
-    state.c2DaysUser = false; // carried over from the Weltlage: only a new choice here goes back
-    if (ctx.country && ctx.country !== state.country) selectCountry(ctx.country);
-    else if (!ctx.country && state.country) closeCountry();
-    else if (state.country) map.select(state.country);
+    if (prevMap === "lage") return;
+    if (prevMap === "welt") {
+      const ctx = welt.context();
+      if (ctx.days) setC2({ days: Math.min(30, ctx.days) });
+      state.c2DaysUser = false; // carried over from the Weltlage: only a new choice here goes back
+      if (ctx.country && ctx.country !== state.country) selectCountry(ctx.country);
+      else if (!ctx.country && state.country) closeCountry();
+      else if (state.country) map.select(state.country);
+    } else if (state.country) map.select(state.country);
     if (state.ov && !state.historical) applyLive();
-    else legend(); // the Weltlage legend must not stay (historical day: applyLive is skipped)
+    else legend(); // the legend of the other mode must not stay (historical day: applyLive is skipped)
   }
 
   onRoute((r) => {
+    if (r.area === "personen" && !isAdmin()) { go("lage"); return; } // readers: no personal data
     setArea(r.area);
     if (r.area === "analyse") analyse.show(r);
     else if (r.area === "netz") netz.show(r);
+    else if (r.area === "konto") konto.show(r);
+    else if (r.area === "personen") personen.show(r);
     else if (r.area === "welt") welt.show(r, { country: state.country, days: state.c2DaysUser ? state.c2Filter.days : null });
+    else if (r.area === "lage") {
+      const ip = (r.query.get("owner") || "").trim().slice(0, 60);
+      if (ip) {
+        setSide("owner");
+        owner.open(ip, { run: r.internal }); // a link from outside shows only what is stored; a lookup needs a click
+      }
+    }
   });
   document.querySelectorAll("#areas a").forEach((x) => (x.dataset.area === "lage" ? x.setAttribute("aria-current", "page") : null));
 
@@ -280,7 +313,8 @@ async function main() {
   });
 
   const search = new Search({
-    onCountry: (cc) => (state.area === "lage" ? selectCountry(cc) : state.area === "welt" ? welt.pickCountry(cc) : go(routes.obj("country", cc))),
+    onCountry: (cc) => (state.area === "lage" ? selectCountry(cc) : state.area === "welt" ? welt.pickCountry(cc)
+      : state.area === "personen" ? personen.pickCountry(cc) : go(routes.obj("country", cc))),
     onC2: (c) => {
       if (state.area !== "lage") go("lage");
       requestAnimationFrame(() => {
@@ -291,6 +325,7 @@ async function main() {
       });
     },
     onIp: (ip) => mapTool("ipinfo", ip),
+    onOwner: (ip) => go(routes.owner(ip)),
     onCve,
     onAsn: (asn) => go(routes.obj("asn", String(asn).replace(/^as/i, ""))),
     onWatchProduct: async (vendor, product) => {
@@ -308,48 +343,77 @@ async function main() {
     onOpenProducts: (id) => go(id ? routes.product(id) : "netz/products"),
   });
 
+  const closePopovers = () => {
+    for (const p of popovers) p.hidden = true;
+    userBtn.setAttribute("aria-expanded", "false");
+  };
   initShortcuts({
+    areas: isAdmin() ? ["lage", "welt", "personen", "analyse", "netz"] : ["lage", "welt", "analyse", "netz"],
     onPalette: () => palette.toggle(),
     onArea: (a) => go(a),
     onTools: () => {
-      if (state.area === "lage") { showToolbar(true); maptools.focus(); } else go(routes.tools());
+      if (state.area === "lage" && isAdmin()) { showToolbar(true); maptools.focus(); } else go(routes.tools());
     },
     onSearch: () => search.focus(),
     onEscape: () => {
-      maptools.close(); search.hide(); palette.close(); statusPanel.hidden = true; settingsPanel.hidden = true;
+      maptools.close(); search.hide(); palette.close(); closePopovers();
+      if (state.area === "personen") personen.escape();
       if (state.area === "welt" && !document.getElementById("news-drawer").hidden) go(routes.welt());
     },
     isMap: () => MAP_AREAS.includes(state.area),
   });
 
   // --- controls -----------------------------------------------------------------------------------------------------
-  for (const [id, layer] of [["lyr-arcs", "arcs"], ["lyr-c2", "c2"], ["lyr-ransom", "ransom"], ["lyr-infra", "infra"], ["lyr-cables", "cables"]]) {
+  for (const [id, layer] of [["lyr-arcs", "arcs"], ["lyr-c2", "c2"], ["lyr-ransom", "ransom"], ["lyr-infra", "infra"], ["lyr-cables", "cables"], ["lyr-cloud", "cloud"]]) {
     const cb = document.getElementById(id);
     map.setVisible(layer, cb.checked);
-    cb.addEventListener("change", () => map.setVisible(layer, cb.checked));
+    cb.addEventListener("change", () => {
+      map.setVisible(layer, cb.checked);
+      if (layer === "cloud" && state.area === "lage") legend();
+    });
   }
   const metric = document.getElementById("choro-metric");
   metric.addEventListener("change", () => {
     map.setMetric(metric.value);
     legend();
   });
-  const projBtn = document.getElementById("btn-projection");
-  projBtn.addEventListener("click", () => { projBtn.textContent = t(map.toggleProjection() === "globe" ? "btn.flat" : "btn.globe"); });
+  // one projection switch per mode band; all show the projection the next click leads to
+  const projBtns = [...document.querySelectorAll(".proj-btn")];
+  const syncProjection = () => { for (const b of projBtns) b.textContent = t(map.projection === "globe" ? "btn.flat" : "btn.globe"); };
+  for (const b of projBtns) b.addEventListener("click", () => { map.toggleProjection(); syncProjection(); });
+  syncProjection();
   document.getElementById("btn-palette").addEventListener("click", () => palette.open());
   document.getElementById("btn-alerts").addEventListener("click", () => go("netz/alerts"));
+
+  // user menu: own account, users and audit log (administrators), sign out; behind a proxy without sign-in
+  const shownName = accounts() ? me.name || "–" : t("acct.proxy_name");
+  userBtn.hidden = false;
+  document.getElementById("user-mark").textContent = shownName.slice(0, 1).toUpperCase();
+  document.getElementById("user-name").textContent = shownName;
+  document.getElementById("user-role").textContent = t(`acct.role.${me.role}`);
+  userBtn.title = t("acct.menu_title", { name: shownName, role: t(`acct.role.${me.role}`) });
+  const logout = async () => {
+    try { await api("api/auth/logout", { method: "POST" }); } catch { /* the session ends on the server side anyway */ }
+    window.location.assign("login");
+  };
+  userPanel.addEventListener("click", (e) => { if (e.target.closest("a")) closePopovers(); });
+
   const popover = (btn, panel, render) => {
     document.getElementById(btn).addEventListener("click", (e) => {
       e.stopPropagation();
-      for (const p of [statusPanel, settingsPanel]) if (p !== panel) p.hidden = true;
+      for (const p of popovers) if (p !== panel) p.hidden = true;
       panel.hidden = !panel.hidden;
+      userBtn.setAttribute("aria-expanded", String(panel === userPanel && !panel.hidden));
       if (!panel.hidden) render();
     });
   };
   const statusOpts = () => ({ basemapFailed: map.basemapFailed, stampText: state.stamp });
   popover("btn-status", statusPanel, () => state.status && renderStatusPanel(state.status, statusOpts()));
-  popover("btn-settings", settingsPanel, () => renderSettings(state.status));
+  popover("btn-settings", settingsPanel, () => renderSettings(state.status, { map }));
+  popover("btn-user", userPanel, () => renderUserMenu(userPanel, { onLogout: logout }));
   document.addEventListener("click", (e) => {
-    for (const p of [statusPanel, settingsPanel]) if (!p.hidden && !p.contains(e.target)) p.hidden = true;
+    for (const p of popovers) if (!p.hidden && !p.contains(e.target)) p.hidden = true;
+    if (userPanel.hidden) userBtn.setAttribute("aria-expanded", "false");
   });
   map.onFallback = () => { if (!statusPanel.hidden && state.status) renderStatusPanel(state.status, { ...statusOpts(), basemapFailed: true }); };
 
@@ -383,9 +447,10 @@ async function main() {
   async function refresh(first = false) {
     try {
       if (first) boot.step(t("boot.feeds"), "run");
-      const [ov, c2, victims, status, alertData, today] = await Promise.all([
+      const [ov, c2, victims, status, alertData, today, cloud] = await Promise.all([
         api("api/overview"), api("api/c2?days=30"), api("api/victims?days=7&limit=200"), api("api/status"),
         api("api/alerts?limit=1&min_severity=low"), api("api/today?limit=5").catch(() => ({ items: [] })),
+        api("api/platforms?active=true").catch(() => ({ incidents: [] })),
       ]);
       state.ov = ov;
       state.victims = victims;
@@ -395,8 +460,9 @@ async function main() {
       state.stamp = dateTime(ov.generated_at);
       state.families = [...new Set(c2.features.map((f) => f.properties.malware).filter(Boolean))].sort((a, b) => a.localeCompare(b));
       map.setC2(c2);
+      map.setCloud(cloud.incidents);
       if (!state.historical) applyLive();
-      if (state.area !== "welt") renderKpis(ov, status, { onTile: onKpi });
+      if (state.area === "lage") renderKpis(ov, status, { onTile: onKpi }); // the other map areas draw their own figures
       if (state.side === "rank") drawTab();
       renderPatterns(ov.patterns, selectCountry);
       renderToday(today, { onItem: onToday });
@@ -407,6 +473,8 @@ async function main() {
       analyse.setStatus(status);
       netz.setStatus(status);
       welt.setStatus(status);
+      konto.setStatus(status);
+      telegram.setStatus(status);
       if (!statusPanel.hidden) renderStatusPanel(status, statusOpts());
       if (first) {
         const src = status.sources || [];
@@ -415,6 +483,7 @@ async function main() {
         boot.step(`${t("boot.c2", { n: num(ov.c2.total) })} · ${t("boot.patterns", { n: num(ov.patterns.length) })} · ${t("boot.alerts", { n: num(ov.watch?.hits_7d || 0) })}`, "ok");
       } else if (state.area === "welt") {
         welt.load();
+        telegram.refresh();
       }
       await timeline.load();
     } catch (e) {
@@ -423,13 +492,13 @@ async function main() {
     }
   }
 
-  // leaving the Weltlage repaints the Cyberlage figures
+  // back in the Cyberlage: its figures replace those of the other map areas
   onRoute((r) => { if (r.area === "lage" && state.ov) renderKpis(state.ov, state.status, { onTile: onKpi }); });
 
   map.setC2Filter(state.c2Filter);
   await refresh(true);
-  // the address this interface is opened from (via the reverse proxy): sighting for "my IP"
-  api("api/myip/visit", { method: "POST" }).catch(() => {});
+  // the address this interface is opened from (via the reverse proxy): sighting for "my IP" (a change: administrators)
+  if (isAdmin()) api("api/myip/visit", { method: "POST" }).catch(() => {});
   startRouter();
   boot.progress(1);
   boot.step(t("boot.ready"), "ok");

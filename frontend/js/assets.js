@@ -2,10 +2,11 @@
 // reputation), watched products (KEV/NVD), log analysis and the alert list. Rendered into the page of the area.
 import { t } from "./i18n.js";
 import { alertItem } from "./panels.js";
-import { go, objLink, routes } from "./router.js";
+import { go, href, objLink, routes } from "./router.js";
+import { isAdmin } from "./session.js";
 import { ago, api, bytes, dateOnly, dateTime, dec1, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news"];
+const SOURCES = ["watch", "surface", "scan", "product", "ct", "typo", "bgp", "syslog", "rep", "myip", "news", "platform"];
 const label = (w) => (w.kind === "asn" ? `AS${w.value}` : w.value);
 const kindTag = (k) => el("span", { class: "kind" }, t(`as.kind.${k}`));
 const msg = (cls = "note") => el("p", { class: cls });
@@ -79,7 +80,7 @@ export class Assets {
     const consent = el("input", { type: "checkbox" });
     const consentRow = el("label", { class: "consent", hidden: true }, consent, t("as.consent"));
     scan.addEventListener("change", () => { consentRow.hidden = !scan.checked; });
-    const form = el("form", { class: "watch-form" }, value, lbl, el("button", { type: "submit", class: "primary" }, t("common.add")),
+    const form = el("form", { class: "watch-form admin-only" }, value, lbl, el("button", { type: "submit", class: "primary" }, t("common.add")),
       el("label", { class: "scan-opt", hidden: this.status && !this.status.scan?.enabled }, scan, t("as.scan_opt")), consentRow);
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -123,7 +124,7 @@ export class Assets {
       el("h2", { class: "page-title" }, t("nz.nav.assets")),
       el("p", { class: "lead" }, t("as.intro")),
       this.addForm(feedback), feedback,
-      el("div", { class: "btnrow" }, refresh, el("span", { class: "note" }, t("as.limit", { n: num(data.entries.length), max: num(data.max) }))),
+      el("div", { class: "btnrow" }, el("span", { class: "admin-only" }, refresh), el("span", { class: "note" }, t("as.limit", { n: num(data.entries.length), max: num(data.max) }))),
       rows.length ? el("ol", { class: "rank assets" }, rows) : el("p", { class: "empty" }, t("as.none")),
     );
   }
@@ -152,11 +153,11 @@ export class Assets {
     const head = el("div", { class: "detail-head" },
       el("a", { class: "btn", href: "#/netz/assets" }, `← ${t("nz.nav.assets")}`),
       el("h3", {}, kindTag(d.kind), objLink(d.kind === "asn" ? "asn" : d.kind, d.value, label(d))),
-      el("form", { class: "inline", onsubmit: async (e) => {
+      el("form", { class: "inline admin-only", onsubmit: async (e) => {
         e.preventDefault();
         try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { label: lblInput.value } }); setMsg(feedback, "✓"); this.changed(); } catch (err) { setMsg(feedback, err.message, true); }
       } }, lblInput, el("button", { type: "submit" }, t("as.d.save"))),
-      el("button", { type: "button", class: "danger", onclick: async () => {
+      el("button", { type: "button", class: "danger admin-only", onclick: async () => {
         if (!window.confirm(t("as.delete_q", { value: label(d) }))) return;
         try { await api(`api/watchlist/${id}`, { method: "DELETE" }); this.changed(); go("netz/assets"); } catch (err) { setMsg(feedback, err.message, true); }
       } }, t("common.delete")));
@@ -218,8 +219,8 @@ export class Assets {
         btn.disabled = true;
         try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: true, scan_ack: true } }); await this.render(); } catch (e) { btn.disabled = false; setMsg(scanMsg, e.message, true); }
       } }, t("as.d.scan_enable"));
-      return [...out, el("p", { class: "note" }, t("as.d.scan_off")), el("label", { class: "consent" }, consent, t("as.consent")),
-        el("div", { class: "btnrow" }, btn), scanMsg];
+      return [...out, el("p", { class: "note" }, t("as.d.scan_off")), el("label", { class: "consent admin-only" }, consent, t("as.consent")),
+        el("div", { class: "btnrow admin-only" }, btn), scanMsg];
     }
     const sd = d.scan_detail || {};
     const run = sd.run;
@@ -241,7 +242,7 @@ export class Assets {
       try { await api(`api/watchlist/${id}`, { method: "PATCH", json: { scan: false } }); await this.render(); } catch (e) { setMsg(scanMsg, e.message, true); }
     } }, t("as.d.scan_disable"));
     out.push(el("p", { class: "note" }, t("as.d.scan_note", { ports: num(st.ports), h: num(st.interval_h) })),
-      el("p", { class: "note" }, t("as.d.scan_inside")), el("div", { class: "btnrow" }, btnScan, btnOff), scanMsg);
+      el("p", { class: "note" }, t("as.d.scan_inside")), el("div", { class: "btnrow admin-only" }, btnScan, btnOff), scanMsg);
     if (progress) {
       out.push(el("p", { class: "state" }, t("as.d.scan_running", { done: num(progress.done), total: num(progress.total) })),
         el("progress", { max: progress.total || 1, value: progress.done }));
@@ -302,11 +303,11 @@ export class Assets {
 
   // --- products -----------------------------------------------------------------------------------
   async renderProducts() {
-    const data = await api("api/products");
+    const [data, pf] = await Promise.all([api("api/products"), api("api/platforms?active=true").catch(() => null)]);
     const feedback = msg();
     const vendor = el("input", { type: "text", maxlength: 60, placeholder: t("pr.vendor_ph"), "aria-label": t("pr.vendor_ph"), required: true });
     const product = el("input", { type: "text", maxlength: 80, placeholder: t("pr.product_ph"), "aria-label": t("pr.product_ph") });
-    const form = el("form", { class: "watch-form" }, vendor, product, el("button", { type: "submit", class: "primary" }, t("common.add")));
+    const form = el("form", { class: "watch-form admin-only" }, vendor, product, el("button", { type: "submit", class: "primary" }, t("common.add")));
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
@@ -326,7 +327,28 @@ export class Assets {
       form, feedback,
       rows.length ? el("ol", { class: "rank" }, rows) : el("p", { class: "empty" }, t("pr.none")),
       el("p", { class: "note" }, t("pr.nvd_notice")),
+      pf?.enabled ? this.platformsBox(pf) : null,
     );
+  }
+
+  /** Cloud platforms in use: their new incidents raise alerts (platforms.py). */
+  platformsBox(pf) {
+    const feedback = msg();
+    const boxes = pf.providers.map((p) => el("input", { type: "checkbox", value: p.id, checked: p.used, disabled: !isAdmin() }));
+    const save = async () => {
+      boxes.forEach((b) => { b.disabled = true; });
+      try {
+        await api("api/platforms/used", { json: { providers: boxes.filter((b) => b.checked).map((b) => b.value) } });
+        setMsg(feedback, t("pf.saved"));
+      } catch (e) { setMsg(feedback, e.message, true); } finally { boxes.forEach((b) => { b.disabled = false; }); }
+    };
+    boxes.forEach((b) => b.addEventListener("change", save));
+    const active = pf.incidents.length;
+    return el("section", { class: "card wide pf-used" },
+      el("h3", {}, t("pf.used_h")), el("p", { class: "note" }, t("pf.used_note")),
+      el("div", { class: "pf-boxes" }, pf.providers.map((p, i) => el("label", { class: "pcheck" }, boxes[i], p.name, " ", safeLink(p.page, "↗")))),
+      active ? el("p", {}, el("a", { href: href(routes.view("platforms")) }, t("pf.active_n", { n: num(active) }))) : null,
+      feedback);
   }
 
   async watchProduct(vendor, product) {
@@ -343,10 +365,10 @@ export class Assets {
     const head = el("div", { class: "detail-head" },
       el("a", { class: "btn", href: "#/netz/products" }, `← ${t("nz.nav.products")}`),
       el("h3", {}, objLink("vendor", p.vendor, name)),
-      el("button", { type: "button", onclick: async () => {
+      el("button", { type: "button", class: "admin-only", onclick: async () => {
         try { await api(`api/products/${id}/check`, { method: "POST" }); setMsg(feedback, t("pr.check_started")); } catch (e) { setMsg(feedback, e.message, true); }
       } }, t("common.check_now")),
-      el("button", { type: "button", class: "danger", onclick: async () => {
+      el("button", { type: "button", class: "danger admin-only", onclick: async () => {
         if (!window.confirm(t("pr.delete_q", { name }))) return;
         try { await api(`api/products/${id}`, { method: "DELETE" }); this.changed(); go("netz/products"); } catch (e) { setMsg(feedback, e.message, true); }
       } }, t("common.delete")));
@@ -400,7 +422,8 @@ export class Assets {
     kids(this.body,
       el("h2", { class: "page-title" }, t("nz.nav.logs")),
       el("p", { class: "lead" }, t("lg.intro")),
-      file, zone, el("div", { class: "btnrow" }, go),
+      el("div", { class: "admin-only" }, file, zone, el("div", { class: "btnrow" }, go)),
+      el("p", { class: "note viewer-only" }, t("role.viewer_logs")),
       idx ? el("p", { class: "note" }, t("lg.indexes", { ips: num(idx.ips), domains: num(idx.domains), urls: num(idx.urls), drop: num(idx.drop), tor: num(idx.tor) })) : null,
       result,
       el("h4", {}, t("lg.syslog")),

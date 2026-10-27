@@ -3,14 +3,22 @@
 import { t } from "./i18n.js";
 import { detect, loadRegistry, objectOf } from "./registry.js";
 import { go, routes } from "./router.js";
+import { accounts, isAdmin } from "./session.js";
 import { el, kids } from "./util.js";
 
 const NAV = [
   ["lage", "pal.nav.lage"], ["welt", "pal.nav.welt"], ["analyse", "pal.nav.analyse"], [routes.tools(), "pal.nav.tools"], ["analyse/history", "pal.nav.history"],
-  [routes.view("kev"), "an.view.kev"], [routes.view("infra"), "an.view.infra"], [routes.view("c2"), "an.view.c2"], [routes.view("ransom"), "an.view.ransom"],
+  [routes.view("kev"), "an.view.kev"], [routes.view("infra"), "an.view.infra"], [routes.view("c2"), "an.view.c2"], [routes.view("ransom"), "an.view.ransom"], [routes.view("platforms"), "an.view.platforms"],
   ["netz", "pal.nav.netz"], ["netz/assets", "nz.nav.assets"], ["netz/products", "nz.nav.products"], ["netz/alerts", "nz.nav.alerts"],
   ["netz/logs", "nz.nav.logs"], ["netz/myip", "nz.nav.myip"],
 ];
+
+/** Destinations of the role: Personen, users and audit log only for administrators (users only with sign-in). */
+function navigation() {
+  const admin = isAdmin();
+  return [...NAV.slice(0, 2), ...(admin ? [["personen", "area.personen"]] : []), ...NAV.slice(2), ["konto", "acct.nav.me"],
+    ...(admin && accounts() ? [["konto/users", "acct.nav.users"]] : []), ...(admin ? [["konto/audit", "acct.nav.audit"]] : [])];
+}
 
 export class Palette {
   constructor({ onTool }) {
@@ -65,7 +73,7 @@ export class Palette {
     const seq = ++this.seq;
     const q = this.input.value.trim();
     const ql = q.toLowerCase();
-    const nav = NAV.map(([path, key]) => ({ label: t(key), kind: t("pal.k.go"), run: () => go(path) }))
+    const nav = navigation().map(([path, key]) => ({ label: t(key), kind: t("pal.k.go"), run: () => go(path) }))
       .filter((x) => !ql || x.label.toLowerCase().includes(ql));
     this.items = nav;
     this.idx = 0;
@@ -76,7 +84,8 @@ export class Palette {
     const dyn = [];
     // "<alias> <target>"
     const m = q.match(/^(\S+)\s+(.+)$/s);
-    if (reg && m) {
+    const admin = isAdmin(); // tools and recipes run on the server: administrators only
+    if (reg && m && admin) {
       const tool = reg.tools.find((x) => x.aliases.includes(m[1].toLowerCase()));
       if (tool && !tool.client_only) dyn.push({ label: `${tool.name}: ${m[2].trim().slice(0, 80)}`, kind: t("pal.k.tool"), run: () => this.onTool(tool.id, m[2].trim()) });
     }
@@ -85,7 +94,8 @@ export class Palette {
     if (seq !== this.seq) return;
     const o = objectOf(det);
     if (o) dyn.push({ label: `${t(`obj.type.${o.type}`)}: ${o.value}`, kind: t("pal.k.object"), run: () => go(routes.obj(o.type, o.value)) });
-    if (reg && det && det.type !== "empty") {
+    if (o?.type === "ip") dyn.push({ label: `${t("an.owner")} ${o.value}`, kind: t("pal.k.go"), run: () => go(routes.owner(o.value)) });
+    if (reg && det && det.type !== "empty" && admin) {
       const target = det.type === "mailhdr" ? q : det.value;
       for (const r of det.recipes || []) {
         const rec = reg.recipes.find((x) => x.id === r);

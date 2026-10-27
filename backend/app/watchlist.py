@@ -4,6 +4,8 @@ Matching against threat feeds (runs after every feed update):
 - C2 inventory (Feodo, ThreatFox): IP in network, AS number, domain/URL host
 - Infrastructure events (Cloudflare Radar): involved ASNs, for hijacks also affected prefixes
 - Ransomware victims: victim name equals the domain or a subdomain of it
+- Further network IOCs (3.3: ThreatFox payload/IOC URLs and domains, URLhaus malware URLs): host on the domain or a
+  subdomain of it, IP in the network (C2 entries are matched above and not twice)
 New hits become alerts (alerts.py); each hit is stored exactly once.
 """
 from __future__ import annotations
@@ -107,12 +109,53 @@ def scan(db: DB) -> list[int]:
     c2 = db.query("SELECT id, source, ioc, ip, port, malware, threat_type, asn, as_name, reference FROM c2")
     infra = db.query("SELECT id, kind, asns, prefixes, meta, url FROM infra_events")
     victims = db.query("SELECT id, victim, grp, permalink FROM victims")
+    iocs = db.query("SELECT id, ioc, ip, host, threat_type, malware, reference FROM iocs "
+                    "WHERE threat_type IS NULL OR threat_type != 'botnet_cc'")
+    by_host: dict[str, list[dict[str, Any]]] = {}
+    with_ip: list[tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, dict[str, Any]]] = []
+    for r in iocs:
+        if r["host"]:
+            by_host.setdefault(r["host"].lower().rstrip("."), []).append(r)
+        if r["ip"]:
+            try:
+                with_ip.append((ipaddress.ip_address(r["ip"]), r))
+            except ValueError:
+                pass
+    # IOC hosts per watched domain (each host is walked up its parent domains once)
+    watched = {w["value"] for w in entries if w["kind"] == "domain"}
+    on_domain: dict[str, list[dict[str, Any]]] = {}
+    for h, rs in by_host.items():
+        labels = h.split(".")
+        for i in range(len(labels) - 1):
+            parent = ".".join(labels[i:])
+            if parent in watched:
+                on_domain.setdefault(parent, []).extend(rs)
     new: list[int] = []
 
     def hit(w: dict[str, Any], sev: str, key: str, params: dict[str, Any], ref: str, url: str | None) -> None:
         if alerts.add(db, "watch", sev, key, {"asset": asset_label(w), **params}, f"{w['id']}:{ref}",
                       asset_id=w["id"], url=url):
             new.append(w["id"])
+
+    def ioc_hits(w: dict[str, Any], key: str, rows: list[dict[str, Any]]) -> None:
+        """Malware indicators (ThreatFox, URLhaus) of one asset: one alert for all new ones of a run, not one per URL
+        (a compromised host often serves a file per CPU architecture)."""
+        if not rows:
+            return
+        seen: set[str] = set()
+        for a in db.query("SELECT params FROM alerts WHERE source = 'watch' AND asset_id = ? AND key IN ('watch.ioc_ip', "
+                          "'watch.ioc_domain')", (w["id"],)):
+            try:
+                seen.update(str(x) for x in json.loads(a["params"] or "{}").get("ids") or [])
+            except (ValueError, AttributeError):
+                continue
+        fresh = [r for r in dict((str(r["id"]), r) for r in rows).values() if str(r["id"]) not in seen]
+        if not fresh:
+            return
+        first = fresh[0]
+        hit(w, "high", key, {"ioc": first["ioc"][:300], "threat": first["threat_type"] or "ioc", "malware": first["malware"],
+                             "n": len(fresh), "ids": [str(r["id"]) for r in fresh][:500]},
+            f"ioc:{first['id']}", first["reference"])
 
     for w in entries:
         kind, val = w["kind"], w["value"]
@@ -133,6 +176,7 @@ def scan(db: DB) -> list[int]:
                             break
                     except (ValueError, TypeError):
                         continue
+            ioc_hits(w, "watch.ioc_ip", [r for addr, r in with_ip if addr in net])
         elif kind == "asn":
             asn = int(val)
             for r in c2:
@@ -150,6 +194,7 @@ def scan(db: DB) -> list[int]:
             for v in victims:
                 if domain_match(host_of(v["victim"]), val):
                     hit(w, "high", "watch.leak_victim", {"group": v["grp"], "victim": v["victim"]}, f"rw:{v['id']}", v["permalink"])
+            ioc_hits(w, "watch.ioc_domain", on_domain.get(val, []))
     return new
 
 

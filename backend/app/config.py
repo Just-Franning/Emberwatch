@@ -113,8 +113,30 @@ def _cyberchef(raw: str) -> str:
     return v
 
 
+# Sources that SOURCES_DISABLE can switch off (unknown names are ignored)
+OPTIONAL_SOURCES = ("ooni", "gdelt", "attack", "euvd", "exploits", "urlhaus", "cloud_status")
+
+
+def _names(raw: str) -> frozenset[str]:
+    return frozenset(x.strip().lower() for x in raw.split(",") if x.strip().lower() in OPTIONAL_SOURCES)
+
+
 def _region(raw: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(c.strip().upper() for c in raw.split(",") if re.fullmatch(r"\s*[A-Za-z]{2}\s*", c)))
+
+
+def _user(raw: str) -> str:
+    """Login name of the first administrator (same rules as for every account, see auth.NAME_RE)."""
+    v = raw.strip().lower()
+    return v if re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,31}", v) else "admin"
+
+
+def _nominatim(raw: str) -> str:
+    """Base URL of a Nominatim instance (https only). "off" switches geocoding off."""
+    v = raw.strip().rstrip("/")
+    if v.lower() in ("off", "0", "none", "false"):
+        return ""
+    return v if re.fullmatch(r"https://[A-Za-z0-9.-]{3,253}(:\d{1,5})?(/[^\s\"'<>#?]{0,200})?", v) else "https://nominatim.openstreetmap.org"
 
 
 @dataclass(frozen=True)
@@ -211,9 +233,26 @@ class Settings:
     news_disable: str = ""
     news_retention_days: int = 90
 
+    # 3.3: further public sources, each can be switched off with SOURCES_DISABLE=ooni,gdelt,...
+    sources_disable: frozenset[str] = frozenset()
+
+    # 4.0: accounts, people search, Telegram, "who owns this IP"
+    auth_user: str = "admin"  # name of the first administrator (created once, on the first start of 4.x)
+    audit_retention_days: int = 365
+    osint_enabled: bool = True
+    osint_retention_days: int = 90
+    telegram_enabled: bool = True
+    telegram_interval: int = 15
+    telegram_retention_days: int = 90
+    nominatim_url: str = "https://nominatim.openstreetmap.org"  # "" = no geocoding of company addresses
+    gravatar_api_key: str = ""  # people search: Gravatar profile of an e-mail address (optional)
+
     @property
     def matrix_enabled(self) -> bool:
         return bool(self.matrix_homeserver and self.matrix_token and self.matrix_room)
+
+    def source_on(self, name: str) -> bool:
+        return name not in self.sources_disable
 
 
 def load() -> Settings:
@@ -313,4 +352,14 @@ def load() -> Settings:
         news_feeds=_str("NEWS_FEEDS"),
         news_disable=_str("NEWS_DISABLE"),
         news_retention_days=_int("NEWS_RETENTION_DAYS", 90, 7, 365),
+        sources_disable=_names(_str("SOURCES_DISABLE")),
+        auth_user=_user(_str("AUTH_USER", "admin")),
+        audit_retention_days=_int("AUDIT_RETENTION_DAYS", 365, 30, 3650),
+        osint_enabled=_bool("OSINT_ENABLED", True),
+        osint_retention_days=_int("OSINT_RETENTION_DAYS", 90, 1, 3650),
+        telegram_enabled=_bool("TELEGRAM_ENABLED", True),
+        telegram_interval=_int("TELEGRAM_INTERVAL_MIN", 15, 10, 24 * 60),
+        telegram_retention_days=_int("TELEGRAM_RETENTION_DAYS", 90, 7, 365),
+        nominatim_url=_nominatim(_str("NOMINATIM_URL", "https://nominatim.openstreetmap.org")),
+        gravatar_api_key=_str("GRAVATAR_API_KEY"),
     )

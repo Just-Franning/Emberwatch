@@ -356,6 +356,219 @@ CREATE TABLE IF NOT EXISTS actors (
     refs TEXT,
     updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS ooni (
+    cc TEXT NOT NULL,
+    day TEXT NOT NULL,
+    test TEXT NOT NULL,
+    measurements INTEGER NOT NULL,
+    anomalies INTEGER NOT NULL,
+    confirmed INTEGER NOT NULL,
+    failures INTEGER NOT NULL,
+    PRIMARY KEY (cc, day, test)
+);
+CREATE TABLE IF NOT EXISTS attack_objects (
+    stix_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    ext_id TEXT,
+    name TEXT NOT NULL,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    tactics TEXT NOT NULL DEFAULT '[]',
+    sub INTEGER NOT NULL DEFAULT 0,
+    sw_type TEXT,
+    ord INTEGER NOT NULL DEFAULT 0,
+    url TEXT
+);
+CREATE INDEX IF NOT EXISTS attack_objects_kind ON attack_objects(kind);
+CREATE TABLE IF NOT EXISTS attack_uses (
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    PRIMARY KEY (src, dst)
+);
+CREATE TABLE IF NOT EXISTS euvd (
+    cve TEXT PRIMARY KEY,
+    euvd_id TEXT,
+    exploited_since TEXT,
+    score REAL,
+    epss REAL,
+    vendor TEXT,
+    product TEXT,
+    published TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exploits (
+    cve TEXT NOT NULL,
+    source TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    name TEXT,
+    detail TEXT,
+    published TEXT,
+    PRIMARY KEY (cve, source, ref)
+);
+CREATE TABLE IF NOT EXISTS platform_incidents (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL,
+    impact TEXT,
+    started TEXT,
+    updated TEXT,
+    resolved TEXT,
+    regions TEXT NOT NULL DEFAULT '[]',
+    url TEXT,
+    summary TEXT,
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS platform_incidents_updated ON platform_incidents(updated);
+-- 4.0: accounts (auth.py). Passwords as scrypt hashes, TOTP secrets encrypted, sessions as SHA-256 of the cookie token
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,
+    pw_hash TEXT NOT NULL,
+    pw_changed TEXT NOT NULL,
+    must_change INTEGER NOT NULL DEFAULT 0,
+    totp_secret TEXT,
+    totp_last INTEGER NOT NULL DEFAULT 0,
+    recovery TEXT NOT NULL DEFAULT '[]',
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    created_by TEXT,
+    last_login TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    ip TEXT,
+    ua TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    user_id INTEGER,
+    user_name TEXT,
+    action TEXT NOT NULL,
+    target TEXT,
+    ip TEXT,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+-- 4.0: "who owns this IP" (owner/) and cached web lookups (imprints, geocoding)
+CREATE TABLE IF NOT EXISTS owner_cache (
+    ip TEXT NOT NULL,
+    active INTEGER NOT NULL,
+    fetched_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (ip, active)
+);
+CREATE TABLE IF NOT EXISTS web_cache (
+    key TEXT PRIMARY KEY,
+    fetched_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+-- 4.0: people search (personen/): cases, searches, hits, link graph
+CREATE TABLE IF NOT EXISTS osint_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    note TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS osint_searches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER NOT NULL REFERENCES osint_cases(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    query TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    sites INTEGER NOT NULL DEFAULT 0,
+    checked INTEGER NOT NULL DEFAULT 0,
+    found INTEGER NOT NULL DEFAULT 0,
+    unsure INTEGER NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS osint_searches_case ON osint_searches(case_id);
+CREATE TABLE IF NOT EXISTS osint_hits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    search_id INTEGER NOT NULL REFERENCES osint_searches(id) ON DELETE CASCADE,
+    site TEXT NOT NULL,
+    host TEXT NOT NULL,
+    source TEXT NOT NULL,
+    cat TEXT,
+    status TEXT NOT NULL,
+    url TEXT NOT NULL,
+    http_status INTEGER,
+    operator_cc TEXT,
+    operator_src TEXT,
+    profile TEXT,
+    checked_at TEXT NOT NULL,
+    UNIQUE(search_id, site)
+);
+CREATE TABLE IF NOT EXISTS osint_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER NOT NULL REFERENCES osint_cases(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    data TEXT NOT NULL DEFAULT '{}',
+    manual INTEGER NOT NULL DEFAULT 0,
+    x REAL,
+    y REAL,
+    created_at TEXT NOT NULL,
+    UNIQUE(case_id, kind, ref)
+);
+CREATE TABLE IF NOT EXISTS osint_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id INTEGER NOT NULL REFERENCES osint_cases(id) ON DELETE CASCADE,
+    src INTEGER NOT NULL REFERENCES osint_nodes(id) ON DELETE CASCADE,
+    dst INTEGER NOT NULL REFERENCES osint_nodes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    strength TEXT NOT NULL,
+    label TEXT,
+    evidence TEXT,
+    manual INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(case_id, src, dst, kind)
+);
+-- 4.0: public Telegram channels (telegram/), read from the web preview t.me/s/<channel>
+CREATE TABLE IF NOT EXISTS tg_channels (
+    name TEXT PRIMARY KEY,
+    title TEXT,
+    note TEXT,
+    added_at TEXT NOT NULL,
+    added_by TEXT,
+    last_fetch TEXT,
+    last_ok TEXT,
+    error TEXT,
+    last_post INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tg_posts (
+    channel TEXT NOT NULL,
+    post_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    text TEXT NOT NULL,
+    views INTEGER,
+    fwd TEXT,
+    links TEXT NOT NULL DEFAULT '[]',
+    countries TEXT NOT NULL DEFAULT '[]',
+    targets TEXT NOT NULL DEFAULT '[]',
+    kinds TEXT NOT NULL DEFAULT '[]',
+    proofs TEXT NOT NULL DEFAULT '[]',
+    checks TEXT,
+    translation TEXT,
+    translated_to TEXT,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (channel, post_id)
+);
+CREATE INDEX IF NOT EXISTS tg_posts_date ON tg_posts(date);
 """
 
 # (table, column, declaration) – applied with ALTER TABLE if the column is missing
@@ -366,6 +579,8 @@ MIGRATIONS = (
     ("watchlist", "scan", "INTEGER NOT NULL DEFAULT 0"),
     ("watchlist", "scan_ack", "TEXT"),
     ("news", "body", "TEXT"),  # text the recognition ran on (also used when it runs again)
+    ("news", "cables", "TEXT"),  # 3.3: submarine cables named in the report (ids of the cable map)
+    ("news", "checks", "TEXT"),  # 3.3: comparison with measurements (corroborate.py), refreshed every run
 )
 
 
@@ -444,6 +659,17 @@ class DB:
             try:
                 for sql, params in statements:
                     self._conn.execute(sql, tuple(params))
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def replace(self, steps: list[tuple[str, list[tuple[Any, ...]]]]) -> None:
+        """Runs executemany for each (sql, rows) atomically – e.g. delete a whole data set and insert the new one."""
+        with self._lock:
+            try:
+                for sql, rows in steps:
+                    self._conn.executemany(sql, rows)
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()

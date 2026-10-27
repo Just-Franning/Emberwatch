@@ -34,15 +34,17 @@ def main(src: Path) -> None:
     with urllib.request.urlopen(NE50, timeout=120) as r:
         ne = json.load(r)
     polys, isos, by_name = [], [], {}
-    for f in ne["features"]:
-        iso = f["properties"]["ISO_A2_EH"]
-        if iso in ("-99", None):
-            continue
+    feats_ne = [f for f in ne["features"] if f["properties"].get("ISO_A2_EH") not in ("-99", None)]
+    for f in feats_ne:
         polys.append(shape(f["geometry"]))
-        isos.append(iso)
-        for key in ("NAME", "NAME_LONG", "ADMIN", "SOVEREIGNT", "NAME_EN"):
-            if f["properties"].get(key):
-                by_name.setdefault(f["properties"][key].lower(), iso)
+        isos.append(f["properties"]["ISO_A2_EH"])
+    # The country's own names first; the sovereign state only as a fallback, otherwise "Finland" would match
+    # Åland (SOVEREIGNT "Finland") and "Denmark" Greenland, depending on the order of the features.
+    for keys in (("NAME", "NAME_LONG", "ADMIN", "NAME_EN"), ("SOVEREIGNT",)):
+        for f in feats_ne:
+            for key in keys:
+                if f["properties"].get(key):
+                    by_name.setdefault(f["properties"][key].lower(), f["properties"]["ISO_A2_EH"])
     tree = STRtree(polys)
 
     def country(lon: float, lat: float, name: str) -> str | None:

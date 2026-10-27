@@ -28,13 +28,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import alerts, analytics, i18n, nlp, watchlist
+from . import alerts, analytics, api_account, i18n, nlp, watchlist, webfetch
 from .actors import Actors
 from .ai import TASKS, Gemini, build_context
-from .auth import COOKIE, Auth
+from .attack import Attack
+from .auth import COOKIE, Auth, allowed
 from .bgp import BgpMonitor
 from .cables import Cables
-from .config import load
+from .config import OPTIONAL_SOURCES, load
 from .db import DB, open_path, utcnow
 from .domains import Domains
 from .geo import Geo
@@ -46,9 +47,20 @@ from .news import News
 from .notify import Notifier
 from .objects import TYPES as OBJ_TYPES
 from .objects import Objects, object_context
+from .owner import api as owner_api
+from .personen import api as personen_api
+from .personen.profiles import Locator
+from .personen.runner import Searcher
+from .personen.sites import SiteList
+from .personen.store import Store as OsintStore
+from .telegram import api as telegram_api
+from .telegram.monitor import Telegram
+from .owner.geocode import Geocoder
+from .owner.lookup import Owner
+from .platforms import Platforms
 from .products import Products
 from .reputation import Reputation
-from .sources import abusech, epss, infra, kev, radar, ransomware
+from .sources import abusech, epss, euvd, exploits, infra, kev, ooni, radar, ransomware
 from .surface import Surface
 from .tools import ToolKit
 from .toolbox import registry as tbreg
@@ -75,11 +87,20 @@ domains = Domains(S, db)
 bgp = BgpMonitor(S, db)
 matcher = Matcher(db, reputation)
 syslog = SyslogServer(S, db, matcher) if S.syslog_enabled else None
-auth = Auth(S)
+auth = Auth(S, db)
 myip = MyIP(S, db, geo, reputation, matcher, surface, toolkit)
 actors = Actors(db)
-news = News(S, db, actors, S.static_dir / "data" / "centroids.json")
-objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news)
+news = News(S, db, actors, S.static_dir / "data" / "centroids.json", cables)
+attack = Attack(db, S.data_dir)
+platforms = Platforms(db, geo, S.static_dir / "data")
+objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news, attack)
+geocoder = Geocoder(S, db)
+owner = Owner(db, geo, toolkit, geocoder)
+osint_sites = SiteList(S.data_dir, S.user_agent)
+osint_store = OsintStore(db, S.osint_retention_days)
+searcher = Searcher(S, osint_store, osint_sites, Locator(S.static_dir / "data" / "centroids.json",
+                                                        S.static_dir / "data" / "places.json"))
+telegram = Telegram(db, S.static_dir / "data" / "centroids.json", S.telegram_retention_days)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -246,11 +267,20 @@ class _ClientRef:
         return getattr(app.state.client, name)
 
 
+class _WebRef:
+    """Late-bound client for websites of third parties (app.state.web, see webfetch.py)."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(app.state.web, name)
+
+
 def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def c2_job() -> None:
         await geo.ensure(client)  # downloads only when missing or older than 30 days
         await abusech.collect_feodo(client, db, geo, S.user_agent, S.abusech_auth_key)
         await abusech.collect_threatfox(client, db, geo, S.user_agent, S.abusech_auth_key)
+        if S.source_on("urlhaus"):
+            await abusech.collect_urlhaus(client, db, S.user_agent, S.abusech_auth_key)
         abusech.prune(db, S.c2_retention_days, S.ioc_retention_days)
         await _after_update()
 
@@ -331,9 +361,39 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
             log.exception("actor list")
         await asyncio.to_thread(news.refresh_mine)  # new actor list, products or domains: recognise again
         await news.collect(client)
+        if news.web_enabled:
+            await news.collect_web(client)
+        await asyncio.to_thread(news.refresh_checks)  # compare with the measurements (they keep arriving)
+
+    async def ooni_job() -> None:
+        await ooni.collect(client, db, S.user_agent)
+
+    async def attack_job() -> None:
+        await attack.collect(client, S.user_agent)
+
+    async def euvd_job() -> None:
+        await euvd.collect(client, db, S.user_agent)
+
+    async def exploits_job() -> None:
+        await exploits.collect(client, db, S.user_agent)
+
+    async def platforms_job() -> None:
+        await platforms.collect(client, S.user_agent)
+
+    async def telegram_job() -> None:
+        await telegram.collect(_WebRef())  # type: ignore[arg-type]
+
+    async def osint_lists_job() -> None:
+        if osint_sites.due() and not searcher.running():
+            await osint_sites.refresh(client)
 
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
+        auth.prune()  # expired sessions, audit entries beyond AUDIT_RETENTION_DAYS
+        owner.prune()  # owner lookups after 7 days, cached imprints and coordinates after 90 days
+        for case in osint_store.prune():  # people search: cases without changes for OSINT_RETENTION_DAYS
+            auth.audit("osint_case_expired", target=case["name"])
+        telegram.prune()  # posts older than TELEGRAM_RETENTION_DAYS
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
@@ -348,6 +408,8 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "kev": kev_job, "epss": epss_job, "products": products_job, "reputation": reputation_job, "surface": surface_job,
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
         "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job, "news": news_job,
+        "ooni": ooni_job, "attack": attack_job, "euvd": euvd_job, "exploits": exploits_job, "platforms": platforms_job,
+        "osint_lists": osint_lists_job, "telegram": telegram_job,
     }
 
 
@@ -355,6 +417,8 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
 async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(follow_redirects=True, http2=False)
     app.state.client = client
+    # websites of third parties (imprints, people search, Telegram): only public addresses, see webfetch.py
+    app.state.web = webfetch.make_client(S.user_agent)
     app.state.jobs = jobs = job_fns(_ClientRef())
     tasks: list[asyncio.Task] = []
     if S.collectors:
@@ -368,13 +432,23 @@ async def lifespan(app: FastAPI):
         ]
         if news.enabled:
             plan.append(("news", S.news_interval, 30))
+        if S.osint_enabled:
+            plan.append(("osint_lists", 24 * 60, 480))  # downloads the site lists when they are a week old
+        if S.telegram_enabled:
+            plan.append(("telegram", S.telegram_interval, 160))
+        optional = (("ooni", 6 * 60, 200), ("attack", 7 * 24 * 60, 400), ("euvd", 12 * 60, 260),
+                    ("exploits", 24 * 60, 330), ("cloud_status", 10, 70))
+        for name, minutes, delay in optional:
+            if S.source_on(name):
+                plan.append(("platforms" if name == "cloud_status" else name, minutes, delay))
         tasks = [asyncio.create_task(_loop(name, minutes, jobs[name], delay)) for name, minutes, delay in plan]
         if S.bgp_live:
             tasks.append(asyncio.create_task(bgp.run(_ClientRef())))
     if syslog is not None:
         await syslog.start()
     log.info("Emberwatch %s started. Auth: %s, language: %s, Gemini: %s, Matrix: %s, tools: %s, scans: %s, syslog: %s, BGP live: %s",
-             S.version, S.auth_mode, S.language, "on" if ai.enabled else "off", "on" if notifier.enabled else "off",
+             S.version, f"{S.auth_mode} ({db.query('SELECT COUNT(*) AS n FROM users')[0]['n']} accounts)" if auth.enabled else S.auth_mode,
+             S.language, "on" if ai.enabled else "off", "on" if notifier.enabled else "off",
              "on" if S.tools_enabled else "off", "on" if S.scan_enabled else "off", "on" if syslog else "off",
              "on" if S.bgp_live else "off")
     try:
@@ -385,6 +459,7 @@ async def lifespan(app: FastAPI):
         if syslog is not None:
             await syslog.stop()
         await client.aclose()
+        await app.state.web.aclose()
 
 
 app = FastAPI(title="Emberwatch", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -425,8 +500,13 @@ CSP = (
     f"worker-src 'self'; connect-src 'self' {BASEMAP_HOST}; font-src 'self'; "
     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
-PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/api/auth/login", "/api/auth/status", "/favicon.svg",
-                "/styles.css", "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/boot.js",
+PUBLIC_PATHS = {"/healthz", "/login", "/login.html", "/favicon.svg", "/styles.css",
+                # sign-in steps (each checks its ticket; the session cookie is only set after the second factor)
+                "/api/auth/login", "/api/auth/status", "/api/auth/password", "/api/auth/enroll", "/api/auth/enroll/confirm",
+                "/api/auth/totp",
+                # the login page and the modules it imports (i18n.js loads all text catalogues)
+                "/js/login.js", "/js/i18n.js", "/js/texts.js", "/js/texts_welt.js", "/js/texts_33.js", "/js/texts_v4.js",
+                "/js/boot.js",
                 "/api/myip/report", "/nic/update"}  # the last two authenticate with their own token
 PUBLIC_PREFIXES = ("/vendor/fonts/",)
 MAX_BODY = 20 * 1024 * 1024  # JSON requests: mail analysis takes up to 15 MB of text (+ JSON escaping)
@@ -485,15 +565,20 @@ async def guard(request: Request, call_next):
         or (request.method not in ("GET", "HEAD", "OPTIONS") and not origin_ok(request))
     ):
         resp = JSONResponse({"detail": t(lang, "err.csrf"), "key": "err.csrf"}, 403)
-    elif auth.enabled and not public and not auth.valid(request.cookies.get(COOKIE)):
-        if path.startswith("/api/"):
-            resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
-        elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
-            resp = RedirectResponse("/login", 303)
-        else:
-            resp = PlainTextResponse("401 Unauthorized", 401)
     else:
-        resp = await call_next(request)
+        user = None if public else auth.session_user(request.cookies.get(COOKIE))  # AUTH_MODE=none: the proxy account
+        request.state.user = user
+        if not public and user is None:
+            if path.startswith("/api/"):
+                resp = JSONResponse({"detail": t(lang, "err.auth_required"), "key": "err.auth_required"}, 401)
+            elif request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
+                resp = RedirectResponse("/login", 303)
+            else:
+                resp = PlainTextResponse("401 Unauthorized", 401)
+        elif user is not None and not allowed(user["role"], request.method, path):
+            resp = JSONResponse({"detail": t(lang, "err.role"), "key": "err.role"}, 403)
+        else:
+            resp = await call_next(request)
     resp.headers["Content-Security-Policy"] = CSP
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "no-referrer"
@@ -540,43 +625,13 @@ async def http_error(request: Request, exc: StarletteHTTPException) -> Response:
     return JSONResponse({"detail": t(_lang(request), key), "key": key}, exc.status_code)
 
 
-# --- auth ------------------------------------------------------------------------------------------------
-class LoginIn(BaseModel):
-    password: str = Field(..., min_length=1, max_length=1024)
-
-
+# --- accounts: sign-in steps, own account, user administration (api_account.py) ----------------------------
 @app.get("/login")
 def login_page() -> FileResponse:
     return FileResponse(S.static_dir / "login.html", media_type="text/html")
 
 
-@app.get("/api/auth/status")
-def api_auth_status(request: Request) -> dict[str, Any]:
-    return {"mode": S.auth_mode, "authenticated": auth.valid(request.cookies.get(COOKIE)), "version": S.version}
-
-
-@app.post("/api/auth/login")
-async def api_login(request: Request, body: LoginIn) -> JSONResponse:
-    if not auth.enabled:
-        return JSONResponse({"ok": True})
-    client = request.client.host if request.client else "?"
-    wait = auth.locked_for(client)
-    if wait:
-        raise AppError("err.login_locked", 429, seconds=wait)
-    if not await asyncio.to_thread(auth.verify, body.password, client):
-        await asyncio.sleep(0.4)
-        raise AppError("err.login_failed", 401)
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(COOKIE, auth.issue(), max_age=S.session_hours * 3600, httponly=True, samesite="strict",
-                    secure=_secure(request), path="/")
-    return resp
-
-
-@app.post("/api/auth/logout")
-def api_logout(request: Request) -> JSONResponse:
-    resp = JSONResponse({"ok": True})
-    resp.delete_cookie(COOKIE, path="/", httponly=True, samesite="strict", secure=_secure(request))
-    return resp
+app.include_router(api_account.make_router(S, auth, _secure))
 
 
 # --- base data -------------------------------------------------------------------------------------------
@@ -616,7 +671,12 @@ def api_status(request: Request) -> dict[str, Any]:
         "history": {"radar_days_final": final_days, "backfill_target": S.backfill_days,
                     "ransomware_backfill": db.meta_get("ransomware_backfill") == "done"},
         "cables": cables.meta,
-        "news": {"enabled": news.enabled, "images": S.news_images, "sources": len(news.sources), "actors": actors.count()},
+        "news": {"enabled": news.enabled, "images": S.news_images, "sources": len(news.sources), "actors": actors.count(),
+                 "web": news.web_enabled},
+        "optional": {name: S.source_on(name) for name in OPTIONAL_SOURCES},
+        "attack": {"version": attack.version()},
+        "accounts": {"audit_days": S.audit_retention_days},
+        "v4": {"osint": S.osint_enabled, "telegram": S.telegram_enabled, "geocoding": bool(S.nominatim_url)},
         "keys": {
             "cloudflare": bool(S.cf_api_token), "abusech": bool(S.abusech_auth_key),
             "ransomware_live": bool(S.ransomware_live_api_key), "gemini": bool(S.gemini_api_key),
@@ -832,8 +892,8 @@ def _search_news(*, q: str | None = None, cve: str | None = None) -> list[dict[s
     if not news.enabled:
         return []
     if cve:
-        rows = db.query("SELECT id, source, title, published FROM news WHERE cves LIKE ? ORDER BY published DESC LIMIT 10",
-                        (f'%"{cve}"%',))
+        rows = db.query("SELECT id, source, title, published FROM news WHERE cves LIKE ? AND tier IN ('gov', 'press') "
+                        "ORDER BY published DESC LIMIT 10", (f'%"{cve}"%',))
     elif q and len(q) >= 3:
         rows = news._rows(90, q=q, limit=10)
     else:
@@ -1326,13 +1386,16 @@ def _int_or_404(v: str) -> int:
 
 
 def _welt_filters(tier: str | None, source: str | None, kind: str | None, country: str | None, origin: str | None,
-                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False) -> dict[str, Any]:
+                  target: str | None, actor: str | None, mine: bool, q: str | None, confirmed: bool = False,
+                  supported: bool = False) -> dict[str, Any]:
     if not news.enabled:
         raise AppError("err.news.disabled", 404)
     kinds = [k for k in (kind or "").split(",") if k]
     if any(k not in nlp.KINDS for k in kinds) or len(kinds) > 5:
         raise AppError("err.bad_request")
     if source and source not in news.by_id:
+        raise AppError("err.bad_request")
+    if (tier == "web" or source == "gdelt") and not news.web_enabled:
         raise AppError("err.bad_request")
     if (country or "").strip() == "region":  # the home region, however many countries HOME_REGION lists
         ccs = list(S.home_region)
@@ -1341,6 +1404,7 @@ def _welt_filters(tier: str | None, source: str | None, kind: str | None, countr
         if len(ccs) > 12:
             raise AppError("err.bad_request")
     return {"tier": tier, "source": source, "kind": ",".join(kinds) or None, "country": ",".join(ccs) or None, "confirmed": confirmed,
+            "supported": supported,
             "origin": _cc(origin) if origin else None, "target": _cc(target) if target else None,
             "actor": (actor or "").strip() or None, "mine": mine, "q": (q or "").strip() or None}
 
@@ -1362,26 +1426,27 @@ def welt_overview(days: int, flt: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/welt")
-def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press)$"),
+def api_welt(days: int = Query(7), tier: str | None = Query(None, pattern="^(gov|press|web)$"),
              source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"), kind: str | None = Query(None, max_length=80),
              country: str | None = Query(None, max_length=40), origin: str | None = Query(None, max_length=2),
              target: str | None = Query(None, max_length=2), actor: str | None = Query(None, max_length=120),
-             mine: bool = False, confirmed: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+             mine: bool = False, confirmed: bool = False, supported: bool = False,
+             q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed))
+    return welt_overview(days, _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed, supported))
 
 
 @app.get("/api/news")
 def api_news(days: int = Query(7), offset: int = Query(0, ge=0, le=20000), limit: int = Query(40, ge=1, le=100),
-             tier: str | None = Query(None, pattern="^(gov|press)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
+             tier: str | None = Query(None, pattern="^(gov|press|web)$"), source: str | None = Query(None, pattern="^[a-z0-9_]{2,30}$"),
              kind: str | None = Query(None, max_length=80), country: str | None = Query(None, max_length=40),
              origin: str | None = Query(None, max_length=2), target: str | None = Query(None, max_length=2),
              actor: str | None = Query(None, max_length=120), mine: bool = False, confirmed: bool = False,
-             q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
+             supported: bool = False, q: str | None = Query(None, max_length=100)) -> dict[str, Any]:
     if days not in WELT_DAYS:
         raise AppError("err.bad_request")
-    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed)
+    flt = _welt_filters(tier, source, kind, country, origin, target, actor, mine, q, confirmed, supported)
     return news.listing(days, offset, limit, **flt)
 
 
@@ -1449,6 +1514,44 @@ async def api_ai_welt(request: Request, body: WeltAiIn) -> dict[str, Any]:
     q = (body.question or "").strip()
     task = TASKS[lang]["welt_question"] + q if q else TASKS[lang]["welt"]
     return await _ai_report(request, task, ctx, f"welt:{body.days}", q, lang)
+
+
+# --- 3.3: internet blocking (OONI, government-directed outages) and platform outages ---------------------------------
+@app.get("/api/welt/blocking")
+def api_welt_blocking(days: int = Query(7)) -> dict[str, Any]:
+    """Per country: OONI measurements (websites, messengers) and the outages Cloudflare attributes to a government."""
+    if not news.enabled:
+        raise AppError("err.news.disabled", 404)
+    if days not in WELT_DAYS:
+        raise AppError("err.bad_request")
+    d = min(days, 30)  # OONI counts are kept for 35 days
+    rows = ooni.summary(db, max(d, 7)) if S.source_on("ooni") else []
+    shut = []
+    for r in db.query("SELECT id, start_ts, end_ts, countries, cause, scope, url FROM infra_events WHERE kind = 'outage' "
+                      "AND cause IN ('GOVERNMENT_DIRECTED', 'BLOCKING') AND COALESCE(end_ts, start_ts) >= ? "
+                      "ORDER BY start_ts DESC LIMIT 100", (_cutoff(days),)):
+        try:
+            ccs = [c for c in json.loads(r["countries"] or "[]") if CC_RE.match(str(c))]
+        except ValueError:
+            ccs = []
+        shut.append({"id": r["id"], "start": r["start_ts"], "end": r["end_ts"], "countries": ccs, "cause": r["cause"],
+                     "scope": r["scope"], "url": r["url"]})
+    return {"enabled": S.source_on("ooni"), "days": days, "ooni_days": max(d, 7), "countries": rows[:250], "shutdowns": shut}
+
+
+class PlatformsIn(BaseModel):
+    providers: list[str] = Field(default_factory=list, max_length=10)
+
+
+@app.get("/api/platforms")
+def api_platforms(days: int = Query(7, ge=1, le=30), active: bool = False) -> dict[str, Any]:
+    return {"enabled": S.source_on("cloud_status"), "providers": platforms.providers(),
+            "incidents": platforms.listing(days, active)}
+
+
+@app.post("/api/platforms/used")
+def api_platforms_used(body: PlatformsIn) -> dict[str, Any]:
+    return {"providers": platforms.set_used([str(p)[:20] for p in body.providers])}
 
 
 # --- "today": the few things that matter most right now ----------------------------------------------------------
@@ -1628,8 +1731,11 @@ async def api_ai_object(request: Request, body: ObjAiIn) -> dict[str, Any]:
 def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Query(None, max_length=80),
             days: int = Query(0, ge=0, le=3650), ransomware: bool = False, min_epss: float = Query(0.0, ge=0.0, le=1.0),
             mine: bool = False, sort: str = Query("date", pattern="^(date|epss)$"),
+            catalog: str = Query("kev", pattern="^(kev|euvd)$"), exploit: bool = False,
             limit: int = Query(300, ge=1, le=2000)) -> dict[str, Any]:
-    """CISA KEV with EPSS, filterable. 'mine' = only CVEs of watched products or seen on own IPs (InternetDB)."""
+    """Exploited vulnerabilities with EPSS, filterable.
+    catalog "kev": CISA KEV; "euvd": exploited according to ENISA (EUVD) but not (yet) in CISA KEV.
+    'mine' = only CVEs of watched products or seen on own IPs (InternetDB); 'exploit' = only with public exploit code."""
     exposed: set[str] = set()
     for r in db.query("SELECT vulns FROM surface"):
         try:
@@ -1637,36 +1743,52 @@ def api_kev(q: str | None = Query(None, max_length=100), vendor: str | None = Qu
         except ValueError:
             continue
     watched = {r["cve"] for r in db.query("SELECT DISTINCT cve FROM product_cves")}
-    sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile "
-           "FROM kev k LEFT JOIN epss e ON e.cve = k.cve WHERE 1=1")
+    if catalog == "kev":
+        sql = ("SELECT k.cve, k.vendor, k.product, k.name, k.date_added, k.due_date, k.ransomware, e.epss, e.percentile, "
+               "u.euvd_id AS euvd FROM kev k LEFT JOIN epss e ON e.cve = k.cve LEFT JOIN euvd u ON u.cve = k.cve WHERE 1=1")
+    else:  # same columns, so filters and sorting below apply to both catalogues
+        sql = ("SELECT k.cve, k.vendor, k.product, NULL AS name, k.exploited_since AS date_added, NULL AS due_date, "
+               "NULL AS ransomware, e.epss, e.percentile, k.euvd_id AS euvd FROM euvd k LEFT JOIN epss e ON e.cve = k.cve "
+               "WHERE k.cve NOT IN (SELECT cve FROM kev)")
     params: list[Any] = []
+    added = "k.date_added" if catalog == "kev" else "k.exploited_since"  # fixed column names, not user input
     if q and q.strip():
-        sql += " AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
+        name = "k.name" if catalog == "kev" else "k.euvd_id"
+        sql += (" AND (k.cve LIKE ? ESCAPE '\\' OR k.vendor LIKE ? ESCAPE '\\' OR k.product LIKE ? ESCAPE '\\' "
+                f"OR {name} LIKE ? ESCAPE '\\')")
         params += [_like(q.strip())] * 4
     if vendor:
         sql += " AND k.vendor = ? COLLATE NOCASE"
         params.append(vendor.strip())
     if days:
-        sql += " AND k.date_added >= ?"
+        sql += f" AND {added} >= ?"
         params.append(_cutoff(days)[:10])
-    if ransomware:
+    if ransomware and catalog == "kev":
         sql += " AND lower(k.ransomware) = 'known'"
     if min_epss > 0:
         sql += " AND e.epss >= ?"
         params.append(min_epss)
-    sql += " ORDER BY " + ("COALESCE(e.epss, -1) DESC, k.date_added DESC" if sort == "epss" else "k.date_added DESC, k.cve DESC")
+    sql += " ORDER BY " + (f"COALESCE(e.epss, -1) DESC, {added} DESC" if sort == "epss" else f"{added} DESC, k.cve DESC")
     rows = db.query(sql, params)
+    xp: dict[str, list[str]] = {}
+    for r in db.query("SELECT DISTINCT cve, source FROM exploits ORDER BY source"):
+        xp.setdefault(r["cve"], []).append(r["source"])
     for r in rows:
         r["watched"] = r["cve"] in watched
         r["exposed"] = r["cve"] in exposed
+        r["exploits"] = xp.get(r["cve"], [])
     if mine:
         rows = [r for r in rows if r["watched"] or r["exposed"]]
+    if exploit:
+        rows = [r for r in rows if r["exploits"]]
     vendors: dict[str, int] = {}
     for r in rows:
         vendors[r["vendor"] or "?"] = vendors.get(r["vendor"] or "?", 0) + 1
     return {"total": len(rows), "rows": rows[:limit],
             "vendors": [{"key": k, "count": v} for k, v in sorted(vendors.items(), key=lambda x: -x[1])[:25]],
-            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"]}
+            "catalog": db.query("SELECT COUNT(*) AS n FROM kev")[0]["n"] if catalog == "kev" else
+            db.query("SELECT COUNT(*) AS n FROM euvd WHERE cve NOT IN (SELECT cve FROM kev)")[0]["n"],
+            "euvd": S.source_on("euvd"), "exploits": S.source_on("exploits")}
 
 
 @app.get("/api/infra")
@@ -1871,6 +1993,12 @@ def api_netz_overview(request: Request) -> dict[str, Any]:
         "scan": {"enabled": S.scan_enabled, "running": surface.current},
         "syslog": syslog.info() if syslog else {"enabled": False},
     }
+
+
+# --- 4.0: who owns this IP, people search -------------------------------------------------------------------------------
+app.include_router(owner_api.make_router(owner, auth, _ndjson, _lang))
+app.include_router(personen_api.make_router(S, osint_store, osint_sites, searcher, auth, _spawn))
+app.include_router(telegram_api.make_router(S, telegram, ai, auth, kick, _lang))
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")

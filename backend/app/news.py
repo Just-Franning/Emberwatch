@@ -25,9 +25,11 @@ import httpx
 from defusedxml import DefusedXmlException
 from defusedxml import ElementTree as DET
 
-from . import alerts, nlp
+from . import alerts, corroborate, nlp
 from .actors import Actors
+from .cables import Cables
 from .db import DB, utcnow
+from .sources import gdelt
 from .domains import registrable
 from .tools import ToolError, resolve
 from .toolbox.detect import internal_name, is_domain
@@ -41,10 +43,10 @@ KEEP_DAYS_ON_FETCH = 30
 OG_PER_RUN = 24
 MAX_ROWS = 20_000  # stored reports at most; also the most an overview reads (90 days stay complete)
 ROW_COLS = ("id, source, url, title, summary, image, published, lang, tier, origin, origin_by, countries, actors, cves, malware, "
-            "kinds, mine, cluster")  # everything but the stored text
+            "kinds, mine, cluster, cables, checks")  # everything but the stored text
 ANALYSE_CHARS = 1500  # characters of the feed text (after the headline) the recognition looks at
 CLUSTER_HOURS = 72
-TIERS = ("gov", "press")
+TIERS = ("gov", "press", "web")
 FEED_ID_RE = re.compile(r"^[a-z0-9_]{2,30}$")
 TAG_RE = re.compile(r"<[^<>]*>")
 # Bounded on purpose: feed content and article pages come from third parties; unbounded runs made the attribute
@@ -95,7 +97,18 @@ DEFAULT_SOURCES: tuple[Source, ...] = (
     Source("securityweek", "SecurityWeek", "https://www.securityweek.com/feed/", "press", "en", "US", ("securityweek.com",)),
     Source("krebs", "Krebs on Security", "https://krebsonsecurity.com/feed/", "press", "en", "US", ("krebsonsecurity.com",)),
     Source("golem", "Golem.de Security", "https://rss.golem.de/rss.php?tp=sec&feed=RSS2.0", "press", "de", "DE", ("golem.de",)),
+    # 3.3
+    Source("cert_eu", "CERT-EU", "https://cert.europa.eu/publications/security-advisories-rss", "gov", "en", "",
+           ("cert.europa.eu",)),
+    Source("cisa", "CISA", "https://www.cisa.gov/cybersecurity-advisories/cybersecurity-advisories.xml", "gov", "en", "US",
+           ("cisa.gov",)),
+    Source("heise", "heise Security", "https://www.heise.de/security/rss/news-atom.xml", "press", "de", "DE", ("heise.de",)),
 )
+# Worldwide press via GDELT (sources/gdelt.py): unverified, shown only when chosen, never alerts, own retention
+GDELT = Source("gdelt", "GDELT", "https://api.gdeltproject.org/api/v2/doc/doc", "web", "en", "", ())
+CURATED = ("gov", "press")
+WEB_RETENTION_DAYS = 14
+WEB_MAX_ROWS = 8000
 
 
 def parse_extra(raw: str) -> list[Source]:
@@ -111,7 +124,7 @@ def parse_extra(raw: str) -> list[Source]:
             continue
         if u.scheme != "https" or not u.hostname or u.username or u.password:
             continue
-        tier = f[3] if len(f) > 3 and f[3] in TIERS else "press"
+        tier = f[3] if len(f) > 3 and f[3] in CURATED else "press"
         lang = f[4][:2].lower() if len(f) > 4 and re.fullmatch(r"[A-Za-z]{2}", f[4][:2] or "") else "en"
         name, sfx = registrable(u.hostname)
         out.append(Source(f[0], f[1][:60], f[2], tier, lang, "", (f"{name}.{sfx}" if sfx else u.hostname,)))
@@ -287,20 +300,34 @@ def _cutoff(days: float) -> str:
     return _iso(datetime.now(timezone.utc) - timedelta(days=days))
 
 
+def _decode(r: dict[str, Any]) -> None:
+    """JSON columns of a stored report to Python values (tolerant: a broken value counts as empty)."""
+    for k in ("countries", "actors", "cves", "malware", "kinds", "mine", "cables"):
+        r[k] = nlp.as_list(r.get(k))
+    try:
+        c = json.loads(r.get("checks") or "null")
+    except ValueError:
+        c = None
+    r["checks"] = c if isinstance(c, dict) else None
+
+
 # --- collector ----------------------------------------------------------------------------------------------------------
 class News:
-    def __init__(self, s: Any, db: DB, actors: Actors, centroids: Path | None = None) -> None:
+    def __init__(self, s: Any, db: DB, actors: Actors, centroids: Path | None = None, cables: Cables | None = None) -> None:
         self.s = s
         self.db = db
         self.actors = actors
+        self.cables = cables
         self.places = nlp.load_places(centroids)
-        self.sources = self._sources()
+        self.sources = self._sources()  # the curated feeds that are fetched
         self.by_id = {x.id: x for x in self.sources}
+        if self.web_enabled:
+            self.by_id[GDELT.id] = GDELT  # names and tiers of stored GDELT articles
 
     def _sources(self) -> list[Source]:
         off = {x.strip() for x in (getattr(self.s, "news_disable", "") or "").split(",") if x.strip()}
         out = [x for x in DEFAULT_SOURCES if x.id not in off]
-        known = {x.id for x in out}
+        known = {x.id for x in out} | {GDELT.id}  # "gdelt" is reserved for the worldwide press
         for x in parse_extra(getattr(self.s, "news_feeds", "") or ""):
             if x.id not in known and x.id not in off:
                 out.append(x)
@@ -310,6 +337,12 @@ class News:
     @property
     def enabled(self) -> bool:
         return bool(getattr(self.s, "news_enabled", True)) and bool(self.sources)
+
+    @property
+    def web_enabled(self) -> bool:
+        """Worldwide press (GDELT): only with the Weltlage on and not switched off via SOURCES_DISABLE."""
+        on = getattr(self.s, "source_on", None)
+        return self.enabled and (on("gdelt") if callable(on) else False)
 
     # --- fetching --------------------------------------------------------------------------------------------------------
     async def _fetch(self, client: httpx.AsyncClient, src: Source) -> tuple[bytes | None, dict[str, str]]:
@@ -418,6 +451,28 @@ class News:
                        code="news_partial" if partial else None, params={"failed": ", ".join(failed)[:300]} if partial else None)
         return new_total
 
+    async def collect_web(self, client: httpx.AsyncClient) -> int:
+        """Worldwide press (GDELT): headlines of the last hours, recognised and stored as tier "web"."""
+        if not self.web_enabled:
+            return 0
+        try:
+            items = await gdelt.fetch(client, self.s.user_agent)
+        except Exception as exc:  # network errors, rejected queries: the next run tries again
+            self._source_status(GDELT, False, FeedError("other", detail=exc.__class__.__name__))
+            self.db.status("gdelt", False, code="feed_failed")
+            return 0
+        ctx = await asyncio.to_thread(self._context)
+        n = 0
+        for raw in items:
+            if self._store(GDELT, raw, ctx):
+                n += 1
+        self._source_status(GDELT, True, None, n)
+        self._prune()
+        total = self.db.query("SELECT COUNT(*) AS n FROM news WHERE tier = 'web'")[0]["n"]
+        self.db.status("gdelt", True, "", total)
+        self.db.meta_set("news_rev", utcnow())
+        return n
+
     def _source_status(self, src: Source, ok: bool, err: FeedError | None, new: int = 0) -> None:
         """Stored language-neutral: an error code and its parameters, rendered by the interface (wl.feed_err.*)."""
         prev = json.loads(self.db.meta_get(f"news_src:{src.id}") or "{}")
@@ -430,7 +485,7 @@ class News:
         counts = {r["source"]: r["n"] for r in self.db.query("SELECT source, COUNT(*) AS n FROM news WHERE published >= ? GROUP BY source",
                                                              (_cutoff(7),))}
         out = []
-        for x in self.sources:
+        for x in self.sources + ([GDELT] if self.web_enabled else []):
             try:
                 st = json.loads(self.db.meta_get(f"news_src:{x.id}") or "{}")
             except ValueError:
@@ -469,11 +524,13 @@ class News:
         for r in self.db.query("SELECT product_id, cve FROM product_cves"):
             prod_cves.setdefault(r["cve"], r["product_id"])
         # grouping candidates for reports of the last three days: everything up to three days before them
-        recent = [self._candidate(r) for r in self.db.query(
-            "SELECT id, title, cluster, cves, published FROM news WHERE published >= ? ORDER BY id DESC LIMIT 3000",
+        # (per tier: the volume of the worldwide press must not push curated candidates out of the limit)
+        recent = [self._candidate(r) for cond in ("tier != 'web'", "tier = 'web'") for r in self.db.query(
+            f"SELECT id, title, cluster, cves, published, tier FROM news WHERE published >= ? AND {cond} ORDER BY id DESC LIMIT 3000",
             (_cutoff(2 * CLUSTER_HOURS / 24),))]
+        recent.sort(key=lambda c: -c["id"])
         return {
-            "actors": self.actors.index(), "malware": malware,
+            "actors": self.actors.index(), "malware": malware, "cables": self.cables,
             "prod_rx": nlp.word_matcher(prod_phrase), "prod": prod_phrase,
             "vendor_rx": nlp.word_matcher(vendors, min_len=2), "vendors": vendors,
             "dom_rx": nlp.word_matcher(doms, domains=True), "doms": doms, "prod_cves": prod_cves, "recent": recent,
@@ -482,7 +539,7 @@ class News:
     @staticmethod
     def _candidate(r: dict[str, Any]) -> dict[str, Any]:
         return {"id": r["id"], "tok": nlp.title_tokens(r["title"]), "cluster": r["cluster"] or r["id"],
-                "cves": set(nlp.as_list(r["cves"])), "published": r["published"]}
+                "cves": set(nlp.as_list(r["cves"])), "published": r["published"], "web": r["tier"] == "web"}
 
     def analyse(self, title: str, text: str, ctx: dict[str, Any]) -> dict[str, Any]:
         """Recognition on the headline and the feed text (at most ANALYSE_CHARS). Pure function of the text and the indexes."""
@@ -521,9 +578,13 @@ class News:
             for m in dict.fromkeys(x.lower() for x in ctx["dom_rx"].findall(body)):
                 if m in ctx["doms"]:
                     mine.append({"type": "domain", "id": ctx["doms"][m], "label": m})
+        kinds = nlp.kinds(body)
+        cab = ctx.get("cables")
+        # cable names ("C-Lion1", "Dunant") only count in a report about submarine cables
+        cables = cab.find(body) if cab is not None and "cable" in kinds else []
         return {
             "origin": origin, "origin_by": origin_by, "countries": mentioned, "actors": acts, "cves": cves,
-            "malware": ctx["malware"].find(body, 5), "kinds": nlp.kinds(body), "mine": mine[:10],
+            "malware": ctx["malware"].find(body, 5), "kinds": kinds, "mine": mine[:10], "cables": cables,
         }
 
     def _store(self, src: Source, raw: dict[str, Any], ctx: dict[str, Any]) -> bool:
@@ -537,20 +598,28 @@ class News:
             pub = now
         if pub < now - timedelta(days=KEEP_DAYS_ON_FETCH):
             return False
-        if self.db.query("SELECT 1 FROM news WHERE url = ?", (link,)):
-            return False  # known item: no need to recognise it again
+        known = self.db.query("SELECT id, tier FROM news WHERE url = ?", (link,))
+        if known:
+            if known[0]["tier"] != "web" or src.tier == "web":
+                return False  # known item: no need to recognise it again
+            # a curated feed brings an article the worldwide press had first: the curated report replaces it
+            # (otherwise the unique URL would keep it out of the curated view and its alerts for good)
+            self.db.execute("DELETE FROM news WHERE id = ?", (known[0]["id"],))
+            ctx["recent"] = [c for c in ctx["recent"] if c["id"] != known[0]["id"]]
         text = strip_html(raw.get("desc") or raw.get("content") or "")
         if text.lower().startswith(title.lower()):
             text = text[len(title):].lstrip(" .:-–")
         teaser = nlp.summary(text, 260)
         body = text[:ANALYSE_CHARS]  # kept for the next recognition run; only the teaser is shown
         found = self.analyse(title, body, ctx)
+        web = src.tier == "web"
         new_id = self.db.insert(
             "INSERT OR IGNORE INTO news(source, url, title, summary, body, image, published, fetched_at, lang, tier, origin, "
-            "origin_by, countries, actors, cves, malware, kinds, mine) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (src.id, link, title, teaser or None, body or None, raw.get("image"), _iso(pub), utcnow(), src.lang, src.tier, found["origin"],
+            "origin_by, countries, actors, cves, malware, kinds, mine, cables) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (src.id, link, title, teaser or None, body or None, None if web else raw.get("image"), _iso(pub), utcnow(),
+             (raw.get("lang") or src.lang) if web else src.lang, src.tier, found["origin"],
              found["origin_by"], json.dumps(found["countries"]), json.dumps(found["actors"]), json.dumps(found["cves"]),
-             json.dumps(found["malware"]), json.dumps(found["kinds"]), json.dumps(found["mine"])))
+             json.dumps(found["malware"]), json.dumps(found["kinds"]), json.dumps(found["mine"]), json.dumps(found["cables"])))
         if not new_id:
             return False
         tok = nlp.title_tokens(title)
@@ -560,10 +629,13 @@ class News:
         if pub >= now - window:
             candidates = ctx["recent"]
         else:  # a late report (new source, delayed feed): its neighbours are older than the run's candidates
+            same_tier = "tier = 'web'" if web else "tier != 'web'"
             candidates = [self._candidate(r) for r in self.db.query(
-                "SELECT id, title, cluster, cves, published FROM news WHERE published BETWEEN ? AND ? AND id != ? "
-                "ORDER BY id DESC LIMIT 1000", (_iso(pub - window), _iso(pub + window), new_id))]
+                f"SELECT id, title, cluster, cves, published, tier FROM news WHERE published BETWEEN ? AND ? AND id != ? "
+                f"AND {same_tier} ORDER BY id DESC LIMIT 1000", (_iso(pub - window), _iso(pub + window), new_id))]
         for r in candidates:
+            if r["web"] != web:
+                continue  # worldwide press is grouped on its own: it must not count as a second curated source
             if abs(pub - _parse_iso(r["published"])) > window:
                 continue  # the same event is reported within three days
             # a shared CVE only joins reports about a few CVEs (round-ups such as patch days name dozens)
@@ -571,8 +643,9 @@ class News:
                 cluster = r["cluster"]
                 break
         self.db.execute("UPDATE news SET cluster = ? WHERE id = ?", (cluster, new_id))
-        ctx["recent"].insert(0, {"id": new_id, "tok": tok, "cluster": cluster, "cves": cves, "published": _iso(pub)})
-        self._alerts(src, new_id, cluster, title, link, found["mine"])
+        ctx["recent"].insert(0, {"id": new_id, "tok": tok, "cluster": cluster, "cves": cves, "published": _iso(pub), "web": web})
+        if not web:  # unverified worldwide press never raises alerts
+            self._alerts(src, new_id, cluster, title, link, found["mine"])
         return True
 
     def _alerts(self, src: Source, item_id: int, cluster: int, title: str, link: str, mine: list[dict[str, Any]]) -> None:
@@ -594,9 +667,25 @@ class News:
         for r in rows:
             f = self.analyse(r["title"], r["body"] or r["summary"] or "", ctx)  # the same text as when it was stored
             upd.append((f["origin"], f["origin_by"], json.dumps(f["countries"]), json.dumps(f["actors"]), json.dumps(f["cves"]),
-                        json.dumps(f["malware"]), json.dumps(f["kinds"]), json.dumps(f["mine"]), r["id"]))
-        self.db.execmany("UPDATE news SET origin=?, origin_by=?, countries=?, actors=?, cves=?, malware=?, kinds=?, mine=? "
-                         "WHERE id=?", upd)
+                        json.dumps(f["malware"]), json.dumps(f["kinds"]), json.dumps(f["mine"]), json.dumps(f["cables"]),
+                        r["id"]))
+        self.db.execmany("UPDATE news SET origin=?, origin_by=?, countries=?, actors=?, cves=?, malware=?, kinds=?, mine=?, "
+                         "cables=? WHERE id=?", upd)
+        self.db.meta_set("news_rev", utcnow())
+        return len(rows)
+
+    def refresh_checks(self, days: int = 30) -> int:
+        """Compares the reports of the last days with the measurements (corroborate.py) and stores the result. Runs after
+        every collection: the measurements of a day keep arriving after the report."""
+        ev = corroborate.Evidence(self.db)
+        rows = self.db.query("SELECT id, title, published, origin, countries, actors, cves, malware, kinds FROM news "
+                             "WHERE published >= ?", (_cutoff(days),))
+        upd = []
+        for r in rows:
+            _decode(r)
+            res = ev.check(r)
+            upd.append((json.dumps(res) if res else None, r["id"]))
+        self.db.execmany("UPDATE news SET checks = ? WHERE id = ?", upd)
         self.db.meta_set("news_rev", utcnow())
         return len(rows)
 
@@ -653,7 +742,7 @@ class News:
 
     async def _og_images(self, client: httpx.AsyncClient) -> None:
         rows = self.db.query("SELECT id, source, url FROM news WHERE image IS NULL AND og_tried = 0 AND published >= ? "
-                             "ORDER BY id DESC LIMIT ?", (_cutoff(3), OG_PER_RUN))
+                             "AND tier != 'web' ORDER BY id DESC LIMIT ?", (_cutoff(3), OG_PER_RUN))
         for r in rows:
             self.db.execute("UPDATE news SET og_tried = 1 WHERE id = ?", (r["id"],))
             src = self.by_id.get(r["source"])
@@ -705,18 +794,27 @@ class News:
         return None
 
     def _prune(self) -> None:
+        """Curated reports and the worldwide press are kept apart, so GDELT's volume never pushes out curated reports."""
         days = getattr(self.s, "news_retention_days", 90)
-        self.db.execute("DELETE FROM news WHERE published < ?", (_cutoff(days),))
-        self.db.execute("DELETE FROM news WHERE id NOT IN (SELECT id FROM news ORDER BY id DESC LIMIT ?)", (MAX_ROWS,))
+        self.db.execute("DELETE FROM news WHERE tier != 'web' AND published < ?", (_cutoff(days),))
+        self.db.execute("DELETE FROM news WHERE tier != 'web' AND id NOT IN "
+                        "(SELECT id FROM news WHERE tier != 'web' ORDER BY id DESC LIMIT ?)", (MAX_ROWS,))
+        self.db.execute("DELETE FROM news WHERE tier = 'web' AND published < ?", (_cutoff(min(days, WEB_RETENTION_DAYS)),))
+        self.db.execute("DELETE FROM news WHERE tier = 'web' AND id NOT IN "
+                        "(SELECT id FROM news WHERE tier = 'web' ORDER BY id DESC LIMIT ?)", (WEB_MAX_ROWS,))
 
     # --- queries ---------------------------------------------------------------------------------------------------------
     def _rows(self, days: float, *, tier: str | None = None, source: str | None = None, q: str | None = None,
               limit: int = MAX_ROWS) -> list[dict[str, Any]]:
         sql = f"SELECT {ROW_COLS} FROM news WHERE published >= ?"
         args: list[Any] = [_cutoff(days)]
+        if source and source in self.by_id and self.by_id[source].tier == "web":
+            tier = "web"
         if tier in TIERS:
             sql += " AND tier = ?"
             args.append(tier)
+        else:  # by default only the curated sources; the worldwide press is chosen explicitly (tier="web")
+            sql += " AND tier IN ('gov', 'press')"
         if source and source in self.by_id:
             sql += " AND source = ?"
             args.append(source)
@@ -728,8 +826,7 @@ class News:
         args.append(limit)
         rows = self.db.query(sql, args)
         for r in rows:
-            for k in ("countries", "actors", "cves", "malware", "kinds", "mine"):
-                r[k] = nlp.as_list(r[k])
+            _decode(r)
         return rows
 
     def _item(self, head: dict[str, Any], members: list[dict[str, Any]]) -> dict[str, Any]:
@@ -770,7 +867,8 @@ class News:
             "source": {"id": head["source"], "name": src.name if src else head["source"], "tier": head["tier"]},
             "lang": head["lang"], "n": len(members), "sources": src_names, "origin": origin, "origin_by": origin_by,
             "countries": countries, "actors": acts[:6], "cves": union("cves"), "malware": union("malware", 6),
-            "kinds": union("kinds"), "mine": mine[:10],
+            "kinds": union("kinds"), "mine": mine[:10], "cables": union("cables", 8),
+            "checks": corroborate.merge([m["checks"] for m in members]),
         }
 
     def clusters(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -785,8 +883,11 @@ class News:
         return out
 
     def matches(self, it: dict[str, Any], *, kind: str | None = None, country: str | None = None, origin: str | None = None,
-                target: str | None = None, actor: str | None = None, mine: bool = False, confirmed: bool = False) -> bool:
+                target: str | None = None, actor: str | None = None, mine: bool = False, confirmed: bool = False,
+                supported: bool = False) -> bool:
         if kind and not set(kind.split(",")) & set(it["kinds"]):  # one or more kinds
+            return False
+        if supported and (it["checks"] or {}).get("verdict") != corroborate.SUPPORTED:  # local measurements support it
             return False
         if confirmed and not (it["source"]["tier"] == "gov" or len(it["sources"]) >= 2):  # an authority or 2+ sources
             return False
@@ -813,7 +914,10 @@ class News:
         actors: dict[str, int] = {}
         alias_n: dict[tuple[str, str], int] = {}
         kinds: dict[str, int] = {}
+        cables: dict[str, int] = {}
         for it in items:
+            for c in it["cables"]:
+                cables[c] = cables.get(c, 0) + 1
             if it["origin"]:
                 origins[it["origin"]] = origins.get(it["origin"], 0) + 1
                 for c in it["countries"][:3]:
@@ -840,11 +944,12 @@ class News:
                 "home": sum(1 for x in items if home_set & ({x["origin"]} | set(x["countries"]))),
                 "mine": sum(1 for x in items if any(m.get("type") != "vendor" for m in x["mine"])),
                 "vendor": sum(1 for x in items if any(m.get("type") == "vendor" for m in x["mine"])),  # a watched vendor is named
+                "supported": sum(1 for x in items if (x["checks"] or {}).get("verdict") == corroborate.SUPPORTED),
             },
             "home": sorted(home_set),
             "pairs": [{"origin": o, "target": t, "n": n} for (o, t), n in sorted(pairs.items(), key=lambda x: -x[1])[:60]],
             "countries": mentioned, "origins": origins, "actors": acts,
-            "kinds": dict(sorted(kinds.items(), key=lambda x: -x[1])),
+            "kinds": dict(sorted(kinds.items(), key=lambda x: -x[1])), "cables": cables,
             "items": items[:80], "sources": self.source_list(), "images": bool(self.s.news_images),
         }
 
@@ -860,8 +965,7 @@ class News:
         cluster = rows[0]["cluster"] or rows[0]["id"]
         members = self.db.query("SELECT * FROM news WHERE cluster = ? OR id = ? ORDER BY published", (cluster, cluster))
         for r in members:
-            for k in ("countries", "actors", "cves", "malware", "kinds", "mine"):
-                r[k] = nlp.as_list(r[k])
+            _decode(r)
         head = next(r for r in members if r["id"] == item_id) if any(r["id"] == item_id for r in members) else members[0]
         it = self._item(head, members)
         it["members"] = [{"id": m["id"], "title": m["title"], "url": m["url"], "published": m["published"], "lang": m["lang"],
@@ -882,10 +986,15 @@ class News:
         for c in it["cves"]:
             kev = self.db.query("SELECT date_added, ransomware FROM kev WHERE cve = ?", (c,))
             ep = self.db.query("SELECT epss FROM epss WHERE cve = ?", (c,))
+            eu = self.db.query("SELECT euvd_id, exploited_since FROM euvd WHERE cve = ?", (c,))
+            xp = sorted({r["source"] for r in self.db.query("SELECT source FROM exploits WHERE cve = ?", (c,))})
             cve_info.append({"cve": c, "kev": bool(kev), "kev_added": kev[0]["date_added"] if kev else None,
                              "ransomware": bool(kev and (kev[0]["ransomware"] or "").lower() == "known"),
-                             "epss": ep[0]["epss"] if ep else None})
+                             "epss": ep[0]["epss"] if ep else None,
+                             "euvd": eu[0]["euvd_id"] if eu else None, "euvd_exploited": eu[0]["exploited_since"] if eu else None,
+                             "exploits": xp})
         it["cve_info"] = cve_info
+        it["cable_info"] = self.cables.info(it["cables"]) if self.cables is not None else []
         it["malware_info"] = [{"name": m, "c2_30d": self.db.query(
             "SELECT COUNT(*) AS n FROM c2 WHERE malware = ? AND COALESCE(last_seen, first_seen) >= ?", (m, _cutoff(30)))[0]["n"]}
             for m in it["malware"]]
@@ -918,7 +1027,8 @@ class News:
     def ai_item(self, it: dict[str, Any]) -> dict[str, Any]:
         return {
             "article": {"title": it["title"], "teaser": it["summary"], "source": it["source"]["name"],
-                        "source_type": "authority" if it["source"]["tier"] == "gov" else "specialist media",
+                        "source_type": {"gov": "authority", "web": "unverified worldwide press (GDELT), not curated"}
+                        .get(it["source"]["tier"], "specialist media"),
                         "published": it["published"]},
             "same_event_reported_by": [{"source": m["source"], "title": m["title"], "published": m["published"]}
                                        for m in it.get("members", [])[:10]],
@@ -931,6 +1041,8 @@ class News:
                 "cves": it.get("cve_info", []),
             },
             "country_pair_series": it.get("pair"),
+            "comparison_with_measurements": it.get("checks"),
+            "submarine_cables_named": [c["name"] for c in it.get("cable_info", [])],
             "relates_to_own_assets": any(m.get("type") != "vendor" for m in it["mine"]),
         }
 

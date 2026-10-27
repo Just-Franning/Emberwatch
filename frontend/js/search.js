@@ -3,6 +3,7 @@
 import { t } from "./i18n.js";
 import { detect, objectOf } from "./registry.js";
 import { go, routes } from "./router.js";
+import { isAdmin } from "./session.js";
 import { api, countryName, dateOnly, dateTime, dec1, dec2, el, kids, num } from "./util.js";
 
 function splitProduct(q) {
@@ -12,7 +13,7 @@ function splitProduct(q) {
 
 export class Search {
   constructor(cb) {
-    this.cb = cb; // onCountry, onC2, onIp, onCve, onAsn, onWatchProduct, onWatchAsset, onOpenAsset, onOpenProducts
+    this.cb = cb; // onCountry, onC2, onIp, onOwner, onCve, onAsn, onWatchProduct, onWatchAsset, onOpenAsset, onOpenProducts
     this.form = document.getElementById("search");
     this.input = document.getElementById("search-q");
     this.box = document.getElementById("search-results");
@@ -50,14 +51,15 @@ export class Search {
     const o = objectOf(det);
     if (o) {
       g.push(el("h4", {}, t("s.analyse")), item(t("s.open_object", { type: t(`obj.type.${o.type}`), value: o.value }), t("s.open_object_sub"), () => go(routes.obj(o.type, o.value)), "action"));
-      if (r.type === "ip") g.push(item(t("s.ipinfo", { q }), t("s.ipinfo_sub"), () => this.cb.onIp(q), "action"));
+      if (r.type === "ip" && isAdmin()) g.push(item(t("s.ipinfo", { q }), t("s.ipinfo_sub"), () => this.cb.onIp(q), "action"));
+      if (o.type === "ip") g.push(item(t("s.owner", { q: o.value }), t("s.owner_sub"), () => this.cb.onOwner(o.value), "action"));
     }
     if (r.reputation && (r.reputation.drop || r.reputation.tor)) {
       g.push(el("h4", {}, t("s.reputation")));
       if (r.reputation.drop) g.push(el("div", { class: "empty warn-txt" }, t("s.drop", { cidr: r.reputation.drop.cidr })));
       if (r.reputation.tor) g.push(el("div", { class: "empty" }, t("s.tor")));
     }
-    if (["ip", "cidr", "asn", "domain"].includes(r.type)) {
+    if (["ip", "cidr", "asn", "domain"].includes(r.type) && isAdmin()) {
       g.push(item(t("s.watch_asset", { q }), "", () => this.cb.onWatchAsset(q), "action"));
     }
     if (r.assets?.length) {
@@ -70,7 +72,7 @@ export class Search {
       if (watched.length) {
         g.push(el("h4", {}, t("s.watched")), ...watched.map((p) => item(`${p.vendor} ${p.product}`.trim(), "", () => this.cb.onOpenProducts(p.id))));
       }
-      if (r.type === "text") {
+      if (r.type === "text" && isAdmin()) {
         if (vendors.length) {
           g.push(el("h4", {}, t("s.vendors")), ...vendors.map((v) =>
             item(v.vendor, t("s.vendor_sub", { n: num(v.n), date: dateOnly(v.latest) }), () => this.cb.onWatchProduct(v.vendor, ""), "vendor")));

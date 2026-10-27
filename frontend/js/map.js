@@ -1,31 +1,53 @@
 // World map: labelled basemap (OpenFreeMap) with offline fallback (Natural Earth).
-// Cyberlage: country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, tool results.
-// Weltlage: country pairs and countries named in security reports, the selected report; borders and labels in indigo.
+// Cyberlage: country shading, L7 attack flows, C2 servers, ransomware, infrastructure, submarine cables, cloud platform
+//   incidents, tool results.
+// Weltlage: country pairs and countries named in security reports, submarine cables named in them, internet blocking
+//   (OONI, government-directed shutdowns), the selected report; borders and labels in indigo.
+// Personen (4.0): black and white; countries of the platform operators with hits, the country a profile states and lines
+//   between them.
+// Globe (4.0): the projection is stored per browser (default: globe). The globe turns slowly while nobody uses the map;
+//   any interaction or camera move stops it, it starts again after SPIN_IDLE_MS (settings: emberwatch.spin).
 import { t } from "./i18n.js";
-import { objLink } from "./router.js";
-import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion } from "./util.js";
+import { href, objLink, routes } from "./router.js";
+import { COLORS, countryName, dateTime, el, geo, kids, num, pct, RAMP, reduceMotion, safeLink } from "./util.js";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
 // Weltlage colours (indigo; the land stays dark, only lines and marks change)
 export const WELT = { line: "#818cf8", dot: "#a5b4fc", ring: "#6366f1", sel: "#e0e7ff", border: "rgba(99, 102, 241, 0.72)", border2: "rgba(99, 102, 241, 0.85)",
-  state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff" };
+  state: "#1a1c33", label: "#a9b0cc", labelState: "#62677d", outline: "#e0e7ff", cable: "#c7d2fe",
+  shutdown: "rgba(251, 113, 133, 0.62)", blocking: "rgba(251, 113, 133, 0.2)" };
 // basemap paint values that follow the mode: [layer, property, Weltlage value]
+// Personen colours (black and white; the canvas is also drawn in grey, see styles.css)
+export const OSINT = { border: "rgba(255, 255, 255, 0.42)", state: "#1c1c1c", label: "#a3a3a3", labelState: "#5c5c5c", outline: "#ffffff",
+  dot: "#ffffff", line: "rgba(230, 230, 230, 0.55)", ring: "#ffffff", halo: "#000000" };
+// basemap paint values that follow the mode: [layer, property, Weltlage value, Personen value]
 const MODE_PAINT = [
-  ["boundary_country_z0-4", "line-color", WELT.border], ["boundary_country_z5-", "line-color", WELT.border2],
-  ["boundary_state", "line-color", WELT.state], ["ne-borders", "line-color", WELT.border],
-  ["place_country_other", "text-color", WELT.label], ["place_country_minor", "text-color", WELT.label],
-  ["place_country_major", "text-color", WELT.label], ["place_state", "text-color", WELT.labelState],
-  ["selected", "line-color", WELT.outline],
+  ["boundary_country_z0-4", "line-color", WELT.border, OSINT.border], ["boundary_country_z5-", "line-color", WELT.border2, OSINT.border],
+  ["boundary_state", "line-color", WELT.state, OSINT.state], ["ne-borders", "line-color", WELT.border, OSINT.border],
+  ["place_country_other", "text-color", WELT.label, OSINT.label], ["place_country_minor", "text-color", WELT.label, OSINT.label],
+  ["place_country_major", "text-color", WELT.label, OSINT.label], ["place_state", "text-color", WELT.labelState, OSINT.labelState],
+  ["selected", "line-color", WELT.outline, OSINT.outline],
 ];
 const CYBER_LAYERS = {
   arcs: ["arcs", "heads"], c2: ["c2-cluster", "c2-count", "c2-point"], ransom: ["ransom"], infra: ["infra"],
-  cables: ["cables", "cables-hl", "landing"], tool: ["tool-path", "tool-points", "tool-labels"],
+  cables: ["cables", "cables-hl", "landing"], tool: ["tool-path", "tool-points", "tool-labels"], cloud: ["cloud"],
 };
-const WELT_LAYERS = { pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], sel: ["welt-sel-line", "welt-sel-pt", "welt-sel-label"] };
+const WELT_LAYERS = {
+  pairs: ["welt-pairs"], dots: ["welt-dots", "welt-origins", "welt-count"], cables: ["welt-cables"], block: ["welt-block"],
+  sel: ["welt-sel-cable", "welt-sel-line", "welt-sel-pt", "welt-sel-label"],
+};
+const OSINT_LAYERS = { ops: ["osint-ops", "osint-ops-count"], locs: ["osint-loc"], lines: ["osint-lines"], sel: ["osint-sel"] };
+const NONE = ["==", ["get", "iso"], "\u0000"]; // a filter that matches no feature
 const PAIR_OPACITY = ["interpolate", ["linear"], ["get", "w"], 0, 0.4, 1, 0.9];
 const CHORO_OPACITY = ["case", ["<", ["to-number", ["coalesce", ["feature-state", "v"], -1]], 0], 0, 0.7];
 const FONT = ["Noto Sans Regular"];
 const PREF_KEY = "emberwatch.basemap";
+const PROJ_KEY = "emberwatch.projection";
+const SPIN_KEY = "emberwatch.spin";
+const SPIN_DEG_S = 2.4; // one turn in 2.5 minutes
+const SPIN_IDLE_MS = 30000;
+const SPIN_MAX_ZOOM = 3.2;
+const GLOBE_VIEW = { center: [15, 28], zoom: 1.8 };
 
 export const METRICS = Object.fromEntries(
   [["l7_target", pct], ["l3_target", pct], ["l7_origin", pct], ["l3_origin", pct], ["ransomware_7d", num], ["c2", num], ["outages_7d", num]]
@@ -39,6 +61,17 @@ export function setBasemapPref(v) {
   try { localStorage.setItem(PREF_KEY, v); } catch { /* ignore */ }
 }
 export const basemapPref = pref;
+
+function projPref() {
+  try { return localStorage.getItem(PROJ_KEY) === "mercator" ? "mercator" : "globe"; } catch { return "globe"; }
+}
+/** Turning globe: on unless switched off (or the system asks for reduced motion). */
+export function spinPref() {
+  try {
+    const v = localStorage.getItem(SPIN_KEY);
+    return v ? v === "on" : !reduceMotion;
+  } catch { return !reduceMotion; }
+}
 
 // --- geometry ----------------------------------------------------------------
 const rad = (d) => (d * Math.PI) / 180;
@@ -112,6 +145,15 @@ const ICONS = {
   "ico-anomaly": (g, s) => { // hollow square
     g.lineWidth = 2.5; g.strokeStyle = COLORS.infra; g.strokeRect(5, 5, s - 10, s - 10);
   },
+  "ico-cloud": (g, s) => { // cloud: three arcs on a flat base
+    g.beginPath();
+    g.moveTo(5, s - 6);
+    g.arc(7.5, s - 9, 3.5, Math.PI * 0.5, Math.PI * 1.5);
+    g.arc(s / 2 - 0.5, s / 2 - 1.5, 5.5, Math.PI * 1.05, Math.PI * 1.9);
+    g.arc(s - 7.5, s - 9.5, 4, Math.PI * 1.4, Math.PI * 0.5);
+    g.closePath();
+    g.fillStyle = COLORS.cloud; g.fill(); g.lineWidth = 1.6; g.strokeStyle = "#060607"; g.stroke();
+  },
 };
 
 // --- map ----------------------------------------------------------------------
@@ -120,8 +162,11 @@ export class Emberwatch {
     this.onCountry = onCountry;
     this.onIp = onIp;
     this.mode = "cyber";
-    this.vis = { arcs: true, c2: true, ransom: true, infra: true, cables: false, tool: true };
-    this.wvis = { pairs: true, dots: true, sel: true };
+    this.vis = { arcs: true, c2: true, ransom: true, infra: true, cables: false, tool: true, cloud: true };
+    this.wvis = { pairs: true, dots: true, cables: false, block: false, sel: true };
+    this.cloudCount = 0;
+    this.weltCables = {};
+    this.blocking = {};
     this.welt = { mentioned: {}, origins: {} };
     this.metric = "l7_target";
     this.countries = {};
@@ -130,7 +175,9 @@ export class Emberwatch {
     this.arcsVisible = true;
     this.c2All = EMPTY;
     this.c2Filter = {};
-    this.projection = "mercator";
+    this.projection = projPref();
+    this.ovis = { ops: true, locs: true, lines: true, sel: true };
+    this.spin = { on: spinPref(), idleUntil: 0, raf: null, last: 0, jumped: 0 };
     this.offline = pref() === "offline";
     this.basemapFailed = false;
     this.tip = document.getElementById("map-tip");
@@ -147,11 +194,12 @@ export class Emberwatch {
     }
     if (!base) this.offline = true;
     window.maplibregl.setWorkerUrl("vendor/maplibre-gl-csp-worker.js");
+    const globe = this.projection === "globe";
     this.map = new window.maplibregl.Map({
       container,
       style: this._style(base),
-      bounds: [[-168, -52], [178, 76]],
-      fitBoundsOptions: { padding: 20 },
+      ...(globe ? { center: GLOBE_VIEW.center, zoom: window.innerWidth <= 900 ? 1.1 : GLOBE_VIEW.zoom }
+        : { bounds: [[-168, -52], [178, 76]], fitBoundsOptions: { padding: 20 } }),
       minZoom: 0.6,
       maxZoom: 12,
       attributionControl: { compact: true },
@@ -164,8 +212,10 @@ export class Emberwatch {
     await new Promise((res) => this.map.on("load", res));
     for (const [id, draw] of Object.entries(ICONS)) this.map.addImage(id, icon(draw), { pixelRatio: 2 });
     // the Cyberlage values of the mode-dependent paint properties, read from the style
-    this.cyberPaint = MODE_PAINT.filter(([id]) => this.map.getLayer(id)).map(([id, prop, w]) => [id, prop, this.map.getPaintProperty(id, prop), w]);
+    this.cyberPaint = MODE_PAINT.filter(([id]) => this.map.getLayer(id)).map(([id, prop, w, o]) => [id, prop, this.map.getPaintProperty(id, prop), w, o]);
+    if (globe) this.map.setProjection({ type: "globe" });
     this._bind();
+    this._spinInit();
   }
 
   _style(base) {
@@ -180,9 +230,14 @@ export class Emberwatch {
       infra: { type: "geojson", data: EMPTY },
       c2: { type: "geojson", data: EMPTY, cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },
       tool: { type: "geojson", data: EMPTY },
+      cloud: { type: "geojson", data: EMPTY },
       "welt-pairs": { type: "geojson", data: EMPTY },
       "welt-dots": { type: "geojson", data: EMPTY },
       "welt-sel": { type: "geojson", data: EMPTY },
+      "osint-ops": { type: "geojson", data: EMPTY },
+      "osint-loc": { type: "geojson", data: EMPTY },
+      "osint-lines": { type: "geojson", data: EMPTY },
+      "osint-sel": { type: "geojson", data: EMPTY },
     };
     const vis = (on) => ({ visibility: on ? "visible" : "none" });
     const under = [ // below the basemap's boundaries and labels
@@ -194,6 +249,10 @@ export class Emberwatch {
             0, RAMP[0], 0.25, RAMP[1], 0.5, RAMP[2], 0.75, RAMP[3], 1, RAMP[4]],
           "fill-opacity": CHORO_OPACITY,
         },
+      },
+      { // Weltlage: blocking and shutdowns (colour per country, set in setWeltBlocking)
+        id: "welt-block", type: "fill", source: "countries", filter: NONE, layout: vis(false),
+        paint: { "fill-color": WELT.blocking, "fill-opacity": 1 },
       },
       { id: "ne-borders", type: "line", source: "countries", layout: vis(this.offline), paint: { "line-color": "rgba(170, 38, 38, 0.6)", "line-width": 0.6 } },
       {
@@ -243,6 +302,19 @@ export class Emberwatch {
         },
         paint: withText ? { "text-color": "#fee2e2", "text-halo-color": "#060607", "text-halo-width": 1.2, "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] }
           : { "icon-opacity": ["case", ["get", "ongoing"], 1, 0.6] },
+      },
+      {
+        id: "cloud", type: "symbol", source: "cloud",
+        layout: {
+          "icon-image": "ico-cloud", "icon-size": ["interpolate", ["linear"], ["get", "n"], 1, 0.9, 6, 1.3],
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+          ...(withText ? {
+            "text-field": ["case", [">", ["get", "n"], 1], ["to-string", ["get", "n"]], ""], "text-font": FONT, "text-size": 10,
+            "text-offset": [1.4, -0.9], "text-allow-overlap": true, "text-ignore-placement": true,
+          } : {}),
+        },
+        paint: withText ? { "icon-opacity": ["match", ["get", "precision"], "country", 0.6, 1], "text-color": "#dbeafe", "text-halo-color": "#060607", "text-halo-width": 1.2 }
+          : { "icon-opacity": ["match", ["get", "precision"], "country", 0.6, 1] },
       },
       {
         id: "c2-cluster", type: "circle", source: "c2", filter: ["has", "point_count"],
@@ -303,6 +375,14 @@ export class Emberwatch {
       }] : []),
       // Weltlage (hidden in the Cyberlage)
       {
+        id: "welt-cables", type: "line", source: "cables", filter: ["in", ["get", "id"], ["literal", []]], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": WELT.cable, "line-opacity": 0.85, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.6, 6, 3.2] },
+      },
+      {
+        id: "welt-sel-cable", type: "line", source: "cables", filter: ["in", ["get", "id"], ["literal", []]], layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": WELT.sel, "line-opacity": 0.95, "line-width": ["interpolate", ["linear"], ["zoom"], 1, 2.2, 6, 4] },
+      },
+      {
         id: "welt-pairs", type: "line", source: "welt-pairs", layout: { ...vis(false), "line-cap": "round" },
         paint: {
           "line-color": WELT.line,
@@ -346,6 +426,30 @@ export class Emberwatch {
         layout: { ...vis(false), "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1.4], "text-allow-overlap": true },
         paint: { "text-color": "#ffffff", "text-halo-color": "#060607", "text-halo-width": 1.5 },
       }] : []),
+      // Personen (hidden in the other modes): profile country -> operator countries, operators, profile countries
+      {
+        id: "osint-lines", type: "line", source: "osint-lines", layout: { ...vis(false), "line-cap": "round" },
+        paint: { "line-color": OSINT.line, "line-width": ["case", ["get", "found"], 1.3, 0.9], "line-opacity": ["case", ["get", "found"], 0.8, 0.35] },
+      },
+      {
+        id: "osint-loc", type: "circle", source: "osint-loc", layout: vis(false),
+        paint: { "circle-radius": ["+", 9, ["*", 1.6, ["sqrt", ["get", "n"]]]], "circle-color": "rgba(255, 255, 255, 0.06)",
+          "circle-stroke-color": OSINT.ring, "circle-stroke-width": 2 },
+      },
+      {
+        id: "osint-ops", type: "circle", source: "osint-ops", layout: vis(false),
+        paint: { "circle-radius": ["+", 4, ["*", 2.4, ["sqrt", ["get", "n"]]]], "circle-color": ["case", ["get", "found"], OSINT.dot, OSINT.halo],
+          "circle-stroke-color": ["case", ["get", "found"], OSINT.halo, "#bdbdbd"], "circle-stroke-width": 1.5 },
+      },
+      ...(withText ? [{
+        id: "osint-ops-count", type: "symbol", source: "osint-ops", filter: ["all", [">", ["get", "n"], 1], ["get", "found"]],
+        layout: { ...vis(false), "text-field": ["to-string", ["get", "n"]], "text-font": FONT, "text-size": 9.5, "text-allow-overlap": true },
+        paint: { "text-color": "#000000" },
+      }] : []),
+      {
+        id: "osint-sel", type: "circle", source: "osint-sel", layout: vis(false),
+        paint: { "circle-radius": 16, "circle-color": "rgba(0, 0, 0, 0)", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2.5 },
+      },
     ];
     if (!base) {
       return {
@@ -365,6 +469,7 @@ export class Emberwatch {
     this.map.on("error", (e) => {
       const txt = `${e?.error?.message || ""} ${e?.error?.url || ""}`;
       if (e?.sourceId === "openmaptiles" || /openfreemap/.test(txt)) errors++;
+      else console.warn("map:", e?.error?.message || e); // style and expression errors stay visible (this listener mutes MapLibre's own log)
     });
     const check = () => {
       // isSourceLoaded() also reports "loaded" on source errors; what matters is whether tiles have content
@@ -399,7 +504,8 @@ export class Emberwatch {
   _bind() {
     const m = this.map;
     let hovered = null;
-    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "tool-points", "landing", "welt-dots", "welt-origins"];
+    const pointLayers = ["c2-point", "c2-cluster", "ransom", "infra", "cloud", "tool-points", "landing", "welt-dots", "welt-origins",
+      "osint-ops", "osint-loc"];
     m.on("mousemove", "choro", (e) => {
       const f = e.features?.[0];
       if (!f) return;
@@ -407,8 +513,8 @@ export class Emberwatch {
       hovered = f.id;
       m.setFeatureState({ source: "countries", id: hovered }, { hover: true });
       if (m.queryRenderedFeatures(e.point, { layers: pointLayers.filter((l) => m.getLayer(l)) }).length) return;
-      if (this.mode === "welt") {
-        this._tipShow(e, countryName(f.id) || f.properties.name, this._weltTip(f.id));
+      if (this.mode === "welt" || this.mode === "osint") {
+        this._tipShow(e, countryName(f.id) || f.properties.name, this.mode === "welt" ? this._weltTip(f.id) : this._osintTip(f.id));
         m.getCanvas().style.cursor = "pointer";
         return;
       }
@@ -463,6 +569,15 @@ export class Emberwatch {
       this._tipShow(e, p.name, [p.rfs ? `RFS ${p.rfs}` : null, p.length, p.owners].filter(Boolean).join(", ").slice(0, 160));
     });
     m.on("mouseleave", "cables", () => this._tipHide());
+    m.on("click", "cloud", (e) => this.cloudPopup(e.features[0].properties, e.lngLat));
+    for (const id of ["welt-cables", "welt-sel-cable"]) {
+      m.on("mousemove", id, (e) => {
+        const p = e.features[0].properties;
+        const n = this.weltCables[p.id] || 0;
+        this._tipShow(e, p.name, [n ? t("wl.map.cable_tip", { n: num(n) }) : null, p.rfs ? `RFS ${p.rfs}` : null].filter(Boolean).join(" · "));
+      });
+      m.on("mouseleave", id, () => this._tipHide());
+    }
     for (const id of ["welt-dots", "welt-origins"]) {
       m.on("click", id, (e) => { const cc = e.features[0].properties.cc; if (cc) this.onCountry(cc); });
       m.on("mousemove", id, (e) => this._tipShow(e, countryName(e.features[0].properties.cc), this._weltTip(e.features[0].properties.cc)));
@@ -473,6 +588,11 @@ export class Emberwatch {
       this._tipShow(e, `${countryName(p.o)} → ${countryName(p.t)}`, t("wl.map.pair_tip", { n: num(p.n) }));
     });
     m.on("mouseleave", "welt-pairs", () => this._tipHide());
+    for (const id of ["osint-ops", "osint-loc"]) {
+      m.on("click", id, (e) => { const cc = e.features[0].properties.cc; if (cc) this.onCountry(cc); });
+      m.on("mousemove", id, (e) => this._tipShow(e, countryName(e.features[0].properties.cc), this._osintTip(e.features[0].properties.cc)));
+      m.on("mouseleave", id, () => this._tipHide());
+    }
     m.on("click", "tool-points", (e) => {
       const p = e.features[0].properties;
       if (p.ip) this.onIp?.(p.ip);
@@ -508,7 +628,42 @@ export class Emberwatch {
           ? el("a", { class: "btn", href: p.reference, target: "_blank", rel: "noopener noreferrer" }, "abuse.ch") : null)));
   }
 
+  cloudPopup(p, lngLat) {
+    let items = [];
+    try { items = JSON.parse(p.items); } catch { items = []; }
+    this.popup(lngLat, el("div", { class: "pop" },
+      el("h4", {}, t("map.cloud_h", { provider: p.provider_name }), p.used === true || p.used === "true" ? el("span", { class: "tag warn" }, t("map.cloud_used")) : null),
+      el("div", { class: "note" }, `${p.region}${p.precision !== "city" ? ` · ${t(`map.cloud_prec.${p.precision === "country" ? "country" : "region"}`)}` : ""}`),
+      el("ul", {}, items.slice(0, 6).map((x) => el("li", {}, safeLink(x.url, x.title) || x.title, el("span", { class: "muted" }, ` · ${t("map.cloud_since", { t: dateTime(x.started) })}`)))),
+      items.length > 6 ? el("div", { class: "note" }, t("common.more", { n: items.length - 6 })) : null,
+      el("div", { class: "row" }, el("a", { class: "btn", href: href(routes.view("platforms")) }, t("map.cloud_all")))));
+  }
+
   // --- data ---------------------------------------------------------------------
+  /** Active cloud platform incidents: one symbol per provider and location, the incidents in the popup. */
+  setCloud(incidents) {
+    const groups = new Map();
+    for (const inc of incidents || []) {
+      if (inc.status !== "active") continue;
+      for (const r of inc.regions || []) {
+        if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+        const key = `${inc.provider}|${r.lat.toFixed(2)}|${r.lon.toFixed(2)}`;
+        if (!groups.has(key)) {
+          groups.set(key, { provider: inc.provider, provider_name: inc.provider_name || inc.provider, used: Boolean(inc.used), lat: r.lat, lon: r.lon,
+            precision: r.precision || "city", region: r.code && r.name !== r.code ? `${r.name} (${r.code})` : r.name || r.code || "", items: [] });
+        }
+        const g = groups.get(key);
+        if (!g.items.some((x) => x.id === inc.id)) g.items.push({ id: inc.id, title: inc.title, url: inc.url, started: inc.started });
+      }
+    }
+    const feats = [...groups.values()].map((g) => ({
+      type: "Feature", geometry: { type: "Point", coordinates: [g.lon, g.lat] },
+      properties: { provider: g.provider, provider_name: g.provider_name, used: g.used, region: g.region, precision: g.precision, n: g.items.length, items: JSON.stringify(g.items) },
+    }));
+    this.cloudCount = feats.length;
+    this.map.getSource("cloud").setData({ type: "FeatureCollection", features: feats });
+  }
+
   setCountries(countries) {
     this.countries = countries || {};
     this.paintChoropleth();
@@ -535,7 +690,7 @@ export class Emberwatch {
     for (const [cc, v] of vals) m.setFeatureState({ source: "countries", id: cc }, { v: this.max ? v / this.max : 0 });
   }
 
-  legendInfo() { return { metric: this.metric, meta: METRICS[this.metric], max: this.max || 0 }; }
+  legendInfo() { return { metric: this.metric, meta: METRICS[this.metric], max: this.max || 0, cloud: this.vis.cloud && this.cloudCount > 0 }; }
 
   setC2(fc) {
     this.c2All = fc || EMPTY;
@@ -661,25 +816,96 @@ export class Emberwatch {
     if (this.mode === "welt") this._layers(WELT_LAYERS[layer], on);
   }
 
-  /** Cyberlage (red) or Weltlage (indigo): swaps the data layers and recolours borders and country labels. */
+  /** Cyberlage (red), Weltlage (indigo) or Personen (black and white): swaps the data layers and recolours borders and
+   * country labels. */
   setMode(mode) {
     if (mode === this.mode) return;
     this.mode = mode;
-    const welt = mode === "welt";
     const m = this.map;
-    for (const [id, prop, cyber, w] of this.cyberPaint) m.setPaintProperty(id, prop, welt ? w : cyber);
-    m.setPaintProperty("choro", "fill-opacity", welt ? 0 : CHORO_OPACITY); // stays for hover and clicks
-    for (const [k, ids] of Object.entries(CYBER_LAYERS)) this._layers(ids, !welt && this.vis[k]);
-    for (const [k, ids] of Object.entries(WELT_LAYERS)) this._layers(ids, welt && this.wvis[k]);
+    for (const [id, prop, cyber, w, o] of this.cyberPaint) m.setPaintProperty(id, prop, mode === "welt" ? w : mode === "osint" ? o : cyber);
+    m.setPaintProperty("choro", "fill-opacity", mode === "cyber" ? CHORO_OPACITY : 0); // stays for hover and clicks
+    for (const [k, ids] of Object.entries(CYBER_LAYERS)) this._layers(ids, mode === "cyber" && this.vis[k]);
+    for (const [k, ids] of Object.entries(WELT_LAYERS)) this._layers(ids, mode === "welt" && this.wvis[k]);
+    for (const [k, ids] of Object.entries(OSINT_LAYERS)) this._layers(ids, mode === "osint" && this.ovis[k]);
     if (this._popup) this._popup.remove();
     this._tipHide();
     this.animate();
   }
 
+  /** Layer switch of the Personen mode (ops, locs, lines). */
+  setOsintVisible(layer, on) {
+    this.ovis[layer] = on;
+    if (this.mode === "osint") this._layers(OSINT_LAYERS[layer], on);
+  }
+
+  /** Personen: ops {cc: {n, found, sites}}, locs {cc: n}; lines from each profile country to the operator countries. */
+  setOsint({ ops = {}, locs = {} } = {}) {
+    this.osint = { ops, locs };
+    const pt = (cc, props) => {
+      const c = geo.centroids[cc];
+      return c ? { type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { cc, ...props } } : null;
+    };
+    this.map.getSource("osint-ops").setData({ type: "FeatureCollection", features: Object.entries(ops).map(([cc, o]) => pt(cc, { n: o.n, found: o.found > 0 })).filter(Boolean) });
+    this.map.getSource("osint-loc").setData({ type: "FeatureCollection", features: Object.entries(locs).map(([cc, n]) => pt(cc, { n })).filter(Boolean) });
+    const lines = [];
+    const path = this.projection === "globe" ? greatCircle : bezierArc;
+    for (const from of Object.keys(locs)) {
+      const a = geo.centroids[from];
+      for (const [cc, o] of Object.entries(ops)) {
+        const b = geo.centroids[cc];
+        if (a && b && cc !== from) lines.push({ type: "Feature", geometry: { type: "LineString", coordinates: path([a.lon, a.lat], [b.lon, b.lat]) }, properties: { found: o.found > 0 } });
+      }
+    }
+    this.map.getSource("osint-lines").setData({ type: "FeatureCollection", features: lines.slice(0, 400) });
+  }
+
+  /** Personen: ring around one country (the operator of the selected account). */
+  selectOsint(cc) {
+    const c = cc && geo.centroids[cc];
+    this.map.getSource("osint-sel")?.setData(c ? { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: {} }] } : EMPTY);
+  }
+
+  _osintTip(cc) {
+    const o = this.osint?.ops?.[cc];
+    const parts = [];
+    if (o) parts.push(t("os.map.ops", { n: num(o.n), list: o.sites.slice(0, 5).join(", ") + (o.sites.length > 5 ? " …" : "") }));
+    if (this.osint?.locs?.[cc]) parts.push(t("os.map.loc", { n: num(this.osint.locs[cc]) }));
+    return parts.join(" · ") || t("os.map.none");
+  }
+
   _weltTip(cc) {
     const n = this.welt.mentioned[cc] || 0, o = this.welt.origins[cc] || 0;
-    if (!n && !o) return t("wl.map.none");
-    return [n ? t("wl.map.named", { n: num(n) }) : null, o ? t("wl.map.origin_n", { n: num(o) }) : null].filter(Boolean).join(" · ");
+    const parts = [n ? t("wl.map.named", { n: num(n) }) : null, o ? t("wl.map.origin_n", { n: num(o) }) : null];
+    const b = this.wvis.block ? this.blocking.info?.[cc] : null;
+    if (b) {
+      if (b.shutdown) parts.push(t("wl.map.blk_shut"));
+      if (b.confirmed) parts.push(t("wl.map.blk_conf", { n: num(b.confirmed), d: num(this.blocking.days || 7) }));
+      else if (b.anomaly_pct !== null && b.anomaly_pct !== undefined) parts.push(t("wl.map.blk_anom", { p: pct(b.anomaly_pct) }));
+    }
+    return parts.filter(Boolean).join(" · ") || t("wl.map.none");
+  }
+
+  /** Submarine cables named in the reports of the selection: {cable id: number of reports}. */
+  setWeltCables(counts) {
+    this.weltCables = counts || {};
+    this.map.setFilter("welt-cables", ["in", ["get", "id"], ["literal", Object.keys(this.weltCables).slice(0, 300)]]);
+  }
+
+  /** Internet blocking per country: shutdowns ordered by a government and confirmed blocking (OONI). */
+  setWeltBlocking({ shutdown = [], confirmed = [], info = {}, days = 7 } = {}) {
+    this.blocking = { info, days };
+    const shut = [...new Set(shutdown)].filter((c) => /^[A-Z]{2}$/.test(c));
+    const conf = [...new Set(confirmed)].filter((c) => /^[A-Z]{2}$/.test(c) && !shut.includes(c));
+    if (!shut.length && !conf.length) {
+      this.map.setFilter("welt-block", NONE);
+      return;
+    }
+    const color = ["match", ["get", "iso"]]; // match labels are plain arrays of literals (no "literal" wrapper)
+    if (shut.length) color.push(shut, WELT.shutdown);
+    if (conf.length) color.push(conf, WELT.blocking);
+    color.push("rgba(0, 0, 0, 0)");
+    this.map.setPaintProperty("welt-block", "fill-color", color);
+    this.map.setFilter("welt-block", ["in", ["get", "iso"], ["literal", [...shut, ...conf]]]);
   }
 
   /** Weltlage data: pairs [{origin, target, n}], mentioned {cc: n}, origins {cc: n}. */
@@ -724,6 +950,8 @@ export class Emberwatch {
       pts.push([c.lon, c.lat]);
     }
     this.map.getSource("welt-sel").setData({ type: "FeatureCollection", features: feats });
+    const cables = (it?.cables || []).filter((x) => typeof x === "string").slice(0, 8);
+    this.map.setFilter("welt-sel-cable", ["in", ["get", "id"], ["literal", cables]]);
     this.map.setPaintProperty("welt-pairs", "line-opacity", 0.18); // the selected report stands out
     if (fit && pts.length > 1) this.fitTo(pts, 4);
     else if (fit && pts.length === 1) this.flyTo(pts[0][0], pts[0][1], 3);
@@ -732,6 +960,7 @@ export class Emberwatch {
 
   clearWeltItem() {
     this.map.getSource("welt-sel")?.setData(EMPTY);
+    if (this.map.getLayer("welt-sel-cable")) this.map.setFilter("welt-sel-cable", ["in", ["get", "id"], ["literal", []]]);
     this.map.setPaintProperty("welt-pairs", "line-opacity", PAIR_OPACITY);
   }
 
@@ -742,6 +971,7 @@ export class Emberwatch {
 
   focus(cc) {
     const c = geo.centroids[cc];
+    this.nudge();
     if (c) this.map.easeTo({ center: [c.lon, c.lat], zoom: Math.max(this.map.getZoom(), 2.4), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
   }
 
@@ -759,20 +989,27 @@ export class Emberwatch {
     const visible = shown(panel);
     const dock = document.getElementById("kpidock");
     const dockH = shown(dock) ? dock.getBoundingClientRect().height : 0;
+    // the left edge: a docked window of the Weltlage (Telegram) or of the Personen (graph) covers that part of the map
+    const leftWin = ["panel-tg", "panel-graph"].map((id) => document.getElementById(id))
+      .find((n) => n && !n.hidden && !n.classList.contains("floating") && shown(n));
+    const right = small || !visible ? 20 : Math.round(window.innerWidth - panel.getBoundingClientRect().left + 20);
+    const left = small || !leftWin ? 20 : Math.round(leftWin.getBoundingClientRect().right + 20);
     return {
       top: Math.round(top + 10),
       bottom: Math.max(40, toolsH + 40, small ? 40 : dockH + 24),
-      left: 20,
-      right: small || !visible ? 20 : Math.round(window.innerWidth - panel.getBoundingClientRect().left + 20),
+      left: left + right > window.innerWidth - 160 ? 20 : left, // too little map left between the windows: centre as before
+      right,
     };
   }
 
   flyTo(lon, lat, zoom = 4) {
+    this.nudge();
     this.map.easeTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), zoom), padding: this.viewPadding(), duration: reduceMotion ? 0 : 900 });
   }
 
   fitTo(points, maxZoom = 5) {
     if (!points.length) return;
+    this.nudge();
     const lons = points.map((x) => x[0]), lats = points.map((x) => x[1]);
     try {
       this.map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
@@ -782,14 +1019,54 @@ export class Emberwatch {
 
   toggleProjection() {
     this.projection = this.projection === "globe" ? "mercator" : "globe";
+    try { localStorage.setItem(PROJ_KEY, this.projection); } catch { /* ignore */ }
     this.map.setProjection({ type: this.projection });
+    this.nudge();
     const opts = { duration: reduceMotion ? 0 : 700 };
-    if (this.projection === "globe") this.map.easeTo({ center: [15, 28], zoom: 1.8, ...opts });
+    if (this.projection === "globe") this.map.easeTo({ ...GLOBE_VIEW, ...opts });
     else this.map.fitBounds([[-168, -52], [178, 76]], { padding: 20, ...opts });
     this.setArcs(this.arcRows);
     if (this._weltPairs) this.setWelt({ pairs: this._weltPairs, ...this.welt });
+    if (this.osint) this.setOsint(this.osint);
     this.onProjection?.();
     return this.projection;
+  }
+
+  // --- turning globe ----------------------------------------------------------------------
+  _spinInit() {
+    const stop = () => this.nudge();
+    for (const ev of ["mousedown", "touchstart", "wheel", "dragstart"]) this.map.on(ev, stop);
+    this.map.on("movestart", (e) => { if (e.originalEvent) stop(); }); // keyboard and buttons; not our own steps
+    this.map.getContainer().addEventListener("keydown", stop);
+    this.nudge(6000); // the first turn starts a few seconds after loading
+    this._spinLoop();
+  }
+
+  /** Pause the turning (any interaction or camera move); it starts again after ms without one. */
+  nudge(ms = SPIN_IDLE_MS) {
+    this.spin.idleUntil = performance.now() + ms;
+  }
+
+  setSpin(on) {
+    this.spin.on = Boolean(on);
+    try { localStorage.setItem(SPIN_KEY, on ? "on" : "off"); } catch { /* ignore */ }
+    if (on) this.nudge(1500);
+  }
+
+  _spinLoop() {
+    if (this.spin.raf) return;
+    const frame = (ts) => {
+      this.spin.raf = requestAnimationFrame(frame);
+      const idle = this.spin.on && !this.paused && this.projection === "globe" && performance.now() >= this.spin.idleUntil
+        && this.map.getZoom() <= SPIN_MAX_ZOOM && !this.map.isMoving() && !document.body.classList.contains("dragging");
+      if (!idle) { this.spin.last = ts; return; }
+      const dt = ts - this.spin.last;
+      if (dt < 33) return; // about 30 steps per second
+      this.spin.last = ts;
+      const c = this.map.getCenter();
+      this.map.jumpTo({ center: [c.lng - (SPIN_DEG_S * Math.min(dt, 100)) / 1000, c.lat] });
+    };
+    this.spin.raf = requestAnimationFrame(frame);
   }
 
   // --- tool results -----------------------------------------------------------------
@@ -819,15 +1096,19 @@ export class Emberwatch {
     return points.length;
   }
 
-  /** Stops the arc animation while the map is covered by a page (analysis, my network). */
+  /** Stops the animations (arcs, turning globe) while the map is covered by a page (analysis, my network, account). */
   pause(on) {
     this.paused = on;
     if (on) {
       if (this._raf) cancelAnimationFrame(this._raf);
       this._raf = null;
+      if (this.spin.raf) cancelAnimationFrame(this.spin.raf);
+      this.spin.raf = null;
     } else {
       this.animate();
       this.map.resize();
+      this.nudge(4000);
+      this._spinLoop();
     }
   }
 

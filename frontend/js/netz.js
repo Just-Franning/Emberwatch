@@ -127,7 +127,7 @@ export class Netz {
             el("tbody", {}, m.history.map((h) => el("tr", {}, el("td", {}, objLink("ip", h.ip, h.ip, "obj mono")), el("td", {}, dateTime(h.first_seen)),
               el("td", {}, dateTime(h.last_seen)), el("td", {}, h.source ? t(`myip.src.${h.source}`) : "–"),
               el("td", {}, h.asn ? `AS${h.asn} ${h.as_name || ""}`.trim() : "–"))))))) : null,
-        ips.length ? el("div", { class: "btnrow" },
+        ips.length ? el("div", { class: "btnrow admin-only" },
           el("button", { type: "button", class: "small danger", onclick: async () => {
             if (!window.confirm(t("nz.clear_q", { kind: t(`myip.kind.${kind}`) }))) return;
             try { await api("api/myip/clear", { json: { kind } }); reload(); } catch (e) { fail(e); }
@@ -204,10 +204,10 @@ export class Netz {
     } }, t("common.check_now"));
     kids(this.box,
       el("h2", { class: "page-title" }, t("nz.nav.myip")), el("p", { class: "lead" }, t("nz.m.lead")),
-      el("div", { class: "btnrow" }, checkBtn), feedback,
+      el("div", { class: "btnrow admin-only" }, checkBtn), feedback,
       el("div", { class: "cards" }, kindCard("home"), kindCard("server")),
-      el("h3", { class: "page-h" }, t("nz.m.setup")),
-      el("div", { class: "cards" }, visit, dynCard, tokCard), sightings);
+      el("h3", { class: "page-h admin-only" }, t("nz.m.setup")),
+      el("div", { class: "cards admin-only" }, visit, dynCard, tokCard), sightings);
     if (this.token) { showToken(this.token); this.token = null; }
   }
 }

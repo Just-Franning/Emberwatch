@@ -132,76 +132,7 @@ def feeds(m, client) -> None:
     asyncio.run(run())
 
 
-# --------------------------------------------------------------------------------------------------------------
-# Login, sessions, origin checks
-
-def test_auth_generated_password(tmp_path, monkeypatch):
-    m = load_app(tmp_path, monkeypatch, AUTH_MODE="password")
-    pw_file = tmp_path / "initial-password.txt"
-    assert pw_file.exists() and (pw_file.stat().st_mode & 0o777) == 0o600
-    password = pw_file.read_text().strip()
-    assert len(password) >= 20
-    assert password not in (tmp_path / "auth.json").read_text()
-    from fastapi.testclient import TestClient
-    with TestClient(m.app, base_url="https://ew.example") as tc:
-        r = tc.get("/api/overview")
-        assert r.status_code == 401 and r.json()["key"] == "err.auth_required"
-        assert tc.get("/", follow_redirects=False).headers["location"] == "/login"
-        assert tc.get("/js/app.js").status_code == 401
-        assert tc.get("/vendor/fonts/%2e%2e/%2e%2e/index.html").status_code == 401  # no bypass via public prefixes
-        assert tc.get("/login").status_code == 200 and tc.get("/styles.css").status_code == 200
-        assert tc.get("/healthz").json() == {"status": "ok"}
-        assert tc.get("/api/auth/status").json() == {"mode": "password", "authenticated": False, "version": m.S.version}
-        bad = tc.post("/api/auth/login", json={"password": "wrong"})
-        assert bad.status_code == 401 and bad.json()["key"] == "err.login_failed"
-        ok = tc.post("/api/auth/login", json={"password": password})
-        assert ok.status_code == 200
-        cookie = ok.headers["set-cookie"].lower()
-        assert "httponly" in cookie and "samesite=strict" in cookie and "secure" in cookie and "max-age=43200" in cookie
-        assert tc.get("/api/overview").status_code == 200 and tc.get("/js/app.js").status_code == 200
-        assert tc.get("/api/auth/status").json()["authenticated"] is True
-        # cross-site requests are rejected even with a valid session
-        x = tc.post("/api/watchlist", json={"value": "1.1.1.1"}, headers={"Origin": "https://evil.example"})
-        assert x.status_code == 403 and x.json()["key"] == "err.csrf"
-        assert tc.get("/api/overview", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
-        assert tc.post("/api/watchlist", json={"value": "1.1.1.1"}, headers={"Origin": "null"}).status_code == 403
-        same = tc.post("/api/watchlist", json={"value": "1.1.1.1"}, headers={"Origin": "https://ew.example"})
-        assert same.status_code == 200, same.text
-        fwd = tc.post("/api/watchlist", json={"value": "1.0.0.1"},
-                      headers={"Origin": "https://pub.example", "X-Forwarded-Host": "pub.example"})
-        assert fwd.status_code == 200
-        # tampered session
-        token = tc.cookies.get("ew_session")
-        tc.cookies.set("ew_session", token[:-2] + ("AA" if token[-2:] != "AA" else "BB"), domain="ew.example")
-        assert tc.get("/api/overview").status_code == 401
-        tc.cookies.set("ew_session", token, domain="ew.example")
-        assert tc.get("/api/overview").status_code == 200
-        out = tc.post("/api/auth/logout")
-        assert out.status_code == 200 and "ew_session=" in out.headers["set-cookie"]
-    with TestClient(m.app, base_url="https://ew.example") as tc:
-        for _ in range(10):
-            assert tc.post("/api/auth/login", json={"password": "nope"}).status_code == 401
-        locked = tc.post("/api/auth/login", json={"password": password})
-        assert locked.status_code == 429 and locked.json()["key"] == "err.login_locked"
-
-
-def test_auth_env_password_and_restart(tmp_path, monkeypatch):
-    m = load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="correct horse battery staple")
-    assert not (tmp_path / "initial-password.txt").exists()
-    from fastapi.testclient import TestClient
-    with TestClient(m.app) as tc:
-        assert tc.post("/api/auth/login", json={"password": "correct horse battery staple"}).status_code == 200
-        token = tc.cookies.get("ew_session")
-    # restart with the same password: the session stays valid; another password invalidates it
-    m2 = load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="correct horse battery staple")
-    assert m2.auth.valid(token)
-    m3 = load_app(tmp_path, monkeypatch, AUTH_MODE="password", AUTH_PASSWORD="another long password")
-    assert not m3.auth.valid(token)
-    m4 = load_app(tmp_path, monkeypatch, AUTH_MODE="none")
-    from fastapi.testclient import TestClient as TC
-    with TC(m4.app) as tc:
-        assert tc.get("/api/overview").status_code == 200
-        assert tc.post("/api/watchlist", json={"value": "1.1.1.1"}, headers={"Origin": "https://evil.example"}).status_code == 403
+# Sign-in, sessions, roles and origin checks: test_v4_accounts.py
 
 
 # --------------------------------------------------------------------------------------------------------------

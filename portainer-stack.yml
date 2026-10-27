@@ -5,7 +5,7 @@
 # Own image (built from the repository tar): set EMBERWATCH_IMAGE, e.g. emberwatch:local.
 services:
   emberwatch:
-    image: ${EMBERWATCH_IMAGE:-ghcr.io/saturdaynetlab/emberwatch:latest}
+    image: ${EMBERWATCH_IMAGE:-ghcr.io/just-franning/emberwatch:latest}
     container_name: emberwatch
     restart: unless-stopped
     networks:
@@ -16,10 +16,12 @@ services:
       LANGUAGE: ${LANGUAGE:-en}
       TZ: ${TZ:-Europe/Berlin}
       CONTACT: ${CONTACT:-}
-      # Login
+      # Login and accounts (AUTH_PASSWORD only sets the password of the first administrator AUTH_USER)
       AUTH_MODE: ${AUTH_MODE:-password}
+      AUTH_USER: ${AUTH_USER:-admin}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       SESSION_HOURS: ${SESSION_HOURS:-12}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
       COOKIE_SECURE: ${COOKIE_SECURE:-auto}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
@@ -70,6 +72,18 @@ services:
       NEWS_DISABLE: ${NEWS_DISABLE:-}
       NEWS_FEEDS: ${NEWS_FEEDS:-}
       NEWS_RETENTION_DAYS: ${NEWS_RETENTION_DAYS:-90}
+      # Optional sources to switch off: ooni,gdelt,attack,euvd,exploits,urlhaus,cloud_status
+      SOURCES_DISABLE: ${SOURCES_DISABLE:-}
+      # Who owns this IP: geocoding of company addresses (off = none)
+      NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org}
+      # People search (administrators only)
+      OSINT_ENABLED: ${OSINT_ENABLED:-1}
+      OSINT_RETENTION_DAYS: ${OSINT_RETENTION_DAYS:-90}
+      GRAVATAR_API_KEY: ${GRAVATAR_API_KEY:-}
+      # Telegram channels in the world view
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-1}
+      TELEGRAM_INTERVAL_MIN: ${TELEGRAM_INTERVAL_MIN:-15}
+      TELEGRAM_RETENTION_DAYS: ${TELEGRAM_RETENTION_DAYS:-90}
       # Log analysis
       LOG_MAX_MB: ${LOG_MAX_MB:-25}
       SYSLOG_ENABLED: ${SYSLOG_ENABLED:-0}

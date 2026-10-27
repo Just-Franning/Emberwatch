@@ -9,6 +9,7 @@ Coordinates come from DB-IP (approximate, city/region level).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,11 +19,14 @@ import httpx
 
 from ..db import DB, utcnow
 from ..geo import Geo
+from .fetch import get_capped
 
 log = logging.getLogger("abusech")
 
 FEODO_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.json"
 THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
+URLHAUS_RECENT = "https://urlhaus-api.abuse.ch/v1/urls/recent/"
+URLHAUS_MAX_BYTES = 25 * 1024 * 1024
 
 UPSERT = """
 INSERT INTO c2(id, source, ioc, ip, port, malware, threat_type, status, confidence, first_seen, last_seen,
@@ -114,7 +118,8 @@ async def collect_threatfox(client: httpx.AsyncClient, db: DB, geo: Geo, ua: str
     if not key:
         db.status("threatfox", False, code="missing_key", params={"var": "ABUSECH_AUTH_KEY"})
         return
-    have = db.query("SELECT (SELECT COUNT(*) FROM c2 WHERE source='threatfox') + (SELECT COUNT(*) FROM iocs) AS n")[0]["n"]
+    have = db.query("SELECT (SELECT COUNT(*) FROM c2 WHERE source='threatfox') + "
+                    "(SELECT COUNT(*) FROM iocs WHERE id NOT LIKE 'urlhaus:%') AS n")[0]["n"]  # URLhaus rows are not ThreatFox data
     days = 1 if have else 7  # initial fill with 7 days (API maximum)
     try:
         r = await client.post(
@@ -179,6 +184,53 @@ async def collect_threatfox(client: httpx.AsyncClient, db: DB, geo: Geo, ua: str
     db.execmany(IOC_UPSERT, ioc_rows)
     db.status("threatfox", True, "", len(rows))
     db.status("threatfox_iocs", True, "", db.query("SELECT COUNT(*) AS n FROM iocs")[0]["n"])
+
+
+async def collect_urlhaus(client: httpx.AsyncClient, db: DB, ua: str, key: str) -> None:
+    """URLhaus (3.3): URLs that distribute malware, added in the last days (API v1 urls/recent, Auth-Key).
+    They go to the "iocs" table (type url): log analysis, the IOC match and the watchlist (your domains and networks)
+    use them like ThreatFox IOCs."""
+    if not key:
+        db.status("urlhaus", False, code="missing_key", params={"var": "ABUSECH_AUTH_KEY"})
+        return
+    try:
+        status, _, raw = await get_capped(client, URLHAUS_RECENT, max_bytes=URLHAUS_MAX_BYTES, timeout=90,
+                                          headers={"Auth-Key": key, "User-Agent": ua})
+        if status != 200:
+            raise ValueError(f"HTTP {status}")
+        body = json.loads(raw)
+        if not isinstance(body, dict) or body.get("query_status") not in ("ok", "no_results"):
+            raise ValueError(f"query_status={body.get('query_status') if isinstance(body, dict) else '?'}")
+        data = body.get("urls") or []
+        if not isinstance(data, list):
+            data = []
+    except Exception as exc:
+        db.status("urlhaus", False, f"{exc.__class__.__name__}: {str(exc)[:160]}")
+        return
+    now = utcnow()
+    rows = []
+    for e in data[:5000]:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        url = str(e.get("url") or "")[:2000]
+        host = ioc_host(url)
+        if not url or not host:
+            continue
+        ip = None
+        try:
+            ip = str(ipaddress.ip_address(host))
+            host = None
+        except ValueError:
+            pass
+        tags = [str(t)[:40] for t in (e.get("tags") or []) if t] if isinstance(e.get("tags"), list) else []
+        ref = str(e.get("urlhaus_reference") or "")
+        rows.append((
+            f"urlhaus:{e.get('id')}", url, "url", ip, host, None, str(e.get("threat") or "malware_download")[:40],
+            tags[0] if tags else "unknown", None, _norm_ts(e.get("date_added")), _norm_ts(e.get("date_added")),
+            ref if ref.startswith("https://urlhaus.abuse.ch/") else f"https://urlhaus.abuse.ch/url/{e.get('id')}/", now,
+        ))
+    db.execmany(IOC_UPSERT, rows)
+    db.status("urlhaus", True, "", db.query("SELECT COUNT(*) AS n FROM iocs WHERE id LIKE 'urlhaus:%'")[0]["n"])
 
 
 def ioc_host(ioc: str) -> str | None:

@@ -1,5 +1,5 @@
-// Analysis area: start page, object pages, tool box, deep views (KEV, infrastructure, C2, ransomware), run history,
-// Gemini per object. Everything below the header; the map stays in the situation view ("show on map" switches there).
+// Analysis area: start page, object pages, tool box, deep views (exploited vulnerabilities, infrastructure, C2,
+// ransomware, cloud platform incidents), run history, Gemini per object. Everything below the header; the map stays in the situation view ("show on map" switches there).
 import { reportArticle } from "./ai.js";
 import { t } from "./i18n.js";
 import { alertItem } from "./panels.js";
@@ -7,9 +7,11 @@ import { GROUPS, LEVELS, cyberChefUrl, detect, flags, loadRegistry, objectOf, pa
 import { destroyIn, findingsNode, relatedNode, renderResult, sectionNode } from "./result.js";
 import { go, href, isPinned, objLink, pinned, recent, remember, routes, togglePin } from "./router.js";
 import { RunStack } from "./runstack.js";
+import { isAdmin } from "./session.js";
 import { api, countryName, dateOnly, dateTime, dec2, el, kids, num, safeLink, sevTag } from "./util.js";
 
-const VIEWS = ["kev", "infra", "c2", "ransom"];
+const VIEWS = ["kev", "infra", "c2", "ransom", "platforms"];
+const XP_NAMES = { metasploit: "Metasploit", nuclei: "Nuclei" };
 const MAX_INPUT = 2048; // same limit as the input detection on the server (longer input counts as free text)
 let handoff = null; // long input (mail header) passed from the start page to the tool box
 
@@ -162,15 +164,17 @@ export class Analyse {
     const tools = (page.tools || []).map((id) => reg.byId[id]).filter((x) => x && !x.client_only);
     const groups = GROUPS.map((g) => [g, tools.filter((x) => x.group === g)]).filter(([, l]) => l.length);
     const actions = el("section", { class: "obj-actions" },
-      ...(page.recipes || []).map((r) => el("button", { type: "button", class: "primary", title: t(`an.recipe_hint`),
+      ...(page.recipes || []).map((r) => el("button", { type: "button", class: "primary", title: t(`an.recipe_hint`), disabled: !isAdmin(),
         onclick: () => this.stack.recipe(r, toolTarget(o), t(`tb.recipe.${r}`)) }, t(`tb.recipe.${r}`))),
       ...groups.map(([g, list]) => el("div", { class: "act-group" }, el("span", { class: "act-label" }, t(`tb.group.${g}`)),
-        ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available, title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
+        ...list.map((x) => el("button", { type: "button", disabled: !reg.enabled || !x.available || !isAdmin(), title: `${x.desc}${x.available ? "" : ` (${x.reason})`}`,
           class: `lvl-btn lvl-${x.level}`, onclick: () => this.stack.tool(x.id, toolTarget(o)) }, x.name)))),
       page.map ? el("button", { type: "button", onclick: () => this.onMap(page.map, `${t(`obj.type.${page.type}`)}: ${page.title}`) }, t("common.show_map")) : null,
+      page.type === "ip" ? el("button", { type: "button", title: t("ow.title"), onclick: () => go(routes.owner(page.value)) }, t("an.owner")) : null,
       page.type === "actor" ? el("a", { class: "btn", href: href(routes.welt({ actor: page.title, days: 90 })) }, t("an.actor_welt")) : null,
       page.type === "country" ? el("a", { class: "btn", href: href(routes.welt({ country: page.value })) }, t("an.country_welt")) : null,
-      tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null);
+      tools.length ? el("a", { class: "btn plain", href: href(routes.tools(toolTarget(o))) }, t("an.more_options")) : null,
+      tools.length ? el("span", { class: "note viewer-only" }, t("role.viewer_tools")) : null);
     const reasons = page.risk.reasons?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.assessment")), findingsNode(page.risk.reasons)) : null;
     const sections = (page.sections || []).map(sectionNode);
     const alerts = page.alerts?.length ? el("section", { class: "res-sec" }, el("h4", {}, t("an.own_alerts", { n: num(page.alerts.length) })),
@@ -194,8 +198,9 @@ export class Analyse {
     const scope = `obj:${page.type}:${page.value}`;
     const out = el("div", { class: "ai-out" });
     const q = el("input", { type: "text", maxlength: 600, placeholder: t("an.ai_q_ph"), "aria-label": t("an.ai_q_ph") });
-    const run = el("button", { type: "button", class: "primary", disabled: !enabled }, t("an.ai_run"));
-    const ask = el("button", { type: "submit", disabled: !enabled }, t("ai.ask"));
+    const canRun = enabled && isAdmin();
+    const run = el("button", { type: "button", class: "primary admin-only", disabled: !canRun }, t("an.ai_run"));
+    const ask = el("button", { type: "submit", disabled: !canRun }, t("ai.ask"));
     let thread = [];
     let current = null;
     const show = () => {
@@ -229,11 +234,11 @@ export class Analyse {
       } catch (e) {
         kids(out, el("p", { class: "state err" }, t("ai.failed", { msg: e.message })));
       } finally {
-        run.disabled = ask.disabled = !enabled;
+        run.disabled = ask.disabled = !canRun;
       }
     };
     run.addEventListener("click", () => analyse(null));
-    const form = el("form", { class: "ai-ask" }, q, ask);
+    const form = el("form", { class: "ai-ask admin-only" }, q, ask);
     form.addEventListener("submit", (e) => { e.preventDefault(); if (q.value.trim()) analyse(q.value.trim()); });
     if (enabled) {
       api(`api/ai/reports?limit=1&scope=${encodeURIComponent(scope)}`).then(async (list) => {
@@ -266,7 +271,7 @@ export class Analyse {
 
     const drawRecipes = () => kids(recipes, el("span", { class: "act-label" }, t("an.recipes")),
       ...reg.recipes.map((r) => el("button", {
-        type: "button", class: "primary", disabled: !reg.enabled || !(det?.recipes || []).includes(r.id), title: r.desc,
+        type: "button", class: "primary", disabled: !reg.enabled || !isAdmin() || !(det?.recipes || []).includes(r.id), title: r.desc,
         onclick: () => this.stack.recipe(r.id, r.id === "mail" ? input.value : (det?.value || input.value.trim()), r.name),
       }, r.name)));
 
@@ -275,16 +280,19 @@ export class Analyse {
       groupsBox.querySelectorAll(".tool-row").forEach((n) => n.classList.toggle("on", n.dataset.id === tool?.id));
       if (!tool) { kids(panel); return; }
       const pf = paramForm(tool);
-      const runBtn = el("button", { type: "submit", class: "primary", disabled: !reg.enabled || !tool.available }, tool.client_only ? t("an.open_cyberchef") : t("common.run"));
+      const allowed = tool.client_only || isAdmin(); // CyberChef opens in the browser; everything else runs on the server
+      const runBtn = el("button", { type: "submit", class: "primary", disabled: !reg.enabled || !tool.available || !allowed }, tool.client_only ? t("an.open_cyberchef") : t("common.run"));
       const err = el("p", { class: "state err", hidden: true });
       const form = el("form", { class: "tool-run" },
         el("div", { class: "tool-run-head" }, el("strong", {}, tool.name), flags(tool)),
         el("p", { class: "note" }, tool.desc),
         !tool.available ? el("p", { class: "warn-txt" }, tool.reason) : null,
+        !allowed ? el("p", { class: "note" }, t("role.viewer_tools")) : null,
         pf.node, el("div", { class: "btnrow" }, runBtn), err);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         err.hidden = true;
+        if (!allowed) return;
         const raw = input.value.trim();
         if (!raw) { input.focus(); return; }
         if (tool.id !== "mailhdr" && raw.length > MAX_INPUT) { err.textContent = t("tb.too_long", { n: MAX_INPUT }); err.hidden = false; return; }
@@ -352,7 +360,7 @@ export class Analyse {
       if (internal && query.get("run") === "1" && input.value.trim() && form) form.requestSubmit();
     }
     const recipe = start?.recipe || (internal && reg.recipes.some((r) => r.id === query.get("recipe")) ? query.get("recipe") : null);
-    if (recipe && input.value.trim() && reg.enabled) this.stack.recipe(recipe, recipe === "mail" ? input.value : (det?.value || input.value.trim()), t(`tb.recipe.${recipe}`));
+    if (recipe && input.value.trim() && reg.enabled && isAdmin()) this.stack.recipe(recipe, recipe === "mail" ? input.value : (det?.value || input.value.trim()), t(`tb.recipe.${recipe}`));
     if (!pre) input.focus();
   }
 
@@ -367,7 +375,7 @@ export class Analyse {
           el("td", {}, r.obj_type ? objLink(r.obj_type, r.obj_value, r.target || r.obj_value) : el("span", { class: "mono" }, r.target || "–")),
           el("td", {}, r.sev ? sevTag(r.sev) : "–"),
           el("td", { class: "num" }, el("a", { class: "btn small", href: href(routes.run(r.id)) }, t("common.open")),
-            withDelete ? el("button", { type: "button", class: "small danger", onclick: async () => {
+            withDelete && isAdmin() ? el("button", { type: "button", class: "small danger", onclick: async () => {
               try { await api(`api/tb/history/${r.id}`, { method: "DELETE" }); row.remove(); } catch (e) { row.after(el("tr", {}, el("td", { colspan: 5, class: "state err" }, e.message))); }
             } }, "×") : null));
         return row;
@@ -392,7 +400,7 @@ export class Analyse {
   }
 
   async view_kev(box, seq) {
-    const f = { q: "", vendor: "", days: "0", ransomware: false, min_epss: "0", mine: false, sort: "date" };
+    const f = { q: "", vendor: "", days: "0", ransomware: false, min_epss: "0", mine: false, sort: "date", catalog: "kev", exploit: false };
     const out = el("div");
     const q = el("input", { type: "search", placeholder: t("an.kev.q_ph"), "aria-label": t("an.kev.q_ph"), maxlength: 100 });
     const vendor = el("select", { "aria-label": t("an.kev.vendor") }, el("option", { value: "" }, t("common.all")));
@@ -401,39 +409,55 @@ export class Analyse {
     const sort = el("select", { "aria-label": t("an.kev.sort") }, el("option", { value: "date" }, t("an.kev.by_date")), el("option", { value: "epss" }, t("an.kev.by_epss")));
     const rw = el("input", { type: "checkbox" });
     const mine = el("input", { type: "checkbox" });
+    const xpOnly = el("input", { type: "checkbox" });
+    const catalog = el("select", { "aria-label": t("an.kev.catalog") }, el("option", { value: "kev" }, t("an.kev.cat_kev")), el("option", { value: "euvd" }, t("an.kev.cat_euvd")));
+    const rwLabel = el("label", { class: "pcheck" }, rw, t("an.kev.ransom_only"));
+    const xpTags = (r) => (r.exploits || []).filter((x) => XP_NAMES[x]).map((x) => el("span", { class: "tag xp", title: t("an.kev.xp_title") }, XP_NAMES[x]));
     const load = async () => {
-      const p = new URLSearchParams({ sort: f.sort, limit: "500" });
+      const p = new URLSearchParams({ sort: f.sort, limit: "500", catalog: f.catalog });
       for (const k of ["q", "vendor"]) if (f[k]) p.set(k, f[k]);
       if (f.days !== "0") p.set("days", f.days);
       if (f.min_epss !== "0") p.set("min_epss", f.min_epss);
       if (f.ransomware) p.set("ransomware", "true");
       if (f.mine) p.set("mine", "true");
+      if (f.exploit) p.set("exploit", "true");
       kids(out, el("p", { class: "state" }, t("common.loading")));
       const d = await api(`api/kev?${p}`);
       if (seq !== this.seq) return;
-      if (vendor.options.length === 1) vendor.append(...d.vendors.map((v) => el("option", { value: v.key }, `${v.key} (${num(v.count)})`)));
-      kids(out, el("p", { class: "note" }, t("an.kev.count", { n: num(d.total), total: num(d.catalog) })),
-        d.rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res" },
-          el("thead", {}, el("tr", {}, ["CVE", t("an.kev.vendor"), t("an.kev.product"), t("an.kev.added"), t("an.kev.due"), "EPSS", ""].map((h) => el("th", {}, h)))),
+      const euvd = f.catalog === "euvd";
+      if (!f.vendor) { // vendors of the current selection; kept while one is chosen, so another can be picked
+        kids(vendor, el("option", { value: "" }, t("common.all")), ...d.vendors.map((v) => el("option", { value: v.key }, `${v.key} (${num(v.count)})`)));
+      }
+      const heads = ["CVE", t("an.kev.vendor"), t("an.kev.product"), euvd ? t("an.kev.since") : t("an.kev.added"), ...(euvd ? [] : [t("an.kev.due")]), "EPSS", ""];
+      kids(out, el("p", { class: "note" }, t(euvd ? "an.kev.count_euvd" : "an.kev.count", { n: num(d.total), total: num(d.catalog) })),
+        euvd && !d.euvd ? el("p", { class: "note" }, t("an.kev.euvd_off")) : null,
+        d.rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res kev" },
+          el("thead", {}, el("tr", {}, heads.map((h) => el("th", {}, h)))),
           el("tbody", {}, d.rows.map((r) => el("tr", {},
-            el("td", {}, objLink("cve", r.cve)),
-            el("td", {}, objLink("vendor", r.vendor, r.vendor)),
-            el("td", {}, r.product || "", el("div", { class: "muted" }, r.name || "")),
-            el("td", {}, dateOnly(r.date_added)), el("td", {}, dateOnly(r.due_date)),
+            el("td", {}, objLink("cve", r.cve), euvd && r.euvd ? el("div", { class: "muted mono" }, r.euvd) : null),
+            el("td", {}, r.vendor ? objLink("vendor", r.vendor, r.vendor) : "–"),
+            el("td", {}, r.product || "", r.name ? el("div", { class: "muted" }, r.name) : null),
+            el("td", {}, dateOnly(r.date_added)), euvd ? null : el("td", {}, dateOnly(r.due_date)),
             el("td", { class: r.epss >= 0.5 ? "warn-txt" : null }, r.epss === null || r.epss === undefined ? "–" : dec2(r.epss)),
             el("td", {}, (r.ransomware || "").toLowerCase() === "known" ? el("span", { class: "tag bad" }, t("pr.ransom_tag")) : null,
+              !euvd && r.euvd ? el("span", { class: "tag", title: t("an.kev.enisa_title", { id: r.euvd }) }, "ENISA") : null,
+              ...xpTags(r),
               r.watched ? el("span", { class: "tag warn" }, t("an.kev.watched")) : null, r.exposed ? el("span", { class: "tag bad" }, t("an.kev.exposed")) : null))))))
-          : el("p", { class: "empty" }, t("common.no_data")));
+          : el("p", { class: "empty" }, t("common.no_data")),
+        el("p", { class: "note" }, t("an.kev.sources_note")));
     };
     const apply = debounce(() => {
-      Object.assign(f, { q: q.value.trim(), vendor: vendor.value, days: days.value, min_epss: epss.value, sort: sort.value, ransomware: rw.checked, mine: mine.checked });
+      if (catalog.value !== f.catalog) vendor.value = ""; // vendor names differ between the catalogues
+      Object.assign(f, { q: q.value.trim(), vendor: vendor.value, days: days.value, min_epss: epss.value, sort: sort.value, ransomware: rw.checked,
+        mine: mine.checked, catalog: catalog.value, exploit: xpOnly.checked });
+      rwLabel.hidden = f.catalog === "euvd"; // ransomware use is a KEV field
       load().catch((e) => kids(out, el("p", { class: "state err" }, e.message)));
     }, 250);
-    for (const n of [q, vendor, days, epss, sort, rw, mine]) n.addEventListener(n === q ? "input" : "change", apply);
+    for (const n of [q, vendor, days, epss, sort, rw, mine, catalog, xpOnly]) n.addEventListener(n === q ? "input" : "change", apply);
     kids(box, ...this.viewHead("kev"),
-      el("div", { class: "filters wide" }, el("label", { class: "grow" }, t("an.kev.search"), q), el("label", {}, t("an.kev.vendor"), vendor),
-        el("label", {}, t("an.kev.period"), days), el("label", {}, "EPSS", epss), el("label", {}, t("an.kev.sort"), sort),
-        el("label", { class: "pcheck" }, rw, t("an.kev.ransom_only")), el("label", { class: "pcheck" }, mine, t("an.kev.mine_only"))),
+      el("div", { class: "filters wide" }, el("label", {}, t("an.kev.catalog"), catalog), el("label", { class: "grow" }, t("an.kev.search"), q),
+        el("label", {}, t("an.kev.vendor"), vendor), el("label", {}, t("an.kev.period"), days), el("label", {}, "EPSS", epss), el("label", {}, t("an.kev.sort"), sort),
+        rwLabel, el("label", { class: "pcheck" }, xpOnly, t("an.kev.exploit_only")), el("label", { class: "pcheck" }, mine, t("an.kev.mine_only"))),
       out);
     await load();
   }
@@ -558,6 +582,54 @@ export class Analyse {
       el("div", { class: "filters wide" }, el("label", {}, t("an.kev.period"), days), el("label", {}, t("t.groups"), grp), el("label", {}, t("an.infra.country"), cc)),
       el("p", { class: "note" }, t("t.latest_note")), out);
     await load();
+  }
+
+  /** Incidents at AWS, Azure, Google Cloud and Cloudflare from their public status pages. */
+  async view_platforms(box, seq) {
+    const out = el("div");
+    const days = el("select", { "aria-label": t("an.kev.period") }, ...[1, 7, 30].map((v) => el("option", { value: v, selected: v === 7 }, v === 1 ? t("t.24h") : t("t.days", { n: v }))));
+    const prov = el("select", { "aria-label": t("an.pf.provider") }, el("option", { value: "" }, t("common.all")));
+    const active = el("input", { type: "checkbox" });
+    let data = null;
+    const region = (r) => {
+      const name = r.code && r.name !== r.code ? `${r.name} (${r.code})` : r.name || r.code || "";
+      const prec = r.precision === "region" || r.precision === "country" ? ` · ${t(`an.pf.prec.${r.precision}`)}` : "";
+      return r.cc && /^[A-Z]{2}$/.test(r.cc) ? el("span", {}, objLink("country", r.cc, name), el("span", { class: "muted" }, prec)) : el("span", {}, name);
+    };
+    const draw = () => {
+      const rows = data.incidents.filter((x) => (!prov.value || x.provider === prov.value) && (!active.checked || x.status === "active"));
+      const nActive = rows.filter((x) => x.status === "active").length;
+      kids(out,
+        el("p", { class: "note" }, t("an.pf.count", { n: num(rows.length), a: num(nActive) })),
+        rows.length ? el("div", { class: "tbl-wrap" }, el("table", { class: "res" },
+          el("thead", {}, el("tr", {}, [t("an.pf.provider"), t("an.pf.title"), t("an.pf.regions"), t("an.pf.started"), t("an.pf.updated"), ""].map((h) => el("th", {}, h)))),
+          el("tbody", {}, rows.map((x) => el("tr", {},
+            el("td", {}, x.provider_name || x.provider, x.used ? el("span", { class: "tag warn" }, t("an.pf.used")) : null),
+            el("td", {}, el("strong", {}, x.title),
+              x.status === "active" ? el("span", { class: "tag bad" }, t("an.pf.active")) : el("span", { class: "tag" }, t("an.pf.resolved")),
+              x.impact && ["none", "minor", "major", "critical"].includes(x.impact) ? el("span", { class: "tag" }, t(`an.pf.impact.${x.impact}`)) : null,
+              x.summary ? el("div", { class: "muted" }, x.summary.slice(0, 300)) : null),
+            el("td", {}, ...(x.regions || []).slice(0, 8).flatMap((r, i) => [i ? ", " : null, region(r)])),
+            el("td", {}, dateTime(x.started)), el("td", {}, dateTime(x.updated)),
+            el("td", {}, safeLink(x.url, "↗"))))))) : el("p", { class: "empty" }, t("common.no_data")));
+    };
+    const load = async () => {
+      kids(out, el("p", { class: "state" }, t("common.loading")));
+      data = await api(`api/platforms?days=${days.value}`);
+      if (seq !== this.seq) return;
+      const cur = prov.value;
+      kids(prov, el("option", { value: "" }, t("common.all")), ...data.providers.map((x) => el("option", { value: x.id, selected: x.id === cur }, x.name)));
+      draw();
+    };
+    days.addEventListener("change", () => load().catch((e) => kids(out, el("p", { class: "state err" }, e.message))));
+    prov.addEventListener("change", draw);
+    active.addEventListener("change", draw);
+    kids(box, ...this.viewHead("platforms"),
+      el("div", { class: "filters wide" }, el("label", {}, t("an.kev.period"), days), el("label", {}, t("an.pf.provider"), prov),
+        el("label", { class: "pcheck" }, active, t("an.pf.only_active"))),
+      el("p", { class: "note" }, t("an.pf.note"), " ", el("a", { href: href("netz/products") }, t("an.pf.used_hint"))), out);
+    await load();
+    if (seq === this.seq && data && !data.enabled) out.prepend(el("p", { class: "note warn-txt" }, t("an.pf.off")));
   }
 }
 

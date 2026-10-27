@@ -17,7 +17,7 @@ async function errorOf(r) {
   return e;
 }
 
-async function* ndjson(path, body, signal) {
+export async function* ndjson(path, body, signal) {
   const r = await fetch(path, {
     method: "POST", signal,
     headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },

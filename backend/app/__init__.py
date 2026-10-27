@@ -1,4 +1,4 @@
 """Emberwatch – self-hosted cyber threat intelligence map."""
 
-__version__ = "3.2.1"
-REPO_URL = "https://github.com/SaturdayNetLab/emberwatch"
+__version__ = "4.0.0"
+REPO_URL = "https://github.com/Just-Franning/Emberwatch"

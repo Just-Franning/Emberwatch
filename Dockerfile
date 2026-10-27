@@ -29,6 +29,11 @@ RUN pip install -r backend/requirements.txt
 COPY backend/app backend/app
 COPY frontend frontend
 
+# Account administration inside the container (lost second factor, locked out):
+#   docker exec -it emberwatch emberwatch-admin users | reset-password <name> | reset-2fa <name> | create-admin <name>
+RUN printf '#!/bin/sh\ncd /app/backend && exec python -m app.admincli "$@"\n' > /usr/local/bin/emberwatch-admin \
+ && chmod 755 /usr/local/bin/emberwatch-admin
+
 USER emberwatch
 EXPOSE 8000
 VOLUME ["/data"]
