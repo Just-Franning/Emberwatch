@@ -244,6 +244,7 @@ class Settings:
     telegram_enabled: bool = True
     telegram_interval: int = 15
     nominatim_url: str = "https://nominatim.openstreetmap.org"  # "" = no geocoding of company addresses
+    gravatar_api_key: str = ""  # people search: Gravatar profile of an e-mail address (optional)
 
     @property
     def matrix_enabled(self) -> bool:
@@ -358,4 +359,5 @@ def load() -> Settings:
         telegram_enabled=_bool("TELEGRAM_ENABLED", True),
         telegram_interval=_int("TELEGRAM_INTERVAL_MIN", 15, 10, 24 * 60),
         nominatim_url=_nominatim(_str("NOMINATIM_URL", "https://nominatim.openstreetmap.org")),
+        gravatar_api_key=_str("GRAVATAR_API_KEY"),
     )

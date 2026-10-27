@@ -48,6 +48,11 @@ from .notify import Notifier
 from .objects import TYPES as OBJ_TYPES
 from .objects import Objects, object_context
 from .owner import api as owner_api
+from .personen import api as personen_api
+from .personen.profiles import Locator
+from .personen.runner import Searcher
+from .personen.sites import SiteList
+from .personen.store import Store as OsintStore
 from .owner.geocode import Geocoder
 from .owner.lookup import Owner
 from .platforms import Platforms
@@ -89,6 +94,10 @@ platforms = Platforms(db, geo, S.static_dir / "data")
 objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news, attack)
 geocoder = Geocoder(S, db)
 owner = Owner(db, geo, toolkit, geocoder)
+osint_sites = SiteList(S.data_dir, S.user_agent)
+osint_store = OsintStore(db, S.osint_retention_days)
+searcher = Searcher(S, osint_store, osint_sites, Locator(S.static_dir / "data" / "centroids.json",
+                                                        S.static_dir / "data" / "places.json"))
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -361,10 +370,16 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def platforms_job() -> None:
         await platforms.collect(client, S.user_agent)
 
+    async def osint_lists_job() -> None:
+        if osint_sites.due() and not searcher.running():
+            await osint_sites.refresh(client)
+
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
         auth.prune()  # expired sessions, audit entries beyond AUDIT_RETENTION_DAYS
         owner.prune()  # owner lookups after 7 days, cached imprints and coordinates after 90 days
+        for case in osint_store.prune():  # people search: cases without changes for OSINT_RETENTION_DAYS
+            auth.audit("osint_case_expired", target=case["name"])
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
@@ -380,6 +395,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
         "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job, "news": news_job,
         "ooni": ooni_job, "attack": attack_job, "euvd": euvd_job, "exploits": exploits_job, "platforms": platforms_job,
+        "osint_lists": osint_lists_job,
     }
 
 
@@ -402,6 +418,8 @@ async def lifespan(app: FastAPI):
         ]
         if news.enabled:
             plan.append(("news", S.news_interval, 30))
+        if S.osint_enabled:
+            plan.append(("osint_lists", 24 * 60, 480))  # downloads the site lists when they are a week old
         optional = (("ooni", 6 * 60, 200), ("attack", 7 * 24 * 60, 400), ("euvd", 12 * 60, 260),
                     ("exploits", 24 * 60, 330), ("cloud_status", 10, 70))
         for name, minutes, delay in optional:
@@ -1959,8 +1977,9 @@ def api_netz_overview(request: Request) -> dict[str, Any]:
     }
 
 
-# --- 4.0: who owns this IP ------------------------------------------------------------------------------------------------
+# --- 4.0: who owns this IP, people search -------------------------------------------------------------------------------
 app.include_router(owner_api.make_router(owner, auth, _ndjson, _lang))
+app.include_router(personen_api.make_router(S, osint_store, osint_sites, searcher, auth, _spawn))
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")

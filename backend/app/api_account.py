@@ -19,7 +19,7 @@ FAIL_DELAY_S = 0.4  # a failed attempt answers a little later (on top of the loc
 AUDIT_ACTIONS = ("login_ok", "login_fail", "login_disabled", "logout", "totp_fail", "totp_enrolled", "totp_reset",
                  "recovery_used", "recovery_new", "password_changed", "password_reset", "user_created", "user_updated",
                  "user_deleted", "sessions_revoked", "session_ended", "osint_search", "osint_case_deleted",
-                 "owner_lookup", "tg_channel_added", "tg_channel_removed")
+                 "osint_case_expired", "owner_lookup", "tg_channel_added", "tg_channel_removed")
 
 
 class LoginIn(BaseModel):

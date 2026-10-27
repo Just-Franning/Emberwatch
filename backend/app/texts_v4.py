@@ -24,6 +24,15 @@ T4: dict[str, dict[str, str]] = {
         "err.acct.enroll_expired": "Die Einrichtung ist abgelaufen. Bitte neu starten.",
         # who owns this IP
         "err.owner.ip": "Bitte eine einzelne öffentliche IP-Adresse eingeben (IPv4 oder IPv6).",
+        # people search
+        "err.osint.off": "Die Personensuche ist abgeschaltet (OSINT_ENABLED=0).",
+        "err.osint.case": "Fall nicht gefunden.",
+        "err.osint.search": "Suche nicht gefunden.",
+        "err.osint.node": "Knoten nicht gefunden.",
+        "err.osint.edge": "Diese Verknüpfung ist nicht möglich (beide Knoten müssen zum Fall gehören).",
+        "err.osint.full": "Der Fall hat die Höchstzahl von {max} Knoten erreicht.",
+        "err.osint.username": "Benutzername: 1 bis 40 Zeichen, Buchstaben, Ziffern, Punkt, Binde- und Unterstrich.",
+        "err.osint.email": "Bitte eine gültige E-Mail-Adresse eingeben.",
     },
     "en": {
         "err.role": "Administrators only. Your account has read access.",
@@ -45,5 +54,13 @@ T4: dict[str, dict[str, str]] = {
         "err.acct.pw_wrong": "Wrong password.",
         "err.acct.enroll_expired": "The setup has expired. Please start again.",
         "err.owner.ip": "Please enter a single public IP address (IPv4 or IPv6).",
+        "err.osint.off": "The people search is switched off (OSINT_ENABLED=0).",
+        "err.osint.case": "Case not found.",
+        "err.osint.search": "Search not found.",
+        "err.osint.node": "Node not found.",
+        "err.osint.edge": "This link is not possible (both nodes must belong to the case).",
+        "err.osint.full": "The case has reached the maximum of {max} nodes.",
+        "err.osint.username": "User name: 1 to 40 characters, letters, digits, dot, hyphen and underscore.",
+        "err.osint.email": "Please enter a valid e-mail address.",
     },
 }
