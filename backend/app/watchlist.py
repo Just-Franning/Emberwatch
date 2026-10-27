@@ -137,6 +137,26 @@ def scan(db: DB) -> list[int]:
                       asset_id=w["id"], url=url):
             new.append(w["id"])
 
+    def ioc_hits(w: dict[str, Any], key: str, rows: list[dict[str, Any]]) -> None:
+        """Malware indicators (ThreatFox, URLhaus) of one asset: one alert for all new ones of a run, not one per URL
+        (a compromised host often serves a file per CPU architecture)."""
+        if not rows:
+            return
+        seen: set[str] = set()
+        for a in db.query("SELECT params FROM alerts WHERE source = 'watch' AND asset_id = ? AND key IN ('watch.ioc_ip', "
+                          "'watch.ioc_domain')", (w["id"],)):
+            try:
+                seen.update(str(x) for x in json.loads(a["params"] or "{}").get("ids") or [])
+            except (ValueError, AttributeError):
+                continue
+        fresh = [r for r in dict((str(r["id"]), r) for r in rows).values() if str(r["id"]) not in seen]
+        if not fresh:
+            return
+        first = fresh[0]
+        hit(w, "high", key, {"ioc": first["ioc"][:300], "threat": first["threat_type"] or "ioc", "malware": first["malware"],
+                             "n": len(fresh), "ids": [str(r["id"]) for r in fresh][:500]},
+            f"ioc:{first['id']}", first["reference"])
+
     for w in entries:
         kind, val = w["kind"], w["value"]
         if kind in ("ip", "cidr"):
@@ -156,10 +176,7 @@ def scan(db: DB) -> list[int]:
                             break
                     except (ValueError, TypeError):
                         continue
-            for addr, r in with_ip:
-                if addr in net:
-                    hit(w, "high", "watch.ioc_ip", {"ioc": r["ioc"][:300], "threat": r["threat_type"] or "ioc", "malware": r["malware"]},
-                        f"ioc:{r['id']}", r["reference"])
+            ioc_hits(w, "watch.ioc_ip", [r for addr, r in with_ip if addr in net])
         elif kind == "asn":
             asn = int(val)
             for r in c2:
@@ -177,9 +194,7 @@ def scan(db: DB) -> list[int]:
             for v in victims:
                 if domain_match(host_of(v["victim"]), val):
                     hit(w, "high", "watch.leak_victim", {"group": v["grp"], "victim": v["victim"]}, f"rw:{v['id']}", v["permalink"])
-            for r in on_domain.get(val, []):
-                hit(w, "high", "watch.ioc_domain", {"ioc": r["ioc"][:300], "threat": r["threat_type"] or "ioc", "malware": r["malware"]},
-                    f"ioc:{r['id']}", r["reference"])
+            ioc_hits(w, "watch.ioc_domain", on_domain.get(val, []))
     return new
 
 

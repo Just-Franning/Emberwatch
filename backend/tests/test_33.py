@@ -143,7 +143,7 @@ def test_checks_are_stored_merged_and_explained(m):
                   [(f"v{i}", f"victim{i}.example", "akira", "DE", iso(24 * i)) for i in range(1, 4)])
     m.db.execute("INSERT INTO infra_events(id, kind, start_ts, end_ts, countries, asns, cause, updated_at) VALUES(?,?,?,?,?,?,?,?)",
                  ("outage:1", "outage", iso(20), None, '["FI"]', "[]", "CABLE_CUT", iso(1)))
-    m.db.meta_set("outages_covered_since", day(30))
+    m.db.meta_set("outage_runs", json.dumps([day(n) for n in range(0, 31)]))  # successful outage runs every day
     m.db.execute("INSERT INTO kev(cve, vendor, product, name, date_added) VALUES(?,?,?,?,?)",
                  ("CVE-2026-1111", "Acme", "Gate", "x", day(3)))
     ddos = store(m, "Pro-Russian hacktivists claim DDoS attacks on German government sites", hours=2)
@@ -535,7 +535,7 @@ def test_platform_outages_regions_and_alerts(m):
     assert p.set_used(["aws", "cloudflare", "bogus"]) == ["aws", "cloudflare"]
     assert run(p.collect(mock(status_handler), "ua")) == 2  # one active AWS incident, one active Cloudflare incident
     assert run(p.collect(mock(status_handler), "ua")) == 0  # no second alert
-    inc = {i["id"]: i for i in p.listing(7)}
+    inc = {i["id"].split("@")[0]: i for i in p.listing(7)}  # feed keys carry the start time of the incident
     aws = inc["aws:multipleservices-us-east-1"]
     assert aws["status"] == "active" and aws["started"] == iso(3)[:16] + aws["started"][16:] and aws["regions"][0]["code"] == "us-east-1"
     assert aws["regions"][0]["precision"] == "region" and aws["used"] is True
@@ -612,3 +612,186 @@ def test_supported_filter_and_kev_catalogues(m):
         assert [r["cve"] for r in e["rows"]] == ["CVE-2026-2222"] and e["catalog"] == 1  # only what KEV does not list
         assert e["rows"][0]["date_added"] == day(2) and e["rows"][0]["due_date"] is None
         assert tc.get("/api/kev", params={"catalog": "x"}).status_code == 422
+
+
+def test_platform_incident_runs_and_alerts(m):
+    """A later incident of the same AWS service and region is a new incident with its own alert; a long incident whose
+    first updates left the feed stays one incident; Cloudflare incidents without impact raise no alert."""
+    from app import platforms
+    p = m.platforms
+    p.set_used(["aws", "cloudflare"])
+    def upd(h, title, guid_ts, text="EC2 in US-EAST-1"):
+        d = NOW - dt.timedelta(hours=h)
+        return {"title": title, "link": "https://status.aws.amazon.com/", "guid": f"https://status.aws.amazon.com/#ec2-us-east-1_{guid_ts}",
+                "date": d, "text": text}
+    old = [upd(24 * 9, "Service impact: Increased latencies", 1), upd(24 * 9 - 2, "Service is operating normally: [RESOLVED] Increased latencies", 2)]
+    new = [upd(5, "Service impact: API errors", 3), upd(3, "Service impact: API errors", 4), upd(1, "Service impact: API errors", 5)]
+    incs = platforms.incidents_from_feed("aws", old + new)
+    assert len(incs) == 2 and sorted(i["resolved"] for i in incs) == [False, True]
+    assert p._store("aws", incs) == 1  # the open one alerts
+    ids = [r["id"] for r in m.db.query("SELECT id FROM platform_incidents ORDER BY started")]
+    assert len(ids) == 2 and all(i.startswith("aws:ec2-us-east-1@") for i in ids)
+    # the first two updates of the open incident leave the feed: still the same incident, no new alert
+    later = platforms.incidents_from_feed("aws", new[2:] + [upd(0.5, "Service impact: API errors", 6)])
+    assert p._store("aws", later) == 0
+    assert m.db.query("SELECT COUNT(*) AS n FROM platform_incidents")[0]["n"] == 2
+    row = m.db.query("SELECT started, regions FROM platform_incidents WHERE id = ?", (ids[1],))[0]
+    assert row["started"] == (NOW - dt.timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")  # the stored start is kept
+    assert json.loads(row["regions"])[0]["code"] == "us-east-1"
+    # a third incident after the open one was resolved: new alert
+    third = platforms.incidents_from_feed("aws", [upd(0.4, "Service is operating normally: [RESOLVED] API errors", 7)])
+    p._store("aws", third)
+    again = platforms.incidents_from_feed("aws", [upd(0.1, "Service impact: Elevated errors", 8)])
+    assert p._store("aws", again) == 1
+    # Cloudflare: no customer impact, no alert
+    quiet = platforms.incidents_from_statuspage({"incidents": [{"id": "q1", "name": "Minor dashboard delay", "status": "investigating",
+                                                               "impact": "none", "created_at": iso(1), "updated_at": iso(0.5)}]})
+    assert p._store("cloudflare", quiet) == 0
+
+
+
+# --- findings of the independent review of 3.3 ---------------------------------------------------------------------------------
+def test_curated_feed_replaces_worldwide_press_entry(m, monkeypatch):
+    from app.sources import gdelt
+    monkeypatch.setattr(gdelt, "PAUSE_S", 0)
+    m.db.insert("INSERT INTO watchlist(kind, value, label, created_at) VALUES(?,?,?,?)", ("domain", "example.de", None, iso(1)))
+    url = "https://therecord.media/attack-on-example-de"
+    web = {"articles": [{"url": url, "title": "Attack on example.de systems", "seendate": NOW.strftime("%Y%m%dT%H%M%SZ"),
+                         "language": "English"}]}
+    run(m.news.collect_web(mock(lambda r: httpx.Response(200, json=web))))
+    assert m.db.query("SELECT tier FROM news WHERE url = ?", (url,))[0]["tier"] == "web"
+    assert not m.db.query("SELECT 1 FROM alerts WHERE source = 'news'")
+    store(m, "Attack on example.de systems", "The attack on example.de hit several systems.", hours=1, link=url)
+    rows = m.db.query("SELECT tier, source FROM news WHERE url = ?", (url,))
+    assert rows == [{"tier": "press", "source": "therecord"}]  # the curated report took its place
+    assert m.news.listing(7)["total"] == 1 and m.db.query("SELECT 1 FROM alerts WHERE source = 'news'")
+    # the other way round: the worldwide press does not displace a curated report
+    run(m.news.collect_web(mock(lambda r: httpx.Response(200, json=web))))
+    assert m.db.query("SELECT tier FROM news WHERE url = ?", (url,))[0]["tier"] == "press"
+
+
+def test_worldwide_press_volume_does_not_split_curated_events(m):
+    a = store(m, "Hackers breach Acme Logistics customer database", hours=20)
+    m.db.execmany("INSERT INTO news(source, url, title, published, fetched_at, lang, tier, countries, actors, cves, malware, kinds, "
+                  "mine, cables) VALUES('gdelt', ?, ?, ?, ?, 'en', 'web', '[]', '[]', '[]', '[]', '[]', '[]', '[]')",
+                  [(f"https://w{i}.example/a", f"Unrelated headline number {i}", iso(10), iso(10)) for i in range(3100)])
+    b = store(m, "Hackers breach Acme Logistics customer database", hours=1)
+    cl = {r["id"]: r["cluster"] for r in m.db.query("SELECT id, cluster FROM news WHERE id IN (?, ?)", (a, b))}
+    assert cl[a] == cl[b]
+
+
+def test_ransomware_group_matches_exactly(m):
+    from app import corroborate as cb
+    m.db.execmany("INSERT INTO victims(id, victim, grp, country, discovered) VALUES(?,?,?,?,?)",
+                  [("v1", "a.example", "medusalocker", "DE", iso(24 * 40)), ("v2", "b.example", "medusa", "DE", iso(2))])
+    res = cb.Evidence(m.db).ransomware(["Medusa"], TODAY, ["DE"])
+    assert res["result"] == cb.SUPPORTED and res["params"]["posts"] == 1
+    m.db.execute("DELETE FROM victims WHERE id = 'v2'")
+    m.db.execmany("INSERT INTO victims(id, victim, grp, country, discovered) VALUES(?,?,?,?,?)",
+                  [("v3", "c.example", "medusablue", "DE", iso(2))])
+    assert cb.Evidence(m.db).ransomware(["Medusa"], TODAY, ["DE"]) is None  # two longer names: no guess
+
+
+def test_shutdown_checks_need_a_change(m):
+    from app import corroborate as cb, nlp
+    assert "shutdown" not in nlp.kinds("Chinese state hackers target censorship researchers with new backdoor")
+    rows = []
+    for n in range(0, 35):
+        rows.append(("CN", day(n), "web", 1000, 300, 40, 0))  # permanent censorship, no change
+        rows.append(("IR", day(n), "web", 1000, 600 if n < 7 else 200, 90 if n < 7 else 20, 0))  # a rise in the last week
+    m.db.execmany("INSERT INTO ooni(cc, day, test, measurements, anomalies, confirmed, failures) VALUES(?,?,?,?,?,?,?)", rows)
+    ev = cb.Evidence(m.db)
+    cn, ir = ev.ooni_check("CN", TODAY), ev.ooni_check("IR", TODAY)
+    assert cn["result"] == cb.NOT_SUPPORTED and cn["params"]["anomaly_pct"] == cn["params"]["anomaly_pct_before"] == 30.0
+    assert ir["result"] == cb.SUPPORTED and ir["params"]["measurements"] == 7000  # 7 days, not 8
+    assert ev.ooni_check("DE", TODAY)["result"] == cb.UNCLEAR
+    from app.sources import ooni
+    s30 = {x["cc"]: x for x in ooni.summary(m.db, 30)}
+    s7 = {x["cc"]: x for x in ooni.summary(m.db, 7)}
+    assert s30["IR"]["anomaly_pct_prev"] is None and s30["IR"]["confirmed_prev"] is None  # the 30 days before are not stored
+    assert s7["IR"]["anomaly_pct_prev"] == 20.0
+
+
+def test_outages_overlap_and_coverage(m):
+    from app import corroborate as cb
+    from app.sources import infra
+    m.db.execute("INSERT INTO infra_events(id, kind, start_ts, end_ts, countries, asns, cause, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                 ("outage:ir", "outage", iso(24 * 5), None, '["IR"]', "[]", "GOVERNMENT_DIRECTED", iso(1)))
+    ev = cb.Evidence(m.db)
+    assert ev.outage("IR", TODAY - dt.timedelta(days=2))["result"] == cb.SUPPORTED  # started 5 days ago, still going on
+    old = TODAY - dt.timedelta(days=10)
+    assert ev.outage("FR", old)["result"] == cb.UNCLEAR  # no successful runs recorded
+    for n in (0, 4, 8):
+        m.db.meta_set("outage_runs", json.dumps(sorted(set(json.loads(m.db.meta_get("outage_runs") or "[]")) | {day(n)})))
+    assert cb.Evidence(m.db).outage("FR", old)["result"] == cb.NOT_SUPPORTED  # runs every 4 days cover every day
+    m.db.meta_set("outage_runs", json.dumps([day(0)]))  # the radar runs failed for days: a gap
+    assert cb.Evidence(m.db).outage("FR", old)["result"] == cb.UNCLEAR
+    infra._note_outage_run(m.db)
+    assert json.loads(m.db.meta_get("outage_runs")) == [day(0)]
+
+
+def test_cable_names_are_not_ordinary_words(m):
+    found = m.cables.find("The cable is safe again; repairs were faster than expected, an echo of 2023")
+    assert found == []
+    assert [m.cables.cables[i]["name"] for i in m.cables.find("SAFE and FASTER were cut")] == ["SAFE", "FASTER"]
+
+
+def test_capped_fetch(m, monkeypatch):
+    from app.sources import fetch
+    big = b"x" * (2 * 1024 * 1024)
+    with pytest.raises(fetch.FetchError):
+        run(fetch.get_capped(mock(lambda r: httpx.Response(200, content=big)), "https://a.example/x", max_bytes=1024 * 1024))
+    redir = lambda to: (lambda r: httpx.Response(302, headers={"location": to}) if r.url.host == "a.example"  # noqa: E731
+                        else httpx.Response(200, content=b"ok"))
+    with pytest.raises(fetch.FetchError):
+        run(fetch.get_capped(mock(redir("http://b.example/")), "https://a.example/x", max_bytes=100))
+    async def private(host, allow_private, family="any"):
+        from app.tools import ToolError
+        raise ToolError("err.tool.private")
+    monkeypatch.setattr(fetch, "resolve", private)
+    with pytest.raises(fetch.FetchError):
+        run(fetch.get_capped(mock(redir("https://intranet.example/")), "https://a.example/x", max_bytes=100))
+    async def public(host, allow_private, family="any"):
+        return ["93.184.216.34"]
+    monkeypatch.setattr(fetch, "resolve", public)
+    assert run(fetch.get_capped(mock(redir("https://b.example/y")), "https://a.example/x", max_bytes=100))[2] == b"ok"
+    assert run(fetch.get_capped(mock(lambda r: httpx.Response(503)), "https://a.example/x", max_bytes=100))[0] == 503
+
+
+def test_threatfox_first_fill_ignores_urlhaus_rows_and_ioc_alerts_are_grouped(m):
+    from app.sources import abusech
+    from app import watchlist
+    urls = [{"id": str(500 + i), "url": f"http://203.0.113.9/bins/x.{a}", "host": "203.0.113.9", "threat": "malware_download",
+             "tags": ["mirai"], "urlhaus_reference": f"https://urlhaus.abuse.ch/url/{500 + i}/"}
+            for i, a in enumerate(("arm", "arm7", "mips", "mpsl", "x86"))]
+    run(abusech.collect_urlhaus(mock(lambda r: httpx.Response(200, json={"query_status": "ok", "urls": urls})), m.db, "ua", "k"))
+    asked = []
+    def tf(request):
+        asked.append(json.loads(request.content)["days"])
+        return httpx.Response(200, json={"query_status": "no_result", "data": []})
+    run(abusech.collect_threatfox(mock(tf), m.db, m.geo, "ua", "k"))
+    assert asked == [7]  # URLhaus rows do not count as ThreatFox data
+    m.db.insert("INSERT INTO watchlist(kind, value, label, created_at) VALUES(?,?,?,?)", ("ip", "203.0.113.9", None, iso(1)))
+    watchlist.scan(m.db)
+    al = m.db.query("SELECT params FROM alerts WHERE key = 'watch.ioc_ip'")
+    assert len(al) == 1 and json.loads(al[0]["params"])["n"] == 5  # one alert for five URLs
+    more = urls + [{"id": "600", "url": "http://203.0.113.9/bins/x.sh4", "host": "203.0.113.9", "threat": "malware_download"}]
+    run(abusech.collect_urlhaus(mock(lambda r: httpx.Response(200, json={"query_status": "ok", "urls": more})), m.db, "ua", "k"))
+    watchlist.scan(m.db)
+    al = m.db.query("SELECT params FROM alerts WHERE key = 'watch.ioc_ip' ORDER BY id")
+    assert len(al) == 2 and json.loads(al[1]["params"])["n"] == 1  # only the new one
+    watchlist.scan(m.db)
+    assert m.db.query("SELECT COUNT(*) AS n FROM alerts WHERE key = 'watch.ioc_ip'")[0]["n"] == 2
+    from app import i18n
+    row = m.db.query("SELECT * FROM alerts WHERE key = 'watch.ioc_ip' ORDER BY id LIMIT 1")[0]
+    title, detail = i18n.render_alert(row, json.loads(row["params"]), "de")
+    assert title.startswith("Schadsoftware-Indikatoren in 203.0.113.9") and detail.endswith("neu: 5")
+
+
+def test_gemini_is_told_the_worldwide_press_is_unverified(m, monkeypatch):
+    from app.sources import gdelt
+    monkeypatch.setattr(gdelt, "PAUSE_S", 0)
+    web = {"articles": [{"url": "https://w.example/a", "title": "Hackers hit port authority", "seendate": NOW.strftime("%Y%m%dT%H%M%SZ")}]}
+    run(m.news.collect_web(mock(lambda r: httpx.Response(200, json=web))))
+    i = m.db.query("SELECT id FROM news WHERE tier = 'web'")[0]["id"]
+    assert "unverified" in m.news.ai_item(m.news.detail(i))["article"]["source_type"]

@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 
+from .fetch import get_capped
+
 API = "https://api.gdeltproject.org/api/v2/doc/doc"
 QUERIES = (
     ("en", '(cyberattack OR "cyber attack" OR ransomware OR hackers OR ddos OR "data breach" OR malware OR "zero-day") '
@@ -64,14 +66,13 @@ async def fetch(client: httpx.AsyncClient, ua: str, timespan: str = "3h") -> lis
         params = {"query": query, "mode": "artlist", "format": "json", "maxrecords": str(MAX_RECORDS),
                   "timespan": timespan, "sort": "datedesc"}
         try:
-            r = await client.get(API, params=params, headers={"User-Agent": ua, "Accept": "application/json"}, timeout=40)
-            if r.status_code != 200:
-                raise ValueError(f"HTTP {r.status_code}")
-            if len(r.content) > MAX_BYTES:
-                raise ValueError("answer too large")
-            if "html" in (r.headers.get("content-type") or "").lower():
+            status, hdrs, body = await get_capped(client, API, max_bytes=MAX_BYTES, params=params, timeout=40,
+                                                  headers={"User-Agent": ua, "Accept": "application/json"})
+            if status != 200:
+                raise ValueError(f"HTTP {status}")
+            if "html" in (hdrs.get("content-type") or "").lower():
                 raise ValueError("GDELT rejected the query")
-            items += parse(r.content, lang)
+            items += parse(body, lang)
         except (httpx.HTTPError, ValueError) as exc:
             errors.append(f"{lang}: {exc.__class__.__name__}")
     if errors and not items and len(errors) == len(QUERIES):

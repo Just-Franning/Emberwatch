@@ -524,9 +524,11 @@ class News:
         for r in self.db.query("SELECT product_id, cve FROM product_cves"):
             prod_cves.setdefault(r["cve"], r["product_id"])
         # grouping candidates for reports of the last three days: everything up to three days before them
-        recent = [self._candidate(r) for r in self.db.query(
-            "SELECT id, title, cluster, cves, published, tier FROM news WHERE published >= ? ORDER BY id DESC LIMIT 3000",
+        # (per tier: the volume of the worldwide press must not push curated candidates out of the limit)
+        recent = [self._candidate(r) for cond in ("tier != 'web'", "tier = 'web'") for r in self.db.query(
+            f"SELECT id, title, cluster, cves, published, tier FROM news WHERE published >= ? AND {cond} ORDER BY id DESC LIMIT 3000",
             (_cutoff(2 * CLUSTER_HOURS / 24),))]
+        recent.sort(key=lambda c: -c["id"])
         return {
             "actors": self.actors.index(), "malware": malware, "cables": self.cables,
             "prod_rx": nlp.word_matcher(prod_phrase), "prod": prod_phrase,
@@ -596,8 +598,14 @@ class News:
             pub = now
         if pub < now - timedelta(days=KEEP_DAYS_ON_FETCH):
             return False
-        if self.db.query("SELECT 1 FROM news WHERE url = ?", (link,)):
-            return False  # known item: no need to recognise it again
+        known = self.db.query("SELECT id, tier FROM news WHERE url = ?", (link,))
+        if known:
+            if known[0]["tier"] != "web" or src.tier == "web":
+                return False  # known item: no need to recognise it again
+            # a curated feed brings an article the worldwide press had first: the curated report replaces it
+            # (otherwise the unique URL would keep it out of the curated view and its alerts for good)
+            self.db.execute("DELETE FROM news WHERE id = ?", (known[0]["id"],))
+            ctx["recent"] = [c for c in ctx["recent"] if c["id"] != known[0]["id"]]
         text = strip_html(raw.get("desc") or raw.get("content") or "")
         if text.lower().startswith(title.lower()):
             text = text[len(title):].lstrip(" .:-–")
@@ -621,9 +629,10 @@ class News:
         if pub >= now - window:
             candidates = ctx["recent"]
         else:  # a late report (new source, delayed feed): its neighbours are older than the run's candidates
+            same_tier = "tier = 'web'" if web else "tier != 'web'"
             candidates = [self._candidate(r) for r in self.db.query(
-                "SELECT id, title, cluster, cves, published, tier FROM news WHERE published BETWEEN ? AND ? AND id != ? "
-                "ORDER BY id DESC LIMIT 1000", (_iso(pub - window), _iso(pub + window), new_id))]
+                f"SELECT id, title, cluster, cves, published, tier FROM news WHERE published BETWEEN ? AND ? AND id != ? "
+                f"AND {same_tier} ORDER BY id DESC LIMIT 1000", (_iso(pub - window), _iso(pub + window), new_id))]
         for r in candidates:
             if r["web"] != web:
                 continue  # worldwide press is grouped on its own: it must not count as a second curated source
@@ -1018,7 +1027,8 @@ class News:
     def ai_item(self, it: dict[str, Any]) -> dict[str, Any]:
         return {
             "article": {"title": it["title"], "teaser": it["summary"], "source": it["source"]["name"],
-                        "source_type": "authority" if it["source"]["tier"] == "gov" else "specialist media",
+                        "source_type": {"gov": "authority", "web": "unverified worldwide press (GDELT), not curated"}
+                        .get(it["source"]["tier"], "specialist media"),
                         "published": it["published"]},
             "same_event_reported_by": [{"source": m["source"], "title": m["title"], "published": m["published"]}
                                        for m in it.get("members", [])[:10]],

@@ -9,6 +9,7 @@ Coordinates come from DB-IP (approximate, city/region level).
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,12 +19,14 @@ import httpx
 
 from ..db import DB, utcnow
 from ..geo import Geo
+from .fetch import get_capped
 
 log = logging.getLogger("abusech")
 
 FEODO_URL = "https://feodotracker.abuse.ch/downloads/ipblocklist.json"
 THREATFOX_URL = "https://threatfox-api.abuse.ch/api/v1/"
 URLHAUS_RECENT = "https://urlhaus-api.abuse.ch/v1/urls/recent/"
+URLHAUS_MAX_BYTES = 25 * 1024 * 1024
 
 UPSERT = """
 INSERT INTO c2(id, source, ioc, ip, port, malware, threat_type, status, confidence, first_seen, last_seen,
@@ -115,7 +118,8 @@ async def collect_threatfox(client: httpx.AsyncClient, db: DB, geo: Geo, ua: str
     if not key:
         db.status("threatfox", False, code="missing_key", params={"var": "ABUSECH_AUTH_KEY"})
         return
-    have = db.query("SELECT (SELECT COUNT(*) FROM c2 WHERE source='threatfox') + (SELECT COUNT(*) FROM iocs) AS n")[0]["n"]
+    have = db.query("SELECT (SELECT COUNT(*) FROM c2 WHERE source='threatfox') + "
+                    "(SELECT COUNT(*) FROM iocs WHERE id NOT LIKE 'urlhaus:%') AS n")[0]["n"]  # URLhaus rows are not ThreatFox data
     days = 1 if have else 7  # initial fill with 7 days (API maximum)
     try:
         r = await client.post(
@@ -190,9 +194,11 @@ async def collect_urlhaus(client: httpx.AsyncClient, db: DB, ua: str, key: str) 
         db.status("urlhaus", False, code="missing_key", params={"var": "ABUSECH_AUTH_KEY"})
         return
     try:
-        r = await client.get(URLHAUS_RECENT, headers={"Auth-Key": key, "User-Agent": ua}, timeout=90)
-        r.raise_for_status()
-        body = r.json()
+        status, _, raw = await get_capped(client, URLHAUS_RECENT, max_bytes=URLHAUS_MAX_BYTES, timeout=90,
+                                          headers={"Auth-Key": key, "User-Agent": ua})
+        if status != 200:
+            raise ValueError(f"HTTP {status}")
+        body = json.loads(raw)
         if not isinstance(body, dict) or body.get("query_status") not in ("ok", "no_results"):
             raise ValueError(f"query_status={body.get('query_status') if isinstance(body, dict) else '?'}")
         data = body.get("urls") or []

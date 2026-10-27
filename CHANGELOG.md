@@ -5,16 +5,16 @@
 Reports are checked against measurements, and more of the IT world is on the map: submarine cables, internet blocking and cloud platform incidents. The analysis gains MITRE ATT&CK, ENISA and public exploit code.
 
 ### Added
-- Weltlage: every report is compared with Emberwatch's own data – a DDoS with the Cloudflare Radar share of the target country (against the 14 days before), ransomware with the group's leak site posts, cable damage and shutdowns with internet outages, blocking with OONI, CVEs with CISA KEV and ENISA, malware with active C2 servers. The result (supported, not supported, unclear) is shown in the report with the numbers behind it, as a tag in the list and as a filter; Gemini receives it as context
+- Weltlage: every report is compared with Emberwatch's own data – a DDoS with the Cloudflare Radar share of the target country (against the 14 days before), ransomware with the group's leak site posts, cable damage and shutdowns with internet outages (also ongoing ones), blocking with a rise in OONI measurements against the 4 weeks before, CVEs with CISA KEV and ENISA, malware with active C2 servers. The result (supported, not supported, unclear) is shown in the report with the numbers behind it, as a tag in the list and as a filter; Gemini receives it as context
 - Weltlage: submarine cables named in reports are recognised by their TeleGeography name, highlighted on the map and listed in the report; new kinds "submarine cable" and "internet blocking"
 - Weltlage: layer and tab "Internet blocking" – OONI measurements per country (confirmed blocking, anomalous websites and messengers, compared with the period before) and shutdowns Cloudflare Radar attributes to a government; links to OONI Explorer and IODA
-- Weltlage: the worldwide press via GDELT as an optional, unverified source – shown only when chosen, kept 14 days, never grouped with the curated reports, no alerts
+- Weltlage: the worldwide press via GDELT as an optional, unverified source – shown only when chosen, kept at most 14 days and 8,000 headlines, never grouped with the curated reports, no alerts; a curated feed that brings the same article replaces the GDELT entry
 - New feeds: CERT-EU security advisories, CISA cybersecurity advisories, heise Security
-- Cyberlage: layer "Cloud incidents" with the active incidents of AWS, Azure, Google Cloud and Cloudflare at the documented location of the affected region; analysis view "Platform incidents"; the platforms you use (My network → Products) raise an alert for each new incident
+- Cyberlage: layer "Cloud incidents" with the active incidents of AWS, Azure, Google Cloud and Cloudflare at the documented location of the affected region; analysis view "Platform incidents"; the platforms you use (My network → Products) raise an alert for each new incident (Cloudflare incidents without customer impact excluded)
 - MITRE ATT&CK: techniques by tactic and software on actor pages, the ATT&CK entry on malware pages (Enterprise bundle, loaded only when it changed)
 - ENISA EUVD: vulnerabilities ENISA lists as exploited, on CVE pages, in reports and in the vulnerability view, which can also list those not in CISA KEV
 - Public exploit code: Metasploit modules and Nuclei templates per CVE (metadata only, no exploit code) on CVE pages, in reports and in the vulnerability view, with a filter
-- URLhaus: malware URLs under your domains or in your networks raise alerts
+- URLhaus: malware URLs under your domains or in your networks raise alerts (one alert per asset for the new indicators of a run)
 - `SOURCES_DISABLE` switches optional sources off: `ooni`, `gdelt`, `attack`, `euvd`, `exploits`, `urlhaus`, `cloud_status`
 - Status panel: the new sources, the loaded ATT&CK release and the optional sources that are off
 

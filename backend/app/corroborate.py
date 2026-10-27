@@ -5,13 +5,19 @@ deterministic and explained; the interface renders it from the stored parameters
 
 - ddos + target country: Cloudflare Radar share of the country as attack target (L7 and L3, daily history) on the day
   of the report and the day before, against the median of the 14 days before that. "Supported" if the share rose to at
-  least 1.5 times the median and by at least 0.5 percentage points, or the country entered the top 25 targets.
+  least 1.5 times the median and by at least 0.5 percentage points (a country that was mostly not among the top 25
+  before has a median of 0 and is marked as such, but also needs the 0.5 points).
   A country outside Cloudflare's top 25 cannot be judged ("unclear"), which is not the same as "not supported".
-- ransomware + group: posts of the group on leak sites (ransomware.live) from 14 days before to 3 days after.
-- cable / shutdown + country: internet outages Cloudflare reports for the country from 3 days before to 1 day after.
-- shutdown + country: OONI measurements of the country in the week before (confirmed blocking).
+- ransomware + group: posts of the group on leak sites (ransomware.live) from 14 days before to 3 days after. The group
+  name must match exactly, or as the only group whose name starts with it (or it with that name).
+- cable / shutdown + country: internet outages Cloudflare reports for the country that overlap the period from 3 days
+  before to 1 day after (an outage that is still going on counts until today). "Not supported" needs successful outage
+  runs covering every day of the period; otherwise "unclear".
+- shutdown + country: OONI web measurements of the country in the 7 days up to the report against the 28 days before:
+  "supported" if the share of anomalous measurements rose to 1.5 times and by at least 5 points, or the share of
+  confirmed blocking to 1.5 times and by at least 0.5 points. Permanent censorship without a change is not supported.
 - CVE: listed as exploited by CISA KEV or ENISA (EUVD) – added only when it supports the report.
-- malware: active C2 servers of the malware in the 30 days before – added only when it supports the report.
+- malware: active C2 servers of the malware in the 30 days up to the report – added only when it supports the report.
 
 Result of a report: "supported" if any check supports it, "not_supported" if checks were conclusive and none supports
 it, "unclear" if no check was conclusive; None if no check applies. Measurements show traffic, posts and outages, not
@@ -35,6 +41,10 @@ BASELINE_DAYS = 14
 MIN_BASELINE = 7
 MAX_TARGETS = 3
 OONI_MIN_MEASUREMENTS = 50
+OONI_MIN_BASELINE = 100
+OONI_WINDOW = 7
+OONI_BASE_DAYS = 28
+OUTAGE_RUN_COVERS = 7  # each successful outage run reads the 7 days before it (sources/infra.py)
 OUTAGE_KINDS = ("cable", "shutdown")
 GROUP_RE = re.compile(r"[^a-z0-9]")
 
@@ -81,16 +91,22 @@ class Evidence:
             g = _norm(r["grp"] or "")
             if d and len(g) >= 4:
                 self.victims.setdefault(g, []).append((d, (r["country"] or "").upper() or None))
-        self.outages: list[tuple[date, list[str], str]] = []
-        for r in db.query("SELECT start_ts, countries, cause FROM infra_events WHERE kind = 'outage' AND start_ts >= ?", (horizon,)):
+        self.outages: list[tuple[date, date, list[str], str]] = []  # (first day, last day or today, countries, cause)
+        for r in db.query("SELECT start_ts, end_ts, countries, cause FROM infra_events WHERE kind = 'outage' "
+                          "AND COALESCE(end_ts, start_ts) >= ?", (horizon,)):
             d = _day(r["start_ts"])
+            e = _day(r["end_ts"]) or self.today  # still going on
             try:
                 ccs = [str(c).upper() for c in json.loads(r["countries"] or "[]")]
             except ValueError:
                 ccs = []
             if d:
-                self.outages.append((d, ccs, r["cause"] or "UNKNOWN"))
-        self.outages_since = _day(db.meta_get("outages_covered_since"))
+                self.outages.append((d, max(d, e), ccs, r["cause"] or "UNKNOWN"))
+        try:
+            runs = json.loads(db.meta_get("outage_runs") or "[]")
+        except ValueError:
+            runs = []
+        self.outage_runs = {x for x in (_day(str(r)) for r in runs if isinstance(r, str)) if x}
         self.ooni: dict[tuple[str, str], tuple[int, int, int]] = {}
         for r in db.query("SELECT cc, day, measurements, anomalies, confirmed FROM ooni WHERE test = 'web'"):
             self.ooni[(r["cc"], r["day"])] = (r["measurements"], r["anomalies"], r["confirmed"])
@@ -133,7 +149,10 @@ class Evidence:
             c = _norm(cand)
             if len(c) < 4:
                 continue
-            match = next((g for g in self.victims if g == c or (len(g) >= 4 and (g.startswith(c) or c.startswith(g)))), None)
+            match = c if c in self.victims else None
+            if match is None:  # a longer or shorter spelling ("lockbit3" / "lockbit"), only if it is the only one
+                near = [g for g in self.victims if len(g) >= 4 and (g.startswith(c) or c.startswith(g))]
+                match = near[0] if len(near) == 1 else None
             if not match:
                 continue
             posts = [x for x in self.victims[match] if start <= x[0] <= end]
@@ -147,26 +166,40 @@ class Evidence:
                     "params": {"posts": 0}}
         return None
 
+    def _covered(self, start: date, end: date) -> bool:
+        """Every day of the period was read by a successful outage run (a run reads the 7 days before it)."""
+        return end <= self.today and all(any(x + timedelta(days=k) in self.outage_runs for k in range(OUTAGE_RUN_COVERS))
+                                         for x in _days(start, end))
+
     def outage(self, cc: str, d: date) -> dict[str, Any]:
         start, end = d - timedelta(days=3), d + timedelta(days=1)
-        hits = [o for o in self.outages if start <= o[0] <= end and cc in o[1]]
+        hits = [o for o in self.outages if o[0] <= end and o[1] >= start and cc in o[2]]  # overlaps the period
         if hits:
-            causes = sorted({o[2] for o in hits})
+            causes = sorted({o[3] for o in hits})
             return {"type": "outage", "subject": cc, "result": SUPPORTED, "params": {"events": len(hits), "causes": causes}}
-        covered = self.outages_since is not None and self.outages_since <= start and end <= self.today
-        return {"type": "outage", "subject": cc, "result": NOT_SUPPORTED if covered else UNCLEAR, "params": {"events": 0}}
+        return {"type": "outage", "subject": cc, "result": NOT_SUPPORTED if self._covered(start, end) else UNCLEAR,
+                "params": {"events": 0}}
 
-    def ooni_check(self, cc: str, d: date) -> dict[str, Any]:
+    def _ooni_sum(self, cc: str, first: date, last: date) -> tuple[int, int, int]:
         m = a = c = 0
-        for x in _days(d - timedelta(days=7), d):
+        for x in _days(first, last):
             v = self.ooni.get((cc, x.isoformat()))
             if v:
                 m, a, c = m + v[0], a + v[1], c + v[2]
-        if m < OONI_MIN_MEASUREMENTS:
-            return {"type": "ooni", "subject": cc, "result": UNCLEAR, "params": {"measurements": m}}
-        res = SUPPORTED if c > 0 else NOT_SUPPORTED
-        return {"type": "ooni", "subject": cc, "result": res,
-                "params": {"measurements": m, "confirmed": c, "anomaly_pct": round(100 * a / m, 1)}}
+        return m, a, c
+
+    def ooni_check(self, cc: str, d: date) -> dict[str, Any]:
+        """A change against the 28 days before, not the level: permanent censorship alone does not support a report."""
+        m, a, c = self._ooni_sum(cc, d - timedelta(days=OONI_WINDOW - 1), d)
+        bm, ba, bc = self._ooni_sum(cc, d - timedelta(days=OONI_WINDOW + OONI_BASE_DAYS - 1), d - timedelta(days=OONI_WINDOW))
+        if m < OONI_MIN_MEASUREMENTS or bm < OONI_MIN_BASELINE:
+            return {"type": "ooni", "subject": cc, "result": UNCLEAR, "params": {"measurements": m, "baseline": bm}}
+        ap, bap = 100 * a / m, 100 * ba / bm
+        cp, bcp = 100 * c / m, 100 * bc / bm
+        rose = (ap >= 1.5 * bap and ap - bap >= 5.0) or (cp >= 1.5 * bcp and cp - bcp >= 0.5)
+        return {"type": "ooni", "subject": cc, "result": SUPPORTED if rose else NOT_SUPPORTED,
+                "params": {"measurements": m, "confirmed": c, "anomaly_pct": round(ap, 1), "anomaly_pct_before": round(bap, 1),
+                           "confirmed_pct": round(cp, 2), "confirmed_pct_before": round(bcp, 2)}}
 
     def cve(self, cve: str) -> dict[str, Any] | None:
         if cve in self.kev:
@@ -176,7 +209,7 @@ class Evidence:
         return None
 
     def malware(self, name: str, d: date) -> dict[str, Any] | None:
-        seen = [x for x in self.c2.get(name.lower(), []) if d - timedelta(days=30) <= x <= d + timedelta(days=1)]
+        seen = [x for x in self.c2.get(name.lower(), []) if d - timedelta(days=30) <= x <= d]
         if seen:
             return {"type": "malware", "subject": name, "result": SUPPORTED, "params": {"c2": len(seen)}}
         return None

@@ -10,6 +10,7 @@ acknowledged."
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -17,10 +18,12 @@ from typing import Any
 import httpx
 
 from ..db import DB, utcnow
+from .fetch import get_capped
 
 API = "https://euvdservices.enisa.europa.eu/api/exploitedvulnerabilities"
 PAGE = 100
 MAX_PAGES = 30
+MAX_PAGE_BYTES = 5 * 1024 * 1024
 CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b")
 EUVD_RE = re.compile(r"^EUVD-\d{4}-\d{1,8}$")
 DATE_FORMATS = ("%b %d, %Y, %I:%M:%S %p", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
@@ -74,11 +77,11 @@ async def collect(client: httpx.AsyncClient, db: DB, ua: str) -> None:
     rows: list[tuple[Any, ...]] = []
     try:
         for page in range(MAX_PAGES):
-            r = await client.get(API, params={"page": page, "size": PAGE}, headers={"User-Agent": ua, "Accept": "application/json"},
-                                 timeout=45)
-            if r.status_code != 200:
-                raise ValueError(f"HTTP {r.status_code}")
-            body = r.json()
+            status, _, raw = await get_capped(client, API, max_bytes=MAX_PAGE_BYTES, params={"page": page, "size": PAGE}, timeout=45,
+                                              headers={"User-Agent": ua, "Accept": "application/json"})
+            if status != 200:
+                raise ValueError(f"HTTP {status}")
+            body = json.loads(raw)
             got = parse(body)
             rows += got
             items = body.get("items") if isinstance(body, dict) else None

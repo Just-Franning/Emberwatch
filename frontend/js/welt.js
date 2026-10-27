@@ -742,10 +742,10 @@ export class Welt {
       }
       return [el("span", {}, t(c.result === "not_supported" ? "wl.chk.outage_none" : "wl.chk.outage_open"))];
     }
-    if (c.type === "ooni") {
+    if (c.type === "ooni") { // the 7 days up to the report against the 4 weeks before (corroborate.py)
       if (c.result === "unclear") return [el("span", {}, t("wl.chk.ooni_few", { m: num(p.measurements || 0) }))];
-      const key = p.confirmed > 0 ? "wl.chk.ooni_conf" : "wl.chk.ooni_none";
-      return [el("span", {}, t(key, { c: num(p.confirmed || 0), m: num(p.measurements), p: pct(p.anomaly_pct) }))];
+      return [el("span", {}, t("wl.chk.ooni_val", { p: pct(p.anomaly_pct), b: pct(p.anomaly_pct_before), c: num(p.confirmed || 0),
+        m: num(p.measurements) }))];
     }
     if (c.type === "cve") return [el("span", {}, t(p.by === "euvd" ? "wl.chk.cve_euvd" : "wl.chk.cve_kev", { d: dateOnly(p.since) }))];
     if (c.type === "malware") return [el("span", {}, t("wl.chk.malware_c2", { n: num(p.c2 || 0) }))];

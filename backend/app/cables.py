@@ -1,10 +1,11 @@
 """Submarine cables from the bundled TeleGeography dataset (as of 2021-06, CC BY-NC-SA 3.0).
 
 - per country: the cables landing there (country cards)
-- by name: cables named in a report (3.3). Names are matched as whole words, case-insensitive; the short forms in
-  brackets ("AAE-1", "EESF-2", "ACE") only as written, because they are often ordinary words in lower case. The
-  caller only looks for names in reports about submarine cables (kind "cable"), so "Dunant" or "Apollo" elsewhere
-  are not taken for cables.
+- by name: cables named in a report (3.3). Names are matched as whole words. Names of several words or with digits or
+  hyphens ("Asia-America Gateway", "C-Lion1") are matched case-insensitively; one-word names ("SAFE", "Echo", "Junior",
+  "Apollo") and the short forms in brackets ("AAE-1", "ACE") only as written, because in lower case they are ordinary
+  words ("the cable is safe", "an echo of"). The caller only looks for names in reports about submarine cables (kind
+  "cable"), so "Dunant" or "Apollo" elsewhere are not taken for cables.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ PAREN_RE = re.compile(r"^(.*?)\s*\(([^()]{2,20})\)\s*$")
 _B = r"(?<![0-9A-Za-zÀ-ÖØ-öø-ÿ-])"   # no letter, digit or hyphen before
 _A = r"(?![0-9A-Za-zÀ-ÖØ-öø-ÿ-])"    # nor after
 MIN_NAME = 4
+PLAIN_WORD_RE = re.compile(r"^[A-Za-zÀ-ÖØ-öø-ÿ]+$")  # letters only: could be an ordinary word
 MAX_FOUND = 5
 
 
@@ -56,7 +58,11 @@ class Cables:
             m = PAREN_RE.match(name)
             full, short = (m.group(1).strip(), m.group(2).strip()) if m else (name, "")
             for n in {name, full}:
-                if len(n) >= MIN_NAME:
+                if len(n) < MIN_NAME:
+                    continue
+                if PLAIN_WORD_RE.match(n):  # one ordinary word: only as written
+                    self._short.setdefault(n, cid)
+                else:
                     self._names.setdefault(n.lower(), cid)
             if short and any(c.isupper() or c.isdigit() for c in short):
                 self._short.setdefault(short, cid)

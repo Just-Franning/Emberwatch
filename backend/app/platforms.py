@@ -252,23 +252,36 @@ def incidents_from_feed(provider: str, items: list[dict[str, Any]]) -> list[dict
         else:
             key = _key_title(it["title"])
         groups.setdefault(key, []).append(it)
+    def is_resolved(u: dict[str, Any]) -> bool:
+        if provider == "aws":
+            return bool(AWS_RESOLVED_RE.search(u["title"]))
+        if provider == "gcp":
+            return u["title"].strip().upper().startswith("RESOLVED")
+        return bool(AZURE_RESOLVED_RE.search(u["title"] + " " + u["text"][:600]))
+
     out = []
     for key, ups in groups.items():
         ups.sort(key=lambda x: x["date"])
-        last = ups[-1]
-        if provider == "aws":
-            resolved = bool(AWS_RESOLVED_RE.search(last["title"]))
-        elif provider == "gcp":
-            resolved = last["title"].strip().upper().startswith("RESOLVED")
-        else:
-            resolved = bool(AZURE_RESOLVED_RE.search(last["title"] + " " + last["text"][:600]))
-        link = next((u["link"] for u in reversed(ups) if (u["link"] or "").startswith("https://")), "")
-        out.append({
-            "key": key or _key_title(last["title"]), "title": PREFIX_RE.sub("", last["title"]).strip() or last["title"],
-            "resolved": resolved, "started": ups[0]["date"], "updated": last["date"],
-            "text": " ".join(u["title"] + " " + u["text"] for u in ups)[:8000], "summary": last["text"][:600], "url": link,
-            "impact": None,
-        })
+        # AWS and Azure reuse the same key for later incidents of the same service and region (or title): a new
+        # incident starts after a resolved update or after two days without news
+        runs: list[list[dict[str, Any]]] = []
+        for u in ups:
+            if not runs or is_resolved(runs[-1][-1]) or u["date"] - runs[-1][-1]["date"] > timedelta(hours=STALE_HOURS):
+                runs.append([u])
+            else:
+                runs[-1].append(u)
+        base = key or _key_title(ups[-1]["title"])
+        for run in runs:
+            last = run[-1]
+            link = next((u["link"] for u in reversed(run) if (u["link"] or "").startswith("https://")), "")
+            out.append({
+                # the start time makes the key unique per incident (alerts are de-duplicated by it)
+                "key": f"{base}@{run[0]['date'].astimezone(timezone.utc).strftime('%Y%m%d%H%M')}"[:200],
+                "title": PREFIX_RE.sub("", last["title"]).strip() or last["title"],
+                "resolved": is_resolved(last), "started": run[0]["date"], "updated": last["date"],
+                "text": " ".join(u["title"] + " " + u["text"] for u in run)[:8000], "summary": last["text"][:600], "url": link,
+                "impact": None,
+            })
     return out
 
 
@@ -385,11 +398,11 @@ class Platforms:
         used = set(self.used())
         new_alerts = 0
         for inc in incs:
-            iid = f"{prov}:{inc['key']}"
+            iid = self._incident_id(prov, inc)
             stale = now - inc["updated"] > timedelta(hours=STALE_HOURS)
             status = "resolved" if inc["resolved"] or stale else "active"
             # AWS names the region in the GUID of an update ("…#ec2-us-east-1_1700000000"), not always in the text
-            regions = self.locations(prov, (inc["key"] + " " if prov == "aws" else "") + inc["text"])
+            regions = self.locations(prov, (inc["key"].split("@", 1)[0] + " " if prov == "aws" else "") + inc["text"])
             prev = self.db.query("SELECT status FROM platform_incidents WHERE id = ?", (iid,))
             self.db.execute(
                 "INSERT INTO platform_incidents(id, provider, title, status, impact, started, updated, resolved, regions, url, "
@@ -399,13 +412,30 @@ class Platforms:
                 (iid, prov, inc["title"][:300], status, inc["impact"], _iso(inc["started"]), _iso(inc["updated"]),
                  _iso(inc["updated"]) if status == "resolved" else None, json.dumps(regions, ensure_ascii=False),
                  inc["url"] or None, inc["summary"][:600] or None, utcnow()))
-            if status == "active" and prov in used and not (prev and prev[0]["status"] == "active"):
+            quiet = (inc.get("impact") or "") in ("none", "maintenance")  # Cloudflare: no customer impact
+            if status == "active" and prov in used and not quiet and not (prev and prev[0]["status"] == "active"):
                 if alerts.add(self.db, "platform", "medium", "platform.incident",
                               {"provider": PROVIDERS[prov]["name"], "title": inc["title"][:200],
                                "regions": ", ".join(r["name"] for r in regions[:4])},
                               f"{iid}", url=inc["url"] or PROVIDERS[prov]["page"]):
                     new_alerts += 1
         return new_alerts
+
+    def _incident_id(self, prov: str, inc: dict[str, Any]) -> str:
+        """Id of an incident. Feed keys carry the start time ("ec2-us-east-1@202610221055"); when the first updates of a
+        long incident have dropped out of the feed, its start moves: the open incident of the same key continues."""
+        iid = f"{prov}:{inc['key']}"
+        if "@" not in inc["key"] or self.db.query("SELECT 1 FROM platform_incidents WHERE id = ?", (iid,)):
+            return iid
+        base = f"{prov}:{inc['key'].split('@', 1)[0]}@"
+        like = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        rows = self.db.query("SELECT id, started, updated FROM platform_incidents WHERE id LIKE ? ESCAPE '\\' "
+                             "AND status = 'active' ORDER BY started DESC LIMIT 1", (like,))
+        if rows:
+            started, updated = _parse(rows[0]["started"]), _parse(rows[0]["updated"])
+            if started and updated and started <= inc["started"] <= updated + timedelta(hours=STALE_HOURS):
+                return rows[0]["id"]
+        return iid
 
     # --- settings and queries -----------------------------------------------------------------------------------------
     def used(self) -> list[str]:
@@ -443,3 +473,10 @@ class Platforms:
 
 def _iso(d: datetime) -> str:
     return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse(s: str | None) -> datetime | None:
+    try:
+        return datetime.strptime(s or "", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None

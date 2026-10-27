@@ -13,6 +13,7 @@ Data licence: CC BY-NC-SA 4.0, © OONI (https://ooni.org/about/data-policy). Onl
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,6 +21,7 @@ from typing import Any
 import httpx
 
 from ..db import DB
+from .fetch import get_capped
 
 API = "https://api.ooni.io/api/v1/aggregation"
 GROUPS = (("web", "web_connectivity"), ("im", "whatsapp,telegram,signal,facebook_messenger"))
@@ -61,12 +63,11 @@ async def collect(client: httpx.AsyncClient, db: DB, ua: str) -> None:
         params = {"test_name": names, "since": since.isoformat(), "until": until.isoformat(),
                   "axis_x": "measurement_start_day", "axis_y": "probe_cc", "time_grain": "day", "format": "JSON"}
         try:
-            r = await client.get(API, params=params, headers={"User-Agent": ua, "Accept": "application/json"}, timeout=90)
-            if r.status_code != 200:
-                raise ValueError(f"HTTP {r.status_code}")
-            if len(r.content) > MAX_BYTES:
-                raise ValueError("answer too large")
-            rows = parse(r.json())
+            status, _, body = await get_capped(client, API, max_bytes=MAX_BYTES, params=params, timeout=90,
+                                               headers={"User-Agent": ua, "Accept": "application/json"})
+            if status != 200:
+                raise ValueError(f"HTTP {status}")
+            rows = parse(json.loads(body))
         except (httpx.HTTPError, ValueError) as exc:
             errors.append(f"{test}: {exc.__class__.__name__}")
             continue
@@ -93,15 +94,18 @@ def summary(db: DB, days: int = 7) -> list[dict[str, Any]]:
         key = r["test"] if r["day"] >= cur_from else ("web_prev" if r["test"] == "web" else None)
         if key:
             e[key] = [e[key][0] + r["measurements"], e[key][1] + r["anomalies"], e[key][2] + r["confirmed"]]
+    prev_kept = 2 * days <= KEEP_DAYS  # the period before is only comparable if it is stored completely
     out = []
     for e in by.values():
         w, im, wp = e["web"], e["im"], e["web_prev"]
+        if not prev_kept:
+            wp = [0, 0, 0]
         if w[0] + im[0] == 0:
             continue
         out.append({
             "cc": e["cc"], "measurements": w[0], "anomalies": w[1], "confirmed": w[2],
             "anomaly_pct": round(100 * w[1] / w[0], 1) if w[0] else None,
-            "confirmed_prev": wp[2], "anomaly_pct_prev": round(100 * wp[1] / wp[0], 1) if wp[0] else None,
+            "confirmed_prev": wp[2] if prev_kept else None, "anomaly_pct_prev": round(100 * wp[1] / wp[0], 1) if wp[0] else None,
             "im_measurements": im[0], "im_anomaly_pct": round(100 * im[1] / im[0], 1) if im[0] else None,
             "im_confirmed": im[2],
         })

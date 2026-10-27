@@ -159,6 +159,19 @@ def _anomalies(result: dict[str, Any], now: str) -> list[tuple]:
     return rows
 
 
+def _note_outage_run(db: DB) -> None:
+    """Days with a successful outage run: each run reads the 7 days before it, so a missing outage on a day that such
+    a run covered is meaningful (corroborate.py). Kept for 70 days."""
+    today = datetime.now(timezone.utc).date()
+    try:
+        days = json.loads(db.meta_get("outage_runs") or "[]")
+    except ValueError:
+        days = []
+    keep = (today - timedelta(days=70)).isoformat()
+    days = sorted({d for d in days if isinstance(d, str) and d >= keep} | {today.isoformat()})
+    db.meta_set("outage_runs", json.dumps(days))
+
+
 async def collect(client: httpx.AsyncClient, db: DB, token: str) -> None:
     if not token:
         db.status("radar_infra", False, code="missing_key", params={"var": "CF_API_TOKEN"})
@@ -176,10 +189,8 @@ async def collect(client: httpx.AsyncClient, db: DB, token: str) -> None:
             rows = parse(await _get(client, token, path, params), now)
             db.execmany(UPSERT, rows)
             total += len(rows)
-            if name == "outages" and not db.meta_get("outages_covered_since"):
-                # from here on a missing outage is meaningful (corroborate.py): the first run covers 7 days back
-                since = datetime.now(timezone.utc) - timedelta(days=7)
-                db.meta_set("outages_covered_since", since.strftime("%Y-%m-%d"))
+            if name == "outages":
+                _note_outage_run(db)
         except Exception as exc:
             errors.append(f"{name}: {exc}")
             log.warning("Radar-Infra %s: %s", name, exc)

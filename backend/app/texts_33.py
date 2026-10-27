@@ -5,10 +5,10 @@ T33: dict[str, dict[str, str]] = {
     "de": {
         "status.feed_failed": "Abruf fehlgeschlagen",
         # alerts
-        "alert.watch.ioc_domain.title": "Schadsoftware-Indikator unter {asset}",
-        "alert.watch.ioc_domain.detail": "{malware}: {ioc} ({threat}, abuse.ch)",
-        "alert.watch.ioc_ip.title": "Schadsoftware-Indikator in {asset}",
-        "alert.watch.ioc_ip.detail": "{malware}: {ioc} ({threat}, abuse.ch)",
+        "alert.watch.ioc_domain.title": "{n|Schadsoftware-Indikator|Schadsoftware-Indikatoren} unter {asset}",
+        "alert.watch.ioc_domain.detail": "{malware}: {ioc} ({threat}, abuse.ch) · neu: {n}",
+        "alert.watch.ioc_ip.title": "{n|Schadsoftware-Indikator|Schadsoftware-Indikatoren} in {asset}",
+        "alert.watch.ioc_ip.detail": "{malware}: {ioc} ({threat}, abuse.ch) · neu: {n}",
         "alert.platform.incident.title": "Störung bei {provider}: {title}",
         "alert.platform.incident.detail": "Betroffen laut Statusseite: {regions}",
         # CVE page
@@ -40,10 +40,10 @@ T33: dict[str, dict[str, str]] = {
     },
     "en": {
         "status.feed_failed": "fetch failed",
-        "alert.watch.ioc_domain.title": "Malware indicator under {asset}",
-        "alert.watch.ioc_domain.detail": "{malware}: {ioc} ({threat}, abuse.ch)",
-        "alert.watch.ioc_ip.title": "Malware indicator in {asset}",
-        "alert.watch.ioc_ip.detail": "{malware}: {ioc} ({threat}, abuse.ch)",
+        "alert.watch.ioc_domain.title": "Malware {n|indicator|indicators} under {asset}",
+        "alert.watch.ioc_domain.detail": "{malware}: {ioc} ({threat}, abuse.ch) · new: {n}",
+        "alert.watch.ioc_ip.title": "Malware {n|indicator|indicators} in {asset}",
+        "alert.watch.ioc_ip.detail": "{malware}: {ioc} ({threat}, abuse.ch) · new: {n}",
         "alert.platform.incident.title": "Incident at {provider}: {title}",
         "alert.platform.incident.detail": "Affected according to the status page: {regions}",
         "ob.v.euvd": "{id}, exploited since {date}",

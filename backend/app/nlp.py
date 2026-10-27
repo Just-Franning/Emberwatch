@@ -366,7 +366,7 @@ KINDS: dict[str, tuple[str, ...]] = {
     "cable": ("submarine cable", "undersea cable", "subsea cable", "seabed cable", "seekabel", "unterseekabel",
               "ostseekabel", "datenkabel in der ostsee"),
     "shutdown": ("internet shutdown", "internet blackout", "internet outage ordered", "internetsperre", "internet-sperre",
-                 "internetabschaltung", "internet-abschaltung", "netzsperre", "censorship", "zensur", "blocked access to"),
+                 "internetabschaltung", "internet-abschaltung", "netzsperre", "blocked access to", "blocks access to"),
 }
 _KIND_RE = {k: re.compile(r"(?<![0-9a-zà-öø-ÿ])(?:" + "|".join(re.escape(w) for w in v) + ")", re.I) for k, v in KINDS.items()}
 
