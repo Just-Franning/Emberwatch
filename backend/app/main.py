@@ -53,6 +53,8 @@ from .personen.profiles import Locator
 from .personen.runner import Searcher
 from .personen.sites import SiteList
 from .personen.store import Store as OsintStore
+from .telegram import api as telegram_api
+from .telegram.monitor import Telegram
 from .owner.geocode import Geocoder
 from .owner.lookup import Owner
 from .platforms import Platforms
@@ -98,6 +100,7 @@ osint_sites = SiteList(S.data_dir, S.user_agent)
 osint_store = OsintStore(db, S.osint_retention_days)
 searcher = Searcher(S, osint_store, osint_sites, Locator(S.static_dir / "data" / "centroids.json",
                                                         S.static_dir / "data" / "places.json"))
+telegram = Telegram(db, S.static_dir / "data" / "centroids.json", S.telegram_retention_days)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -264,6 +267,13 @@ class _ClientRef:
         return getattr(app.state.client, name)
 
 
+class _WebRef:
+    """Late-bound client for websites of third parties (app.state.web, see webfetch.py)."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(app.state.web, name)
+
+
 def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def c2_job() -> None:
         await geo.ensure(client)  # downloads only when missing or older than 30 days
@@ -370,6 +380,9 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def platforms_job() -> None:
         await platforms.collect(client, S.user_agent)
 
+    async def telegram_job() -> None:
+        await telegram.collect(_WebRef())  # type: ignore[arg-type]
+
     async def osint_lists_job() -> None:
         if osint_sites.due() and not searcher.running():
             await osint_sites.refresh(client)
@@ -380,6 +393,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         owner.prune()  # owner lookups after 7 days, cached imprints and coordinates after 90 days
         for case in osint_store.prune():  # people search: cases without changes for OSINT_RETENTION_DAYS
             auth.audit("osint_case_expired", target=case["name"])
+        telegram.prune()  # posts older than TELEGRAM_RETENTION_DAYS
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
@@ -395,7 +409,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
         "scan": scan_job, "ct": ct_job, "typo": typo_job, "alerts": alerts_job, "patterns": patterns_job,
         "daily": daily_job, "maintenance": maintenance_job, "myip": myip_job, "news": news_job,
         "ooni": ooni_job, "attack": attack_job, "euvd": euvd_job, "exploits": exploits_job, "platforms": platforms_job,
-        "osint_lists": osint_lists_job,
+        "osint_lists": osint_lists_job, "telegram": telegram_job,
     }
 
 
@@ -420,6 +434,8 @@ async def lifespan(app: FastAPI):
             plan.append(("news", S.news_interval, 30))
         if S.osint_enabled:
             plan.append(("osint_lists", 24 * 60, 480))  # downloads the site lists when they are a week old
+        if S.telegram_enabled:
+            plan.append(("telegram", S.telegram_interval, 160))
         optional = (("ooni", 6 * 60, 200), ("attack", 7 * 24 * 60, 400), ("euvd", 12 * 60, 260),
                     ("exploits", 24 * 60, 330), ("cloud_status", 10, 70))
         for name, minutes, delay in optional:
@@ -1980,6 +1996,7 @@ def api_netz_overview(request: Request) -> dict[str, Any]:
 # --- 4.0: who owns this IP, people search -------------------------------------------------------------------------------
 app.include_router(owner_api.make_router(owner, auth, _ndjson, _lang))
 app.include_router(personen_api.make_router(S, osint_store, osint_sites, searcher, auth, _spawn))
+app.include_router(telegram_api.make_router(S, telegram, ai, auth, kick, _lang))
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")

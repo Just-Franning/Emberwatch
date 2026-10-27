@@ -561,6 +561,8 @@ CREATE TABLE IF NOT EXISTS tg_posts (
     countries TEXT NOT NULL DEFAULT '[]',
     targets TEXT NOT NULL DEFAULT '[]',
     kinds TEXT NOT NULL DEFAULT '[]',
+    proofs TEXT NOT NULL DEFAULT '[]',
+    checks TEXT,
     translation TEXT,
     translated_to TEXT,
     fetched_at TEXT NOT NULL,

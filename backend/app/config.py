@@ -243,6 +243,7 @@ class Settings:
     osint_retention_days: int = 90
     telegram_enabled: bool = True
     telegram_interval: int = 15
+    telegram_retention_days: int = 90
     nominatim_url: str = "https://nominatim.openstreetmap.org"  # "" = no geocoding of company addresses
     gravatar_api_key: str = ""  # people search: Gravatar profile of an e-mail address (optional)
 
@@ -358,6 +359,7 @@ def load() -> Settings:
         osint_retention_days=_int("OSINT_RETENTION_DAYS", 90, 1, 3650),
         telegram_enabled=_bool("TELEGRAM_ENABLED", True),
         telegram_interval=_int("TELEGRAM_INTERVAL_MIN", 15, 10, 24 * 60),
+        telegram_retention_days=_int("TELEGRAM_RETENTION_DAYS", 90, 7, 365),
         nominatim_url=_nominatim(_str("NOMINATIM_URL", "https://nominatim.openstreetmap.org")),
         gravatar_api_key=_str("GRAVATAR_API_KEY"),
     )
