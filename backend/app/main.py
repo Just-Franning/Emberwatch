@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import alerts, analytics, api_account, i18n, nlp, watchlist
+from . import alerts, analytics, api_account, i18n, nlp, watchlist, webfetch
 from .actors import Actors
 from .ai import TASKS, Gemini, build_context
 from .attack import Attack
@@ -47,6 +47,9 @@ from .news import News
 from .notify import Notifier
 from .objects import TYPES as OBJ_TYPES
 from .objects import Objects, object_context
+from .owner import api as owner_api
+from .owner.geocode import Geocoder
+from .owner.lookup import Owner
 from .platforms import Platforms
 from .products import Products
 from .reputation import Reputation
@@ -84,6 +87,8 @@ news = News(S, db, actors, S.static_dir / "data" / "centroids.json", cables)
 attack = Attack(db, S.data_dir)
 platforms = Platforms(db, geo, S.static_dir / "data")
 objects = Objects(S, db, geo, reputation, matcher, products, domains, surface, myip, actors, news, attack)
+geocoder = Geocoder(S, db)
+owner = Owner(db, geo, toolkit, geocoder)
 try:
     TZ = ZoneInfo(S.timezone)
 except Exception:
@@ -359,6 +364,7 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
     async def maintenance_job() -> None:
         alerts.prune(db, S.alert_retention_days)
         auth.prune()  # expired sessions, audit entries beyond AUDIT_RETENTION_DAYS
+        owner.prune()  # owner lookups after 7 days, cached imprints and coordinates after 90 days
         db.execute("DELETE FROM nvd_cve WHERE cve NOT IN (SELECT cve FROM product_cves) AND fetched_at < ?", (_cutoff(7),))
         db.execute("DELETE FROM abuseipdb_cache WHERE fetched_at < ?", (_cutoff(7),))
         tbrun.prune(db)
@@ -381,6 +387,8 @@ def job_fns(client: Any) -> dict[str, Callable[[], Awaitable[None]]]:
 async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(follow_redirects=True, http2=False)
     app.state.client = client
+    # websites of third parties (imprints, people search, Telegram): only public addresses, see webfetch.py
+    app.state.web = webfetch.make_client(S.user_agent)
     app.state.jobs = jobs = job_fns(_ClientRef())
     tasks: list[asyncio.Task] = []
     if S.collectors:
@@ -417,6 +425,7 @@ async def lifespan(app: FastAPI):
         if syslog is not None:
             await syslog.stop()
         await client.aclose()
+        await app.state.web.aclose()
 
 
 app = FastAPI(title="Emberwatch", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -1948,6 +1957,10 @@ def api_netz_overview(request: Request) -> dict[str, Any]:
         "scan": {"enabled": S.scan_enabled, "running": surface.current},
         "syslog": syslog.info() if syslog else {"enabled": False},
     }
+
+
+# --- 4.0: who owns this IP ------------------------------------------------------------------------------------------------
+app.include_router(owner_api.make_router(owner, auth, _ndjson, _lang))
 
 
 app.mount("/", StaticFiles(directory=str(S.static_dir), html=True), name="static")

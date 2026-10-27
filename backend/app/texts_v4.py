@@ -22,6 +22,8 @@ T4: dict[str, dict[str, str]] = {
         "err.acct.pw_same": "Das neue Passwort muss sich vom bisherigen unterscheiden.",
         "err.acct.pw_wrong": "Passwort falsch.",
         "err.acct.enroll_expired": "Die Einrichtung ist abgelaufen. Bitte neu starten.",
+        # who owns this IP
+        "err.owner.ip": "Bitte eine einzelne öffentliche IP-Adresse eingeben (IPv4 oder IPv6).",
     },
     "en": {
         "err.role": "Administrators only. Your account has read access.",
@@ -42,5 +44,6 @@ T4: dict[str, dict[str, str]] = {
         "err.acct.pw_same": "The new password must differ from the current one.",
         "err.acct.pw_wrong": "Wrong password.",
         "err.acct.enroll_expired": "The setup has expired. Please start again.",
+        "err.owner.ip": "Please enter a single public IP address (IPv4 or IPv6).",
     },
 }
