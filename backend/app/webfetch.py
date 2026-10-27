@@ -6,6 +6,7 @@ protections keep these requests out of the own network (SSRF):
 1. The connection layer resolves the name itself, refuses the connection unless every address is public, and then
    connects to the checked address - there is no second DNS lookup between check and connect (no DNS rebinding).
 2. Redirects are followed by hand, at most MAX_HOPS, only to http/https; every hop passes check 1 again.
+   Credentials (Authorization, Cookie) of the caller are not passed on to another origin.
 Bodies are read while they stream and cut (or refused) at a size limit.
 
 With an HTTP proxy in the environment (HTTPS_PROXY, ...) the proxy opens the connections; then each hop's name is
@@ -30,6 +31,7 @@ from .tools import is_public
 MAX_HOPS = 3
 BLOCKED = "blocked: the name resolves to a non-public address"
 PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+SECRET_HEADERS = {"authorization", "proxy-authorization", "cookie"}
 BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"
 _CHARSET_RE = re.compile(rb"""<meta[^>]{0,200}charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]{2,40})""", re.I)
 
@@ -173,9 +175,12 @@ async def fetch(client: httpx.AsyncClient, url: str, *, method: str = "GET", hea
             if follow and r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
                 first = first or r.status_code
                 try:
-                    url = str(req.url.join(r.headers["location"]))
+                    nxt = req.url.join(r.headers["location"])
                 except (httpx.InvalidURL, ValueError) as exc:
                     raise FetchError("redirect", "bad location") from exc
+                if headers and (nxt.scheme, nxt.host, nxt.port) != (req.url.scheme, req.url.host, req.url.port):
+                    headers = {k: v for k, v in headers.items() if k.lower() not in SECRET_HEADERS}
+                url = str(nxt)
                 hops.append(url)
                 if r.status_code in (301, 302, 303) and method == "POST":
                     method, content = "GET", None

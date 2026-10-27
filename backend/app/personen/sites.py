@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import time
+from re import _parser as sre_parse  # the parser of the re module (Python 3.11+): structure of untrusted patterns
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,6 @@ EXCLUDED_WORDS = re.compile(r"porn|xxx|\bsex|nsfw|dating|escort|\bfap|hentai|onl
                             r"adult|hookup|swinger|tinder|xhamster|xvideos|chaturbate|motherless|redtube|youporn|tnaflix", re.I)
 HOST_RE = re.compile(r"^(?=.{3,253}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+$")
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,40}$")
-NESTED_QUANT = re.compile(r"\([^()]*[+*][^()]*\)\s*[+*{]")  # (a+)+ and the like: no untrusted patterns of that kind
 DROP_HEADERS = {"host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer"}
 CATS = ("social", "coding", "tech", "gaming", "hobby", "music", "art", "images", "video", "blog", "business", "finance",
         "shopping", "news", "misc", "archived")
@@ -106,12 +106,55 @@ def _headers(v: Any) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
+def _subpatterns(av: Any) -> Any:
+    """The parsed sub-patterns inside the argument of one node (groups, branches, assertions)."""
+    if isinstance(av, sre_parse.SubPattern):
+        yield av
+    elif isinstance(av, (list, tuple)):
+        for x in av:
+            yield from _subpatterns(x)
+
+
+def _backtracks(p: Any, repeated: bool = False) -> bool:
+    """True if a repeated part repeats or branches itself - (a+)+, (a|ab)*, (?:x?y*){2,} -: such patterns can take
+    exponential time. Patterns of the site lists are third-party data and run in the server process."""
+    for op, av in p:
+        name = str(op)
+        if "REPEAT" in name:
+            _lo, hi, sub = av
+            if hi > 1 and (repeated or _backtracks(sub, True)):
+                return True
+            if hi <= 1 and _backtracks(sub, repeated):
+                return True
+        elif name == "BRANCH" and repeated:
+            return True
+        elif any(_backtracks(sub, repeated) for sub in _subpatterns(av)):
+            return True
+    return False
+
+
+def _repeats(p: Any) -> int:
+    """Number of parts that may repeat; a row of them (\\w*\\w*\\w*...) also backtracks polynomially."""
+    n = 0
+    for op, av in p:
+        if "REPEAT" in str(op):
+            n += int(av[1] > 1) + _repeats(av[2])
+        else:
+            n += sum(_repeats(sub) for sub in _subpatterns(av))
+    return n
+
+
 def _regex(v: Any) -> str | None:
-    if not isinstance(v, str) or not v or len(v) > 200 or NESTED_QUANT.search(v):
+    """Sherlock's regexCheck (which user names a site allows): only short patterns without nested repetition and with
+    at most three repeated parts; a refused pattern only means that the site is checked for every name."""
+    if not isinstance(v, str) or not v or len(v) > 200:
         return None
     try:
         re.compile(v)
-    except re.error:
+        tree = sre_parse.parse(v)
+        if _backtracks(tree) or _repeats(tree) > 3:
+            return None
+    except (re.error, RecursionError, ValueError, TypeError):
         return None
     return v
 

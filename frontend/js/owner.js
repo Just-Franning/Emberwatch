@@ -11,6 +11,9 @@ import { api, countryName, dateTime, el, kids, safeLink } from "./util.js";
 const STEPS = ["rdap", "dns", "tls", "domains", "imprint", "geocode"];
 const LEVEL = { high: 3, medium: 2, low: 1 };
 const IP_RE = /^[0-9a-fA-F:.[\]]{2,60}$/;
+// addresses come from imprints, schema.org data and the registry: a mail link only for a plain address
+const MAIL_RE = /^[^\s@<>"'(),;:\\?&]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const mail = (v) => (MAIL_RE.test(v) ? el("a", { href: `mailto:${v}` }, v) : v);
 
 const confidence = (c) => el("span", { class: `ow-conf conf-${c}` },
   el("span", { class: "meter", "aria-hidden": "true" }, [1, 2, 3].map((i) => el("i", { class: i <= (LEVEL[c] || 1) ? "on" : null }))),
@@ -139,12 +142,12 @@ export class Owner {
       kv([
         [t("ow.address"), addr.length ? addr.flatMap((x, i) => (i ? [el("br"), x] : [x])) : null],
         [t("ow.phone"), contact.phone ? el("a", { href: `tel:${contact.phone.replace(/[^+\d]/g, "")}` }, contact.phone) : null],
-        [t("ow.email"), contact.email ? el("a", { href: `mailto:${contact.email}` }, contact.email) : null],
+        [t("ow.email"), contact.email ? mail(contact.email) : null],
         [t("ow.web"), contact.web ? safeLink(contact.web, contact.web.replace(/^https:\/\//, "").replace(/\/$/, "")) : null],
         [t("ow.people"), people || null],
         [t("ow.register"), c.register || null],
         [t("ow.vat"), c.vat_id || null],
-        [t("ow.abuse"), r.abuse?.email ? el("a", { href: `mailto:${r.abuse.email}` }, r.abuse.email) : null],
+        [t("ow.abuse"), r.abuse?.email ? mail(r.abuse.email) : null],
       ]),
       el("div", { class: "row" },
         map.points.length ? el("button", { type: "button", class: "primary", onclick: () => this.onMap(map, c.company || r.ip) }, t("common.show_map")) : null,

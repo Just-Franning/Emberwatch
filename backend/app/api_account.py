@@ -16,7 +16,7 @@ from .config import Settings
 from .i18n import AppError
 
 FAIL_DELAY_S = 0.4  # a failed attempt answers a little later (on top of the lockout after 10 failures)
-AUDIT_ACTIONS = ("login_ok", "login_fail", "login_disabled", "logout", "totp_fail", "totp_enrolled", "totp_reset",
+AUDIT_ACTIONS = ("login_ok", "login_fail", "login_disabled", "logout", "totp_fail", "totp_unreadable", "totp_enrolled", "totp_reset",
                  "recovery_used", "recovery_new", "password_changed", "password_reset", "user_created", "user_updated",
                  "user_deleted", "sessions_revoked", "session_ended", "osint_search", "osint_case_deleted",
                  "osint_case_expired", "owner_lookup", "tg_channel_added", "tg_channel_removed")
@@ -99,8 +99,10 @@ def make_router(S: Settings, auth: Auth, secure: Callable[[Request], bool]) -> A
     @r.get("/api/auth/status")
     def api_auth_status(request: Request) -> dict[str, Any]:
         user = auth.session_user(request.cookies.get(COOKIE))
-        return {"mode": S.auth_mode, "authenticated": user is not None, "version": S.version,
-                "user": {"name": user["name"], "role": user["role"]} if user else None}
+        if user is None:  # reachable without a session: no version (it would only help to pick known flaws)
+            return {"mode": S.auth_mode, "authenticated": False, "user": None}
+        return {"mode": S.auth_mode, "authenticated": True, "version": S.version,
+                "user": {"name": user["name"], "role": user["role"]}}
 
     @r.post("/api/auth/login")
     async def api_login(request: Request, body: LoginIn) -> dict[str, Any]:

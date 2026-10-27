@@ -72,6 +72,8 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/login)" = 200
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:8000/api/overview)" = 401
           docker exec ew /usr/local/bin/ping -c 1 -W 2 127.0.0.1 > /dev/null
+          # the account command works in the hardened container (first administrator created from AUTH_PASSWORD)
+          docker exec ew emberwatch-admin users | grep -q '^admin '
           docker logs ew 2>&1 | tail -n 40
           docker rm -f ew
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0

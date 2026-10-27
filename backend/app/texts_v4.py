@@ -7,7 +7,8 @@ T4: dict[str, dict[str, str]] = {
         "err.role": "Nur für Administratoren. Dein Konto hat Lesezugriff.",
         "err.login_expired": "Die Anmeldung ist abgelaufen. Bitte neu anmelden.",
         "err.totp_invalid": "Code ungültig oder schon verwendet.",
-        "err.totp_reenroll": "Der zweite Faktor muss neu eingerichtet werden.",
+        "err.totp_unreadable": "Der zweite Faktor dieses Kontos lässt sich nicht prüfen (wurde session.key ersetzt?). "
+                               "Ein Administrator setzt ihn zurück: emberwatch-admin reset-2fa {name}",
         "err.acct.off": "Ohne Anmeldung (AUTH_MODE=none) gibt es keine Konten.",
         "err.acct.disabled": "Dieses Konto ist gesperrt.",
         "err.acct.not_found": "Konto nicht gefunden.",
@@ -48,7 +49,8 @@ T4: dict[str, dict[str, str]] = {
         "err.role": "Administrators only. Your account has read access.",
         "err.login_expired": "The sign-in has expired. Please sign in again.",
         "err.totp_invalid": "Invalid or already used code.",
-        "err.totp_reenroll": "The second factor has to be set up again.",
+        "err.totp_unreadable": "The second factor of this account cannot be checked (was session.key replaced?). "
+                               "An administrator resets it: emberwatch-admin reset-2fa {name}",
         "err.acct.off": "Without sign-in (AUTH_MODE=none) there are no accounts.",
         "err.acct.disabled": "This account is disabled.",
         "err.acct.not_found": "Account not found.",

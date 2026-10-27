@@ -176,6 +176,22 @@ def test_channels_posts_checks_and_translation(m):
         assert tc.post("/api/telegram/channels/demochannel/refresh", headers=SAME).status_code == 429
         assert tc.delete("/api/telegram/channels/demochannel", headers=SAME).json() == {"deleted": "demochannel"}
         assert not m.db.query("SELECT 1 FROM tg_posts WHERE channel='demochannel'")
+        # a reading that was still running when the channel was removed stores nothing
+        state["page"] = NEW.replace("data-post=\"DemoChannel/103\"", "data-post=\"DemoChannel/104\"")
+        m.db.execute("INSERT INTO tg_channels(name, added_at) VALUES('demochannel', '2026-01-01T00:00:00Z')")
+        real_page = m.telegram._page
+
+        async def slow(web, name, before=None):
+            got = await real_page(web, name, before)
+            m.telegram.remove(name)  # removed meanwhile
+            return got
+        m.telegram._page = slow
+        assert asyncio.run(m.telegram.fetch(m.app.state.web, "demochannel")) == 0
+        assert not m.db.query("SELECT 1 FROM tg_posts WHERE channel='demochannel'")
+        m.telegram._page = real_page
+        m.db.execute("INSERT INTO tg_posts(channel, post_id, date, text, fetched_at) VALUES('gone', 1, '2099-01-01T00:00:00Z', 'x', '2026-01-01T00:00:00Z')")
+        m.telegram.prune()  # left-overs of removed channels go with the next clean-up
+        assert not m.db.query("SELECT 1 FROM tg_posts WHERE channel='gone'")
     acts = [r["action"] for r in m.db.query("SELECT action FROM audit")]
     assert acts.count("tg_channel_added") == 2 and "tg_channel_removed" in acts
 

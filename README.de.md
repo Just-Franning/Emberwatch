@@ -1,6 +1,6 @@
 # Emberwatch
 
-Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ransomware, ausgenutzte Schwachstellen, Internet-Infrastruktur und Cloud-Störungen aus öffentlichen Quellen, Sicherheitsmeldungen von Behörden und Fachmedien im geopolitischen Zusammenhang – abgeglichen mit Messdaten –, dazu Überwachung eigener Assets, Produkte und Logs.
+Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ransomware, ausgenutzte Schwachstellen, Internet-Infrastruktur und Cloud-Störungen aus öffentlichen Quellen, Sicherheitsmeldungen von Behörden und Fachmedien im geopolitischen Zusammenhang – abgeglichen mit Messdaten –, die Behauptungen von Hacktivisten-Kanälen, die Firma hinter einer IP-Adresse und eine Personensuche mit Verknüpfungsgraph, dazu Überwachung eigener Assets, Produkte und Logs. Konten mit Rollen und zweitem Faktor.
 
 [English](README.md) · **Deutsch**
 
@@ -10,7 +10,7 @@ Selbst gehostetes Cyber-Lagebild auf einer Weltkarte: Angriffe, C2-Server, Ranso
 
 ## Funktionen
 
-Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, rot), **Weltlage** (Sicherheitsmeldungen auf derselben Karte, indigo), **Analyse** (Objekte und Werkzeuge) und **Mein Netz** (eigene IPs, Assets, Produkte und Logs). `Strg+K` öffnet eine Befehlspalette für alles. Das gewählte Land und der Zeitraum gelten in beiden Kartenansichten.
+Emberwatch hat fünf Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, rot), **Weltlage** (Sicherheitsmeldungen und Telegram-Kanäle auf derselben Karte, indigo), **Personen** (eine Personensuche auf der Karte in Schwarz-Weiß, nur Administratoren), **Analyse** (Objekte und Werkzeuge) und **Mein Netz** (eigene IPs, Assets, Produkte und Logs). `Strg+K` öffnet eine Befehlspalette für alles. Das gewählte Land und der Zeitraum gelten in Cyberlage und Weltlage.
 
 **Cyberlage – globales Lagebild**
 - Weltkarte mit L7-Angriffsflüssen (Ursprung → Ziel), Länderflächen nach Angriffsanteil, gemeldeten C2-Servern, Ransomware-Opfern je Land, Internet-Ausfällen, BGP-Hijacks/Route-Leaks, Traffic-Anomalien, Seekabeln und aktiven Störungen bei AWS, Azure, Google Cloud und Cloudflare an der betroffenen Region; die Ebenen schalten die Chips über der Karte
@@ -19,6 +19,7 @@ Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, ro
 - Regelbasierte Mustererkennung (steigende Länder und Vektoren, Spikes, neue C2-Familien, KEV-Häufungen, kritische Ausfälle, Korrelationen), deterministisch und nachvollziehbar
 - Zeitachse mit Tageshistorie (bis 90 Tage) bei Bedarf, kompakte Länderkarte mit Sprung zur vollständigen Länderanalyse
 - Karten-Werkzeugleiste bei Bedarf: Ping, Traceroute und IP-Info mit Live-Anzeige auf der Karte; unter *Mehr*: Pfad-Qualität (Traceroute mit mehreren Paketen pro Hop), Globalping (Messungen von Messpunkten weltweit) und Mail-Hops (der Zustellweg eines Mail-Headers auf der Karte)
+- **Wem gehört die IP?** (Reiter *Firma* der Seitenleiste): die Firma, die eine öffentliche Adresse nutzt – Netzinhaber laut Registry (RDAP), AS, Reverse DNS, das Zertifikat auf Port 443, Domains, die auf die Adresse zeigen, Impressum und schema.org-Daten der Website – mit Kontakt (Telefon, E-Mail, Website, Personen, Register, USt-IdNr.) und Abuse-Kontakt, jeder Schritt als Beleg und mit einer Konfidenz; Firmensitz und Standort der Adresse auf der Karte
 - Optionale Gemini-Berichte (global, Land, Heimatregion, freie Fragen mit Rückfragen), exportierbar als Markdown oder PDF. Das Modell erhält nur aggregierte Kennzahlen.
 
 **Weltlage – Sicherheitsmeldungen im Kontext**
@@ -29,6 +30,13 @@ Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, ro
 - Reiter *Sperren*: von Regierungen angeordnete Abschaltungen und OONI-Messungen je Land (bestätigte Sperren, auffällige Websites und Messenger, verglichen mit dem Zeitraum davor), mit Links zu OONI Explorer und IODA
 - *Meldung im Kontext*: Einordnung, dasselbe Ereignis in anderen Quellen, der Abgleich mit Messdaten, die genannten Seekabel, was die lokalen Daten dazu sagen (KEV, ENISA, EPSS und öffentlicher Exploit-Code der CVEs, aktive C2-Server der Schadsoftware, Cloudflare-Daten zum Länderpaar) und ob sie deine Produkte, CVEs oder Domains betrifft – solche Meldungen lösen auch Alarme aus
 - Akteure mit Decknamen, zugeordnetem Land und Auftraggeber, Konfidenz, Quellen und den Meldungen, die sie nennen; optionaler Gemini-Lagebrief für den Zeitraum und Gemini-Einordnung einer einzelnen Meldung
+- Fenster **Telegram**: öffentliche Kanäle von Hacktivisten-Gruppen (Web-Vorschau, ohne Konto) mit den Ländern, Angriffsarten und Zielen, die jeder Beitrag behauptet (Domains und Adressen entschärft dargestellt), Beweis-Links, dem Abgleich behaupteter DDoS-Angriffe mit Cloudflare Radar und einer Übersetzung mit Gemini auf Wunsch
+
+**Personen – Konten hinter einem Benutzernamen (Administratoren)**
+- Ein Benutzername, eine E-Mail-Adresse oder ein Name (daraus werden übliche Benutzernamen gebildet) wird auf mehreren hundert Plattformen aus den Seitenlisten von [Sherlock](https://github.com/sherlock-project/sherlock) und [WhatsMyName](https://github.com/WebBreacher/WhatsMyName) geprüft; Erotik-, Dating-, Gesundheits- und politische Seiten sind ausgenommen
+- Jeder Treffer: ob ein Konto existiert (gefunden oder unsicher), das Land des Plattformbetreibers und die öffentlichen Profilangaben (Name, Ort, Firma, Links, von der Plattform bestätigte Links, E-Mail) aus den Schnittstellen der Plattformen (GitHub, Keybase, Mastodon, Hacker News, Docker Hub, Codeberg, dev.to, Lichess, Chess.com, Reddit) oder der Profilseite; optional Gravatar für eine E-Mail-Adresse
+- **Verknüpfungsgraph:** was die Konten verbindet – Angaben, die mehrere Profile machen, Links zwischen Konten (gegenseitig, von der Plattform bestätigt) – dazu eigene Knoten und Linien (bestätigt oder Hinweis); die Seitenleiste nennt dieselben Verbindungen in Worten
+- Fälle mit Zweck, Export als JSON, automatische Löschung 90 Tage nach der letzten Änderung; jede Suche steht im Protokoll. Ein Treffer heißt nur, dass ein Konto mit diesem Namen existiert – ob es dieselbe Person ist, zeigen die Verbindungen
 
 **Analyse – Objekte und Werkzeuge**
 - Objektseiten für IPs, Netze, AS-Nummern, Domains, URLs, Datei-Hashes, CVEs, Länder, Malware-Familien, Ransomware-Gruppen, Akteure und Hersteller: Risikobewertung mit Begründung, alles, was die lokalen Daten wissen, Bezug zu den eigenen Assets, Zusammenhänge, deine Alarme dazu, frühere Werkzeug-Läufe und eine optionale Gemini-Bewertung. Akteure und Schadsoftware zeigen ihre Techniken nach Taktik und die genutzte Software laut MITRE ATT&CK; CVEs zeigen, ob ENISA sie als ausgenutzt führt und ob es öffentlichen Exploit-Code (Metasploit-Module) oder Prüf-Templates (Nuclei) gibt
@@ -51,7 +59,7 @@ Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, ro
 - Log-Analyse (Upload, auch .gz) und optionaler Syslog-Empfang
 - Ein Alarm-Feed mit optionaler Matrix-Benachrichtigung und Tagesbericht
 
-**Oberfläche:** Deutsch und Englisch, eine Seitenleiste auf der Karte (verschiebbar und skalierbar), Tastenkürzel, Start-Animation, optionale Anmeldung.
+**Oberfläche:** Deutsch und Englisch, Konten mit den Rollen Administrator und Lesend und zweitem Faktor (TOTP), eine Seitenleiste auf der Karte und Fenster (verschiebbar und skalierbar), ein Globus, der sich dreht, solange niemand die Karte benutzt, Tastenkürzel, Start-Animation.
 
 ![Weltlage: eine Meldung im Kontext, abgeglichen mit Messdaten](docs/weltlage.webp)
 
@@ -62,7 +70,7 @@ Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, ro
 ## Voraussetzungen
 
 - Docker mit Docker Compose oder Portainer
-- Ein Volume für `/data` (SQLite-Datenbank, Anmeldedateien, DB-IP-Geodatenbanken). Die Compose-Dateien begrenzen den Speicher auf 1 GB.
+- Ein Volume für `/data` (SQLite-Datenbank mit den Konten, die Schlüsseldatei `session.key`, DB-IP-Geodatenbanken, Seitenlisten der Personensuche). Die Compose-Dateien begrenzen den Speicher auf 1 GB.
 - Ausgehendes HTTPS zu den Datenquellen (siehe [Datenquellen](#datenquellen-und-lizenzen)), ausgehendes ICMP/UDP für Ping und Traceroute
 - Kostenlose API-Keys für die Kernquellen: Cloudflare (Radar) und abuse.ch. Alles andere ist optional.
 
@@ -74,7 +82,7 @@ Emberwatch hat vier Bereiche: **Cyberlage** (die Weltkarte mit Angriffsdaten, ro
 2. Unter *Environment variables* mindestens setzen:
    - `PROXY_NETWORK` – das Docker-Netzwerk deines Reverse Proxys (Traefik, Nginx Proxy Manager, Pangolin/Newt, …)
    - `CF_API_TOKEN`, `ABUSECH_AUTH_KEY`
-   - optional `LANGUAGE=de`, `AUTH_PASSWORD` und weitere Keys (alle Variablen: [`.env.example`](.env.example))
+   - optional `LANGUAGE=de`, `AUTH_USER` und `AUTH_PASSWORD` für den ersten Administrator und weitere Keys (alle Variablen: [`.env.example`](.env.example))
 3. Deployen und im Reverse Proxy auf `http://emberwatch:8000` weiterleiten.
 
 ### Variante B: Docker Compose mit fertigem Image
@@ -87,7 +95,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Die Oberfläche ist dann unter `http://127.0.0.1:8000` erreichbar. Für den Zugriff von anderen Rechnern einen Reverse Proxy mit TLS davorsetzen (siehe [Reverse Proxy](#reverse-proxy-und-anmeldung)).
+Die Oberfläche ist dann unter `http://127.0.0.1:8000` erreichbar. Für den Zugriff von anderen Rechnern einen Reverse Proxy mit TLS davorsetzen (siehe [Reverse Proxy](#reverse-proxy)).
 
 ### Variante C: aus dem Quellcode bauen
 
@@ -106,39 +114,41 @@ Das Image `ghcr.io/saturdaynetlab/emberwatch` wird für `linux/amd64` und `linux
 | Tag | Inhalt |
 |---|---|
 | `latest` | neuestes Release |
-| `3`, `3.2` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
-| `3.2.0` | genau dieses Release |
+| `4`, `4.0` | neuestes Release innerhalb dieser Haupt- bzw. Nebenversion |
+| `4.0.0` | genau dieses Release |
 | `edge` | aktueller Stand von `main`, Änderungen zwischen den Releases |
 | `feature-<name>` | Test-Build eines Feature-Branches vor dem Zusammenführen (instabil) |
 | `sha-<commit>` | ein einzelner Build |
 
 ## Aktualisieren
 
-Die Daten bleiben im Volume `/data`. Datenbankänderungen werden beim Start automatisch übernommen; vor einer neuen Hauptversion das [Änderungsprotokoll](CHANGELOG.md) lesen.
+Die Daten bleiben im Volume `/data`. Datenbankänderungen werden beim Start automatisch übernommen; vor einer neuen Hauptversion das [Änderungsprotokoll](CHANGELOG.md) lesen. **Von 3.x auf 4.0** wechselt die Anmeldung zu Konten mit zweitem Faktor: dein Passwort gilt weiter für das Konto `admin`, die Authenticator-App richtest du bei der ersten Anmeldung ein (siehe [Konten und Anmeldung](#konten-und-anmeldung)).
 
 - **Docker Compose:** `docker compose pull && docker compose up -d`. Vorher `git pull`, wenn du Änderungen an `compose.yml` und `.env.example` übernehmen willst.
 - **Portainer:** *Stacks → emberwatch → Editor → Update the stack*, dabei die Option zum erneuten Ziehen des Images aktivieren.
-- **Automatisch:** ein Werkzeug wie Watchtower kann neue Images ziehen. Eine Versionslinie (z. B. `3`) festlegen, wenn nur Updates ohne inkompatible Änderungen kommen sollen.
+- **Automatisch:** ein Werkzeug wie Watchtower kann neue Images ziehen. Eine Versionslinie (z. B. `4`) festlegen, wenn nur Updates ohne inkompatible Änderungen kommen sollen.
 - **Selbst gebaut:** `git pull`, dann neu bauen.
 
 Neue Versionen stehen auf der [Releases-Seite](https://github.com/SaturdayNetLab/emberwatch/releases); auf GitHub benachrichtigt *Watch → Custom → Releases*.
 
 ## Erste Schritte
 
-1. **Anmelden.** Mit dem Standard `AUTH_MODE=password` und ohne `AUTH_PASSWORD` wird beim ersten Start ein Zufallspasswort erzeugt:
+1. **Anmelden.** Der erste Administrator heißt `admin` (anderer Name mit `AUTH_USER`). Sein Passwort ist `AUTH_PASSWORD`, nach einem Update von 3.x das bisherige Passwort, sonst wird es beim ersten Start erzeugt und muss bei der ersten Anmeldung geändert werden:
    ```bash
-   docker logs emberwatch 2>&1 | grep "login password"
+   docker logs emberwatch 2>&1 | grep "created with the password"
    docker exec emberwatch cat /data/initial-password.txt
    ```
-2. **Auf Daten warten.** Der erste Abruf dauert einige Minuten, die Radar-Historie (standardmäßig 30 Tage) lädt im Hintergrund. *Status* zeigt den Zustand jeder Quelle.
-3. **Assets anlegen.** *Mein Netz → Assets*: IPs, Netze, AS-Nummern oder Domains. Aktive Scans sind erst möglich, nachdem du bestätigt hast, dass du das Asset scannen darfst.
-4. **Meine IP einrichten.** *Mein Netz → Meine IP*: die Adresse übernehmen, von der du verbunden bist, einen DynDNS-Hostnamen eintragen oder ein Token für einen Melder erzeugen (siehe [Meine IP](#meine-ip)).
-5. **Produkte beobachten.** Nach einem Hersteller suchen, z. B. `Sophos`, und *Als Produkt beobachten* wählen, oder unter *Mein Netz → Produkte* anlegen.
-6. **Analysieren.** Unter *Analyse* eine IP, Domain, einen Hash, eine CVE oder einen Mail-Header eingeben, oder überall `Strg+K` drücken.
-7. **Weltlage lesen.** Die *Weltlage* füllt sich innerhalb einer halben Stunde nach dem Start. Ein Klick auf ein Land setzt den Fokus, ein Klick auf eine Meldung zeigt sie im Kontext.
-8. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
+   Bei der ersten Anmeldung richtest du den zweiten Faktor mit einer Authenticator-App ein (Aegis, 2FAS, Google Authenticator, …) und bewahrst die zehn Wiederherstellungscodes auf.
+2. **Konten anlegen (optional).** Benutzermenü (oben rechts) → *Benutzer*: lesende Konten für Kollegen, weitere Administratoren.
+3. **Auf Daten warten.** Der erste Abruf dauert einige Minuten, die Radar-Historie (standardmäßig 30 Tage) lädt im Hintergrund. *Status* zeigt den Zustand jeder Quelle.
+4. **Assets anlegen.** *Mein Netz → Assets*: IPs, Netze, AS-Nummern oder Domains. Aktive Scans sind erst möglich, nachdem du bestätigt hast, dass du das Asset scannen darfst.
+5. **Meine IP einrichten.** *Mein Netz → Meine IP*: die Adresse übernehmen, von der du verbunden bist, einen DynDNS-Hostnamen eintragen oder ein Token für einen Melder erzeugen (siehe [Meine IP](#meine-ip)).
+6. **Produkte beobachten.** Nach einem Hersteller suchen, z. B. `Sophos`, und *Als Produkt beobachten* wählen, oder unter *Mein Netz → Produkte* anlegen.
+7. **Analysieren.** Unter *Analyse* eine IP, Domain, einen Hash, eine CVE oder einen Mail-Header eingeben, oder überall `Strg+K` drücken. Zu einer IP-Adresse zeigt *Wem gehört die IP?* die Firma dahinter.
+8. **Weltlage lesen.** Die *Weltlage* füllt sich innerhalb einer halben Stunde nach dem Start. Ein Klick auf ein Land setzt den Fokus, ein Klick auf eine Meldung zeigt sie im Kontext. Hacktivisten-Kanäle fügst du im Fenster *Telegram* hinzu.
+9. **Benachrichtigungen (optional).** Matrix einrichten, um Alarme und den Tagesbericht zu erhalten.
 
-Tastenkürzel: `Strg+K` Befehlspalette, `1` `2` `3` `4` Bereiche wechseln, `/` Suche, `T` Karten-Werkzeugleiste (in der Cyberlage; sonst Werkzeugkasten), `]` Seitenleiste ein/aus, `Esc` schließen (auch die Meldung in der Weltlage). Die Seitenleiste lässt sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft und Start-Animation stehen unter *Einstellungen* (⚙).
+Tastenkürzel: `Strg+K` Befehlspalette, `1` bis `5` Bereiche wechseln (`1` bis `4` bei lesenden Konten, die keine *Personen* haben), `/` Suche, `T` Karten-Werkzeugleiste (in der Cyberlage; sonst Werkzeugkasten), `]` Seitenleiste ein/aus, `Esc` schließen (auch die Meldung in der Weltlage). Die Seitenleiste lässt sich an der Titelleiste verschieben, an der Ecke unten rechts in der Größe ändern und per Doppelklick auf die Titelleiste wieder andocken. Sprache, Fenster-Deckkraft, Start-Animation und der drehende Globus stehen unter *Einstellungen* (⚙).
 
 ### Meine IP
 
@@ -162,8 +172,11 @@ Alle Einstellungen sind Umgebungsvariablen; [`.env.example`](.env.example) enth�
 | Variable | Standard | Zweck |
 |---|---|---|
 | `LANGUAGE` | `en` | Sprache von Benachrichtigungen und Tagesberichten (`de`/`en`). Die Sprache der Oberfläche wählt jeder Browser selbst. |
-| `AUTH_MODE` | `password` | `password` = eingebaute Anmeldung, `none` = keine Anmeldung (nur hinter einem authentifizierenden Proxy) |
-| `AUTH_PASSWORD` | – | Passwort; leer = wird beim ersten Start erzeugt |
+| `AUTH_MODE` | `password` | `password` = Konten mit Passwort und zweitem Faktor, `none` = keine Anmeldung (nur hinter einem authentifizierenden Proxy, siehe [Konten](#konten-und-anmeldung)) |
+| `AUTH_USER` | `admin` | Name des ersten Administrators, angelegt beim ersten Start von 4.x |
+| `AUTH_PASSWORD` | – | Passwort dieses ersten Administrators, nur beim Anlegen genutzt; leer = das Passwort aus 3.x gilt weiter, sonst wird eines erzeugt |
+| `SESSION_HOURS` | `12` | Laufzeit einer Sitzung |
+| `AUDIT_RETENTION_DAYS` | `365` | Aufbewahrung des Protokolls in Tagen (30–3650) |
 | `CF_API_TOKEN` | – | Cloudflare-API-Token mit Leserecht für Radar (Angriffe, Ausfälle, BGP-Ereignisse) |
 | `ABUSECH_AUTH_KEY` | – | abuse.ch Auth-Key (ThreatFox, URLhaus, MalwareBazaar) |
 | `RANSOMWARE_LIVE_API_KEY` | – | Optionaler ransomware.live-PRO-Key; ohne Key wird die freie API genutzt |
@@ -190,6 +203,13 @@ Alle Einstellungen sind Umgebungsvariablen; [`.env.example`](.env.example) enth�
 | `SCAN_ENABLED` | `1` | `0` schaltet aktive Scans vollständig ab |
 | `SYSLOG_ENABLED` | `0` | `1` = Syslog-Empfang auf `SYSLOG_PORT` (Standard 5514, UDP und TCP) |
 | `BGP_LIVE` | `1` | Live-BGP-Überwachung eigener Präfixe |
+| `NOMINATIM_URL` | öffentliche OpenStreetMap-Instanz | Koordinaten von Firmenadressen für *Wem gehört die IP?*; andere Instanz oder `off` |
+| `OSINT_ENABLED` | `1` | `0` schaltet die Personensuche ab |
+| `OSINT_RETENTION_DAYS` | `90` | Aufbewahrung eines Falls der Personensuche nach der letzten Änderung in Tagen |
+| `GRAVATAR_API_KEY` | – | Optional: die Personensuche fragt eine E-Mail-Adresse auch bei Gravatar ab |
+| `TELEGRAM_ENABLED` | `1` | `0` schaltet das Telegram-Fenster ab |
+| `TELEGRAM_INTERVAL_MIN` | `15` | Minuten zwischen zwei Abrufen aller Kanäle (mind. 10) |
+| `TELEGRAM_RETENTION_DAYS` | `90` | Aufbewahrung der Beiträge in Tagen (7–365) |
 
 Woher die Keys kommen:
 - Cloudflare: *My Profile → API Tokens → Create Token* (eigenes Token mit Leserecht für Radar)
@@ -199,19 +219,55 @@ Woher die Keys kommen:
 - Gemini: <https://aistudio.google.com/apikey>
 - GreyNoise: <https://viz.greynoise.io> (Kontomenü → *My API Key*)
 - Globalping: <https://dash.globalping.io> (*Tokens*)
+- Gravatar: <https://gravatar.com/developers/> (Anwendung anlegen, dann API-Key)
 
-## Reverse Proxy und Anmeldung
+## Konten und Anmeldung
+
+Jeder meldet sich mit einem eigenen Konto an: Benutzername, Passwort (mindestens 12 Zeichen) und ein Code einer Authenticator-App (TOTP nach RFC 6238 – 6 Ziffern, 30 Sekunden; Aegis, 2FAS, Google oder Microsoft Authenticator, Passwortmanager mit TOTP, …). Der zweite Faktor ist Pflicht.
+
+| Rolle | Darf |
+|---|---|
+| Administrator | alles: Werkzeuge, Scans, Analysen, *Wem gehört die IP?*, die Personensuche, Telegram-Kanäle, Änderungen jeder Art, Konten und das Protokoll |
+| Lesend | jede Ansicht lesen (Cyberlage, Weltlage, Analyse, Mein Netz, gespeicherte Firmenabfragen, Telegram-Beiträge) und das eigene Konto verwalten; keine Werkzeuge, Scans, Gemini-Läufe oder Änderungen, keine Personensuche, keine Benutzerverwaltung |
+
+Die Rollen prüft der Server bei jeder Anfrage; die Oberfläche blendet nur aus, was eine Rolle nicht nutzen kann.
+
+- **Neues Konto:** ein Administrator legt es unter *Benutzer* an (Benutzermenü oben rechts) und gibt das Einmalpasswort weiter (wird einmal angezeigt). Es wird bei der ersten Anmeldung geändert; danach wird die Authenticator-App eingerichtet (QR-Code oder Schlüssel) und zehn Wiederherstellungscodes werden einmal angezeigt – jeder ersetzt einmal einen Code.
+- **Eigenes Konto** (*Mein Konto*): Passwort ändern, eine neue Authenticator-App einrichten (z. B. neues Handy), neue Wiederherstellungscodes erzeugen, Sitzungen sehen und beenden. Ein neues Passwort oder eine neue App beendet alle anderen Sitzungen.
+- **Benutzerverwaltung** (*Benutzer*, Administratoren): Konten anlegen, Rolle ändern, sperren, Passwort (neues Einmalpasswort) oder zweiten Faktor zurücksetzen, Sitzungen beenden, löschen. Das eigene Konto wird unter *Mein Konto* verwaltet; das letzte aktive Admin-Konto lässt sich nicht herabstufen, sperren oder löschen.
+- **Protokoll** (*Protokoll*, Administratoren): Anmeldungen und Fehlversuche, Änderungen an Konten, Personensuchen, Firmenabfragen und Änderungen der Telegram-Kanäle, mit Zeit, Konto und Adresse; aufbewahrt für `AUDIT_RETENTION_DAYS`.
+- **Sitzungen** laufen `SESSION_HOURS` und enden bei der Abmeldung, mit einem neuen Passwort oder einer neuen App und wenn ein Administrator das Konto sperrt, zurücksetzt oder seine Sitzungen beendet.
+- **Schutz gegen Durchprobieren:** 10 Fehlversuche je Client in 10 Minuten, 100 insgesamt; falsche Codes zählen auch je Konto (10 in 10 Minuten).
+
+**Von 3.x:** der erste Start von 4.x legt den Administrator `admin` (`AUTH_USER`) mit dem bisherigen Passwort an (`AUTH_PASSWORD` oder das erzeugte Passwort aus 3.x); Sitzungen aus 3.x enden. Die Authenticator-App wird bei der ersten Anmeldung eingerichtet. Danach hat `AUTH_PASSWORD` keine Wirkung mehr: Passwörter ändert man in der Oberfläche oder mit `emberwatch-admin`.
+
+**Zugang verloren** (z. B. der einzige Administrator hat Handy und Wiederherstellungscodes verloren) – auf dem Docker-Host:
+
+```bash
+docker exec -it emberwatch emberwatch-admin users                  # Konten auflisten
+docker exec -it emberwatch emberwatch-admin reset-2fa <name>       # App wird bei der nächsten Anmeldung neu eingerichtet
+docker exec -it emberwatch emberwatch-admin reset-password <name>  # Einmalpasswort, Sitzungen enden
+docker exec -it emberwatch emberwatch-admin create-admin <name>    # weiterer Administrator mit Einmalpasswort
+docker exec -it emberwatch emberwatch-admin disable <name>         # oder enable
+```
+
+Jede Änderung steht im Protokoll (Konto `cli`); der laufende Server bemerkt beendete Sitzungen innerhalb von 30 Sekunden.
+
+**Schlüsseldatei:** `/data/session.key` verschlüsselt die Geheimnisse der Authenticator-Apps (AES-256-GCM) und ist der Schlüssel der Wiederherstellungscodes. Sie gehört zusammen mit der Datenbank in die Sicherung. Fehlt sie oder wurde sie ersetzt, lässt sich kein zweiter Faktor prüfen: die Anmeldung wird abgelehnt – sie fällt nie auf das Passwort allein zurück –, bis ein Administrator den zweiten Faktor mit `emberwatch-admin reset-2fa <name>` zurücksetzt.
+
+**Ohne Anmeldung** (`AUTH_MODE=none`): keine Konten; jede Anfrage gilt als Administrator (angezeigt als *Proxy*). Nur hinter einem Reverse Proxy, der Benutzer authentifiziert (Pangolin, Authelia, Authentik).
+
+## Reverse Proxy
 
 - Auf Port 8000 des Containers weiterleiten. Den `Host`-Header beibehalten (Standard bei Traefik, Nginx Proxy Manager und Pangolin). Schreibt dein Proxy ihn um, den öffentlichen Host in `TRUSTED_ORIGINS` eintragen.
 - Werkzeug-Ergebnisse werden gestreamt (`application/x-ndjson`); der Proxy darf diese Antworten nicht puffern (Emberwatch sendet `X-Accel-Buffering: no`).
 - `FORWARDED_ALLOW_IPS` steht standardmäßig auf `*`, damit die Client-Adressen vom Proxy übernommen werden (Login-Rate-Limit, *Meine IP*). Mit `*` gilt der erste Eintrag in `X-Forwarded-For`; auf die Proxy-Adresse setzen, wenn Port 8000 nicht nur für den Proxy erreichbar ist oder dein Proxy vom Client mitgeschickte Header weiterreicht.
 - `/api/myip/report` und `/nic/update` (Melder für *Meine IP*) prüfen ihr eigenes Token und sind ohne Sitzung erreichbar; zu SSO siehe [Meine IP](#meine-ip).
-- Mit `AUTH_MODE=none` ist die Anmeldung aus. Nur hinter einem Proxy verwenden, der Benutzer authentifiziert (z. B. Pangolin, Authelia, Authentik).
-- Passwort zurücksetzen: `AUTH_PASSWORD` setzen oder `/data/auth.json` und `/data/initial-password.txt` löschen und neu starten.
+- Die Anmeldeseite `/login` und ihre Schritte sind ohne Sitzung erreichbar; das Sitzungs-Cookie wird erst nach dem zweiten Faktor gesetzt.
 
 ## Sicherheit und Datenschutz
 
-- Anmeldung für einen Benutzer: Passwort als scrypt-Hash, HMAC-signiertes Sitzungs-Cookie (`HttpOnly`, `SameSite=Strict`, `Secure` bei HTTPS), Schutz gegen Durchprobieren, Same-Origin-Prüfung aller API-Anfragen, strikte Content Security Policy.
+- Konten: Passwörter als scrypt-Hash, zweiter Faktor als Pflicht (TOTP-Geheimnisse mit AES-256-GCM verschlüsselt, Wiederherstellungscodes als HMAC gespeichert, jeder Code nur einmal gültig), Sitzungen auf dem Server (ein Zufallstoken im Cookie `ew_session` – `HttpOnly`, `SameSite=Strict`, `Secure` bei HTTPS –, die Datenbank kennt nur seinen SHA-256-Hash), Schutz gegen Durchprobieren je Client, je Konto und insgesamt, Rollenprüfung auf dem Server bei jeder Anfrage, Same-Origin-Prüfung aller API-Anfragen, strikte Content Security Policy. Details: [Konten und Anmeldung](#konten-und-anmeldung).
 - Der Container läuft als unprivilegierter Benutzer mit schreibgeschütztem Root-Dateisystem, ohne Capabilities und mit `no-new-privileges`.
 - Netzwerk-Tools und Scans erreichen nur öffentliche Adressen, solange `TOOLS_ALLOW_PRIVATE=1` nicht gesetzt ist; Hostnamen werden einmal aufgelöst und jede Adresse geprüft (kein DNS-Rebinding), es ist keine Shell beteiligt. Private Adressen und interne Namen (Namen ohne Punkt, `.local`, `.lan`, `.internal`, `.home.arpa`, `fritz.box` und ähnliche) gehen nie an Dritte, auch nicht an Gemini; Globalping löst einen Namen zusätzlich vorher lokal auf und lehnt ihn ab, wenn er auf eine private Adresse zeigt. Das DNS-Werkzeug fragt interne Namen nur beim System-Resolver an. Namen unter öffentlichen Domains, die nur intern auflösen (z. B. `dc01.ad.example.com`), sind nicht erkennbar und werden wie öffentliche Namen behandelt.
 - Jedes Werkzeug zeigt, ob es passiv, aktiv oder ein Eingriff ist, ob das Ziel die Anfrage sieht und welcher Dritte die Eingabe erhält. Der Zonentransfer-Test braucht pro Lauf eine Bestätigung. Links von außen (Lesezeichen, andere Seiten) öffnen den Werkzeugkasten, starten aber nie selbst einen Lauf.
@@ -222,8 +278,12 @@ Woher die Keys kommen:
 - *Meine IP* speichert die Adressen, von denen die Oberfläche aufgerufen wird (90 Tage), den Verlauf von Heim- und Server-IP und den Hash des Melder-Tokens. Werkzeug-Läufe werden 90 Tage gespeichert (höchstens 3.000) und lassen sich im Verlauf löschen; Gemini-Analysen so lange wie Alarme (`ALERT_RETENTION_DAYS`, höchstens 2.000).
 - Anfragen sind in der Größe begrenzt: 20 MB mit Sitzung (Mail-Analyse bis 15 MB), 64 KB ohne (Login, Melder).
 - Quellen aus 3.3: Status-Feeds werden wie Nachrichten-Feeds gelesen (defusedxml, Größengrenzen); von Metasploit und Nuclei lädt Emberwatch nur die *Metadaten* (welches Modul oder Template es zu welcher CVE gibt), nie Exploit-Code, und verlinkt nur Pfade innerhalb der beiden GitHub-Repositories; das ATT&CK-Paket und die Exploit-Listen ersetzen die gespeicherten Daten nur, wenn der Download vollständig ist. Von der Presse weltweit (GDELT) werden nur Überschrift und Link gespeichert; Artikelseiten und Bilder werden dafür nicht geholt.
+- **Wem gehört die IP?** kontaktiert die Adresse nur mit Haken bei *Adresse und Website kontaktieren* (Standard, Administratoren): das Zertifikat auf Port 443 und die Websites von bis zu drei gefundenen Domains (Startseite, robots.txt, Impressum). Ohne Haken nutzt die Abfrage nur die Registry (RDAP), DNS und die lokalen Daten. Firmenadressen gehen für die Koordinaten an Nominatim (`NOMINATIM_URL=off` schaltet das ab). Ergebnisse werden 7 Tage gespeichert, Koordinaten 90 Tage; jede neue Abfrage steht im Protokoll.
+- Anfragen an Websites Dritter (Firmen-Websites, Profilseiten und Seitenprüfungen der Personensuche, Telegram-Vorschauen) laufen über einen abgesicherten Client: nur zu öffentlichen Adressen (der Name wird einmal aufgelöst, die Verbindung geht genau zur geprüften Adresse), Weiterleitungen von Hand (höchstens 3, jede erneut geprüft, Zugangsdaten gehen nicht an einen anderen Host), Größen- und Zeitgrenzen. Profilseiten und Telegram-Vorschauen werden mit der Kennung eines gängigen Browsers abgerufen, weil viele Plattformen andere Clients abweisen.
+- Die **Personensuche** (nur Administratoren) verarbeitet personenbezogene Daten. Nur mit berechtigtem Zweck nutzen – eigene Konten, Schutz vor Identitätsmissbrauch, Recherche mit Rechtsgrundlage – und im Rahmen des für dich geltenden Rechts (in der EU die DSGVO). Emberwatch unterstützt das: jeder Fall hat ein Feld für den Zweck (steht im Export), jede Suche steht im Protokoll (mit dem Suchbegriff, aufbewahrt für `AUDIT_RETENTION_DAYS`), Fälle werden `OSINT_RETENTION_DAYS` nach der letzten Änderung gelöscht, Erotik-, Dating-, Gesundheits- und politische Seiten werden nicht geprüft, Bilder werden nicht geladen. Der Benutzername geht an jede geprüfte Plattform (in der Adresse der Profilseite oder Schnittstelle); bei einer E-Mail-Adresse wird nur der Teil vor dem @ als Benutzername geprüft, und mit `GRAVATAR_API_KEY` geht ihr SHA-256-Hash an Gravatar. Die Seitenlisten sind Daten Dritter: sie werden streng geprüft (http(s)-Adressen mit Hostnamen, begrenzte Zeichenketten, keine verschachtelten regulären Ausdrücke) und nur als Regeln angewendet – es läuft kein Code von Sherlock oder WhatsMyName.
+- **Telegram:** nur öffentliche Kanäle, die ein Administrator hinzufügt (höchstens 30), gelesen aus der Web-Vorschau `t.me/s/<kanal>` ohne Konto; gespeichert wird nur Text, keine Bilder oder Dateien. In Beiträgen genannte Ziele erscheinen entschärft und führen zu ihrer Objektseite; die Sammlung kontaktiert sie nie. Beweis-Links (check-host.net) erscheinen als Links, andere Links entschärft. Eine Übersetzung (Administratoren, auf Wunsch) sendet den Text des Beitrags an Gemini.
 - Ausgehende Verbindungen: die unten genannten Datenquellen, die Kartenkacheln (OpenFreeMap, lädt der Browser), Vorschaubilder der Meldungen (lädt der Browser von den Verlagen, `NEWS_IMAGES=0` schaltet das ab), DB-IP-Downloads, die Ziele, die du in Werkzeugen oder Scans wählst, und die Dritten der Werkzeuge, die du ausführst (in der Oberfläche gekennzeichnet). CyberChef öffnet sich im Browser; die Eingabe steht im URL-Fragment und geht an keinen Server.
-- Sicherung: alles liegt im Volume `/data` (`emberwatch.sqlite`, Anmeldedateien, Geodatenbanken).
+- Sicherung: alles liegt im Volume `/data` (`emberwatch.sqlite`, die Schlüsseldatei `session.key`, Geodatenbanken, Seitenlisten der Personensuche).
 
 ## Aufbau
 
@@ -235,15 +295,20 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
                                                                           ├─ Asset-Überwachung: InternetDB, Scans, CT, Typo, RIS Live
                                                                           ├─ eigene IPs (Aufrufe, DynDNS, Melder)
                                                                           ├─ Werkzeugkasten (NDJSON-Streams) und Objektseiten
+                                                                          ├─ Konten, Rollen, Protokoll
+                                                                          ├─ Wem gehört die IP: RDAP, TLS, Impressum, Nominatim
+                                                                          ├─ Personensuche: Seitenlisten, Prüfung, Profile, Graph
+                                                                          ├─ Telegram-Kanäle (t.me/s-Vorschau)
                                                                           ├─ Alarme → Matrix
                                                                           ├─ Log-Analyse / Syslog-Empfang
                                                                           └─ SQLite (/data)
 ```
 
 - Backend: `backend/app` (ein Modul je Aufgabe: `sources/` Collectoren, `analytics.py` Muster, `surface.py` Angriffsfläche und Scans, `domains.py` CT und ähnliche Domains, `bgp.py` RIS Live, `products.py` KEV/NVD, `logs.py` Log-Analyse und Syslog, `reputation.py`, `alerts.py`, `auth.py`, `i18n.py`, `objects.py` Objektseiten, `myip.py` eigene IPs, `news.py` Feeds und Meldungen, `nlp.py` Erkennung, `actors.py` Akteure, `corroborate.py` Abgleich von Meldungen mit Messdaten, `cables.py` Seekabel, `attack.py` MITRE ATT&CK, `platforms.py` Störungen der Cloud-Plattformen; `sources/ooni.py`, `gdelt.py`, `euvd.py`, `exploits.py` die Quellen aus 3.3).
+- 4.0: `auth.py` Konten, Sitzungen, Rollen und Protokoll, `totp.py` zweiter Faktor, `api_account.py` Anmeldung, eigenes Konto und Benutzerverwaltung, `admincli.py` der Befehl `emberwatch-admin`, `webfetch.py` abgesicherte Anfragen an Websites Dritter, `htmlparse.py` HTML-Auswertung; `owner/` Wem gehört die IP (`lookup.py` Belegkette, `imprint.py`, `geocode.py`), `personen/` Personensuche (`sites.py` Seitenlisten, `check.py` Prüfung, `profiles.py`, `store.py` Fälle und Graph, `runner.py`), `telegram/` Kanäle (`parse.py` Web-Vorschau, `monitor.py` Abruf und Erkennung).
 - Werkzeugkasten: `backend/app/toolbox` – `registry.py` beschreibt jedes Werkzeug (Eingaben, Stufe, Kennzeichen, Parameter) und ist die einzige Quelle für Oberfläche und serverseitige Prüfung; `detect.py` Typerkennung; `result.py` das einheitliche Ergebnisformat; `tools_*.py` die Werkzeuge nach Fragestellung; `runner.py` Läufe, Rezepte und Verlauf.
 - Texte des Backends (Muster, Alarme, Fehler) werden sprachneutral gespeichert und je Anfrage auf Deutsch oder Englisch erzeugt.
-- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML. `router.js` (Bereiche), `maptools.js` (Karten-Werkzeugleiste), `welt.js` (Weltlage), `analyse.js` (Objekte, Werkzeugkasten, Ansichten), `netz.js` und `assets.js` (Mein Netz), `result.js` (stellt jedes Werkzeug-Ergebnis dar), `palette.js` (`Strg+K`).
+- Frontend: `frontend/` ohne Build-Schritt; alle dynamischen Inhalte werden als Text eingefügt, nie als HTML. `router.js` (Bereiche), `maptools.js` (Karten-Werkzeugleiste), `welt.js` (Weltlage), `analyse.js` (Objekte, Werkzeugkasten, Ansichten), `netz.js` und `assets.js` (Mein Netz), `result.js` (stellt jedes Werkzeug-Ergebnis dar), `palette.js` (`Strg+K`); 4.0: `login.js` (Anmeldeschritte), `session.js` (Konto und Rolle im Browser), `konto.js` (Konto, Benutzer, Protokoll), `owner.js` (Reiter *Firma*), `personen.js` und `graph.js` (Personensuche und Verknüpfungsgraph), `telegram.js` (Telegram-Fenster).
 
 ## Datenquellen und Lizenzen
 
@@ -269,8 +334,15 @@ Browser (Vanilla JS, MapLibre, Chart.js)  ──HTTPS──  Reverse Proxy  ─�
 | [mnemonic PassiveDNS](https://docs.mnemonic.no/api/services/pdns/) | Passive DNS (Werkzeug, auf Anforderung) | Bedingungen von mnemonic |
 | [GreyNoise Community API](https://www.greynoise.io) | Internet-Scanner und bekannte Dienste (Werkzeug, auf Anforderung) | Bedingungen von GreyNoise |
 | [MalwareBazaar](https://bazaar.abuse.ch) (abuse.ch) | Datei-Hashes (Werkzeug, auf Anforderung) | Nutzungsbedingungen von abuse.ch |
-| [rdap.org](https://rdap.org) | RDAP-Bootstrap (Whois-Werkzeug) | öffentlich |
+| [rdap.org](https://rdap.org) | RDAP-Bootstrap (Whois-Werkzeug, *Wem gehört die IP?*) | öffentlich |
 | [MISP Galaxy](https://github.com/MISP/misp-galaxy) (Cluster threat-actor) | Akteure, Decknamen, Zuschreibungen | CC0 1.0 / BSD 2-Clause |
+| Websites von Firmen (Impressum, schema.org-Daten) | Firmendaten für *Wem gehört die IP?* (auf Anforderung) | Inhalte der Seitenbetreiber; robots.txt wird beachtet |
+| [Nominatim](https://nominatim.org) auf [OpenStreetMap](https://www.openstreetmap.org) | Koordinaten von Firmenadressen | © OpenStreetMap-Mitwirkende, ODbL 1.0; [Nutzungsrichtlinie](https://operations.osmfoundation.org/policies/nominatim/) der öffentlichen Instanz |
+| [Sherlock](https://github.com/sherlock-project/sherlock), Seitenliste (`data.json`) | Plattformen und ihre Prüfregeln für die Personensuche (zur Laufzeit geladen, nur die Daten werden genutzt) | MIT |
+| [WhatsMyName](https://github.com/WebBreacher/WhatsMyName) (`wmn-data.json`) | Plattformen und ihre Prüfregeln für die Personensuche (zur Laufzeit geladen) | CC BY-SA 4.0 – Uses data from the WhatsMyName project |
+| Schnittstellen der Plattformen (GitHub, Keybase, Mastodon, Hacker News, Docker Hub, Codeberg, dev.to, Lichess, Chess.com, Reddit) und öffentliche Profilseiten | öffentliche Profilangaben gefundener Konten (auf Anforderung) | Bedingungen der Plattformen |
+| [Gravatar](https://gravatar.com) REST-API | Profil zu einer E-Mail-Adresse (optional, `GRAVATAR_API_KEY`) | Bedingungen von Gravatar |
+| Telegram-Web-Vorschau (`t.me/s/<kanal>`) | Beiträge öffentlicher Kanäle, die ein Administrator wählt | Inhalte der Kanäle |
 | Feeds der Weltlage: [NCSC UK](https://www.ncsc.gov.uk), [BSI](https://www.bsi.bund.de), [CERT-EU](https://cert.europa.eu), [CISA](https://www.cisa.gov/news-events/cybersecurity-advisories), [The Record](https://therecord.media), [BleepingComputer](https://www.bleepingcomputer.com), [SecurityWeek](https://www.securityweek.com), [Krebs on Security](https://krebsonsecurity.com), [Golem.de](https://www.golem.de), [heise Security](https://www.heise.de/security/) | Überschriften, Anreißer und Vorschaubilder von Sicherheitsmeldungen, verlinkt zum Original | Rechte bleiben bei den Verlagen; Emberwatch zeigt, was die Feeds veröffentlichen, und verlinkt den Artikel |
 | [GDELT Project](https://www.gdeltproject.org) (DOC-2.0-API) | Überschriften der Presse weltweit (optional, ungeprüft) | freie Nutzung; Nennung des GDELT Project mit Link erforderlich |
 | [OONI](https://ooni.org/data/) (Open Observatory of Network Interference) | Sperrmessungen je Land und Tag | CC BY-NC-SA 4.0 |
@@ -301,7 +373,10 @@ Mehrere Quellen erlauben nur nicht-kommerzielle Nutzung. Emberwatch ist für pri
 - Syslog wird unverschlüsselt empfangen; Absender über `SYSLOG_ALLOW` und die Firewall einschränken. Bei Docker-Portfreigaben können alle Absender mit der Adresse des Docker-Gateways erscheinen.
 - Werkzeuge mit Drittanbietern haben Rate-Limits (z. B. mnemonic PassiveDNS ohne Key: 10 Anfragen pro Minute); Antworten von Passive DNS, GreyNoise und MalwareBazaar werden 24 Stunden zwischengespeichert.
 - *Meine IP* über Aufrufe braucht einen Reverse Proxy, der `X-Forwarded-For` setzt; hinter CGNAT ist die Heim-IP die gemeinsame Adresse des Anbieters.
-- Ein Benutzer (ein Passwort), eine Instanz (SQLite, ein Worker).
+- *Wem gehört die IP?*: Registry-Inhaber und AS-Betreiber sind oft der Hoster, nicht der Nutzer der Adresse; hinter CDNs, Shared Hosting und NAT kann die gefundene Firma eine von vielen sein. Die Konfidenz zeigt, wie gut die Kette bestätigt ist. Impressen werden mit Mustern für die übliche Formulierung gelesen (deutschsprachige Impressen am besten); andere Aufbauten liefern keine oder unvollständige Daten.
+- Personensuche: ein Treffer heißt, dass die Seite so antwortet wie bei einem bestehenden Profil, nicht, dass es die gesuchte Person ist. Plattformen ändern sich und schützen sich gegen automatische Anfragen; das ergibt *unsicher*. Ein gleicher Benutzername beweist nicht dieselbe Person – erst die Verbindungen zwischen den Konten. Profilangaben sind, was das Profil angibt.
+- Telegram: nur Kanäle mit öffentlicher Web-Vorschau; die Vorschau zeigt die neuesten Beiträge (beim Hinzufügen eines Kanals auch eine Seite ältere). Länder und Ziele werden per Regeln erkannt; ein Beitrag ist eine Behauptung der Gruppe, der Abgleich mit Cloudflare Radar kann dazu passen, ihn aber nicht beweisen.
+- Eine Instanz (SQLite, ein Worker).
 
 ## Entwicklung
 

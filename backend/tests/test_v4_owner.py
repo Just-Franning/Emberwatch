@@ -145,6 +145,21 @@ def test_fetch_redirects_limits_and_text(monkeypatch):
     assert run(webfetch.fetch(client, "https://site.example/meta")).text() == "<meta charset=\"windows-1252\"><p>€</p>"
     with pytest.raises(webfetch.FetchError):
         run(webfetch.fetch(client, "ftp://site.example/x"))
+    # credentials stay with their origin: a redirect to another host drops Authorization and Cookie
+    sent = []
+
+    def keyed(req: httpx.Request) -> httpx.Response:
+        sent.append((req.url.host, req.headers.get("authorization"), req.headers.get("cookie"), req.headers.get("accept")))
+        if req.url.path == "/v3/p":
+            return httpx.Response(302, headers={"location": "/v3/q"})
+        if req.url.path == "/v3/q":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example/r"})
+        return httpx.Response(200, content=b"{}")
+
+    kc = httpx.AsyncClient(transport=httpx.MockTransport(keyed))
+    run(webfetch.fetch(kc, "https://api.example/v3/p", headers={"Authorization": "Bearer k", "Cookie": "s=1", "Accept": "application/json"}))
+    assert sent == [("api.example", "Bearer k", "s=1", "application/json"), ("api.example", "Bearer k", "s=1", "application/json"),
+                    ("elsewhere.example", None, None, "application/json")]
     # behind a proxy the name is checked before each hop
     monkeypatch.setattr(webfetch, "proxied", lambda: True)
 
@@ -301,12 +316,21 @@ def test_owner_lookup_passive_and_robots(m):
         assert res["company"]["source"] == "rdap" and res["company"]["company"] == "Muster Technik GmbH"
         assert res["confidence"] == "medium" and {"code": "passive"} in res["notes"]
         assert geo_calls[0]["q"] == "Industriestrasse 25, 91710 Gunzenhausen, GERMANY" and geo_calls[0]["countrycodes"] == "de"
-        # robots.txt forbids everything: the imprint is not read
-        m.app.state.web = site(robots="User-agent: *\nDisallow: /\n")
+        # robots.txt forbids everything: not even the start page is requested
+        calls: list = []
+        m.app.state.web = site(robots="User-agent: *\nDisallow: /\n", calls=calls)
         res = stream(tc, {"ip": IP, "refresh": True})[-1]["result"]
         failed = [e for e in res["evidence"] if e["code"] == "imprint_failed"]
         assert failed and failed[0]["params"]["reason"] == "robots"
         assert res["company"]["source"] == "rdap"
+        own = [u for u in calls if "//muster-technik.de/" in u]
+        assert own and all(u.endswith("/robots.txt") for u in own), own  # (hosts without robots.txt may be read)
+        # only the imprint is excluded: the start page (schema.org data) is used, the imprint page is not requested
+        calls.clear()
+        m.app.state.web = site(robots="User-agent: *\nDisallow: /impressum\n", calls=calls)
+        res = stream(tc, {"ip": IP, "refresh": True})[-1]["result"]
+        assert "https://muster-technik.de/" in calls and not any("/impressum" in u for u in calls)
+        assert res["company"]["source"] == "jsonld" and res["company"]["company"] == "Muster Technik"
 
 
 def test_owner_provider_block_is_marked_shared(m, monkeypatch):

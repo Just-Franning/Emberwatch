@@ -168,12 +168,13 @@ class Telegram:
             if p.date < cutoff:
                 continue
             a = analyse(p.text, p.links, self.places)
+            # only while the channel exists: it may have been removed while its page was being read
             n = self.db.insert(
                 "INSERT OR IGNORE INTO tg_posts(channel, post_id, date, text, views, fwd, links, countries, targets, kinds, proofs, "
-                "checks, fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "checks, fetched_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM tg_channels WHERE name=?)",
                 (name, p.post_id, p.date, p.text, p.views, p.fwd, json.dumps(p.links), json.dumps(a["countries"]),
                  json.dumps(a["targets"]), json.dumps(a["kinds"]), json.dumps(a["proofs"]),
-                 json.dumps(self._checks(ev, p.date, a)), now))
+                 json.dumps(self._checks(ev, p.date, a)), now, name))
             if n:
                 new += 1
             elif p.views is not None:
@@ -269,4 +270,4 @@ class Telegram:
 
     def prune(self) -> None:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.db.execute("DELETE FROM tg_posts WHERE date < ?", (cutoff,))
+        self.db.execute("DELETE FROM tg_posts WHERE date < ? OR channel NOT IN (SELECT name FROM tg_channels)", (cutoff,))

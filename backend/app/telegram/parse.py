@@ -14,7 +14,8 @@ from .. import htmlparse
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
 MAX_TEXT = 4000
 MAX_LINKS = 20
-_VIEWS = re.compile(r"^([\d.,]+)\s*([KMB]?)$", re.I)
+_VIEWS = re.compile(r"^([0-9]{1,9}(?:[.,][0-9]{1,3})?)\s*([KMB]?)$", re.I)
+_ID = re.compile(r"^[0-9]{1,15}$")  # ASCII digits only ("²".isdigit() is true, int("²") fails)
 
 
 @dataclass
@@ -85,7 +86,7 @@ def parse(html: str | bytes, channel: str, base: str = "https://t.me/") -> Page:
     for node in s.find_all("div", attrs={"class": "tgme_widget_message", "data-post": True}):
         ref = str(node.get("data-post") or "")
         owner, _, num = ref.partition("/")
-        if owner.lower() != channel.lower() or not num.isdigit():
+        if owner.lower() != channel.lower() or not _ID.match(num):
             continue  # a post of another channel embedded in the page
         date_a = node.find("a", class_="tgme_widget_message_date")
         t = date_a.find("time") if date_a else None
@@ -109,6 +110,6 @@ def parse(html: str | bytes, channel: str, base: str = "https://t.me/") -> Page:
             post_id=int(num), date=date, text=_text(msg) if msg else "", views=views(v.get_text() if v else None),
             fwd=" ".join(fwd.get_text(" ").split())[:120] if fwd else None, links=links[:MAX_LINKS]))
     more = s.find("a", attrs={"class": "tme_messages_more", "data-before": True})
-    if more and str(more.get("data-before")).isdigit():
+    if more and _ID.match(str(more.get("data-before"))):
         page.before = int(str(more["data-before"]))
     return page

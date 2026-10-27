@@ -482,6 +482,9 @@ class Gemini:
         if not out["text"]:
             raise AIError("err.ai_structure")
         self._cache[key] = (time.time(), out)
+        if len(self._cache) > 200:
+            for k in sorted(self._cache, key=lambda x: self._cache[x][0])[:100]:
+                self._cache.pop(k, None)
         return dict(out)
 
     async def _call(self, client: httpx.AsyncClient, body: dict[str, Any], final: bool = False) -> dict[str, Any] | None:

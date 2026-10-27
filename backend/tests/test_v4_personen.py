@@ -91,6 +91,14 @@ def test_site_lists_validated_and_merged(tmp_path):
     assert by["Blog"].method == "GET" and by["Strict"].method == "HEAD" and by["Strict"].regex == "^[a-z]{2,8}$"
     assert by["Evil Regex"].regex is None  # nested quantifiers are not run
     assert sl.info()["counts"] == {"wmn": 5, "sherlock": 5, "total": 9} and not sl.due()
+    # patterns of the lists run in the server process: nothing that can backtrack exponentially or in long rows
+    from app.personen.sites import _regex
+    for bad in (r"^(a|a)*$", r"^(a|ab)*c", r"(a*)*b", r"^([a-z]+)*$", r"^(\w+\s?)*$", r"^(?:\w?\d*){2,}$", r"^(.*a){12}$",
+                r"^\w*\w*\w*\w*\w*$", "[", "x" * 201):
+        assert _regex(bad) is None, bad
+    for ok in (r"^[a-zA-Z0-9_]{3,20}$", r"^((?!\.).)*$", r"^([a-zA-Z0-9_]){1,15}$", r"\w+_\w+", r"^(?!-)[a-zA-Z0-9-]{3,}(?<!-)$",
+               r"^(a|b)$", r"^[^.]*?$"):
+        assert _regex(ok) == ok, ok
 
 
 def test_site_list_download(tmp_path):

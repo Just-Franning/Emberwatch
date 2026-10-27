@@ -1,9 +1,10 @@
 """Company data from a website: the imprint (German "Impressum", legally required details of a commercial website,
 § 5 DDG / § 25 MedienG / Art. 3 UWG) and schema.org data (JSON-LD "Organization").
 
-Parsing of persons, phone, e-mail, register and VAT number follows Domain Vantage (vantage/services/impressum.py,
-same author); company name and postal address are new. Only the start page, robots.txt and the imprint page are
-fetched, robots.txt is respected. Everything runs through webfetch (public addresses only, size limits).
+Persons, phone, e-mail, register and VAT number are found with patterns for the usual imprint wording, the company
+name in the first line that ends with a legal form and the postal address near it. Fetched are only robots.txt, the
+start page and the imprint page, each page only if robots.txt allows it (also after a redirect to another host).
+Everything runs through webfetch (public addresses only, size limits).
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ LINK_WORDS = ("impressum", "imprint", "legal notice", "legal-notice", "anbieterk
               "mentions-legales", "colofon", "aviso legal", "note legali", "legal")
 FALLBACK_PATHS = ("/impressum", "/impressum/", "/imprint", "/de/impressum")
 
-# Platforms, directories and site builders: such a domain does not belong to the company (from Domain Vantage)
+# Platforms, directories and site builders: such a domain does not belong to the company
 PLATFORM_DOMAINS = frozenset({
     "facebook.com", "fb.com", "instagram.com", "linkedin.com", "xing.com", "twitter.com", "x.com", "youtube.com",
     "tiktok.com", "pinterest.com", "google.com", "google.de", "goo.gl", "g.page", "business.site", "jimdosite.com",
@@ -294,15 +295,21 @@ def find_imprint_link(links: list[dict[str, Any]], domain: str) -> str | None:
 
 # --- fetching -------------------------------------------------------------------------------------------------------
 class Robots:
-    """robots.txt per host (one fetch per host and lookup)."""
+    """robots.txt per host (one fetch per host and lookup). A host whose robots.txt cannot be fetched at all (no
+    connection, timeout, non-public address) counts as unreachable: its pages are not requested either."""
 
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client = client
         self._seen: dict[str, robotparser.RobotFileParser | None] = {}
+        self._down: set[str] = set()
+
+    @staticmethod
+    def _key(url: str) -> str:
+        parts = urlsplit(url)
+        return f"{parts.scheme}://{parts.netloc}"
 
     async def allowed(self, url: str) -> bool:
-        parts = urlsplit(url)
-        key = f"{parts.scheme}://{parts.netloc}"
+        key = self._key(url)
         if key not in self._seen:
             rp = None
             try:
@@ -310,11 +317,16 @@ class Robots:
                 if page.status == 200:
                     rp = robotparser.RobotFileParser()
                     rp.parse(page.text().splitlines())
-            except webfetch.FetchError:
-                rp = None  # as if there was none
+            except webfetch.FetchError as exc:
+                if exc.code in ("network", "timeout", "blocked"):
+                    self._down.add(key)
+                rp = None  # no robots.txt: everything is allowed
             self._seen[key] = rp
         rp = self._seen[key]
         return True if rp is None else rp.can_fetch(ROBOTS_AGENT, url)
+
+    def reachable(self, url: str) -> bool:
+        return self._key(url) not in self._down
 
 
 async def _get_html(client: httpx.AsyncClient, url: str) -> webfetch.Page | None:
@@ -328,17 +340,23 @@ async def _get_html(client: httpx.AsyncClient, url: str) -> webfetch.Page | None
 async def fetch_imprint(client: httpx.AsyncClient, domain: str) -> tuple[Imprint | None, dict[str, Any]]:
     """(company data or None, info {"home", "imprint", "error"}). error: unreachable | robots | none."""
     info: dict[str, Any] = {"domain": domain}
+    robots = Robots(client)
     home = None
+    excluded = False
     for cand in (f"https://{domain}/", f"https://www.{domain}/", f"http://{domain}/"):
+        if not await robots.allowed(cand):
+            excluded = True
+            continue
+        if not robots.reachable(cand):
+            continue
         home = await _get_html(client, cand)
         if home:
             break
     if not home:
-        return None, {**info, "error": "unreachable"}
+        return None, {**info, "error": "robots" if excluded else "unreachable"}
     info["home"] = home.url
     site = company_domain(urlsplit(home.url).hostname) or domain  # the site may redirect to its main domain
-    robots = Robots(client)
-    if not await robots.allowed(home.url):
+    if not await robots.allowed(home.url):  # after a redirect: the rules of the final host
         return None, {**info, "error": "robots"}
 
     def scan_home() -> tuple[list[dict[str, Any]], Imprint | None]:

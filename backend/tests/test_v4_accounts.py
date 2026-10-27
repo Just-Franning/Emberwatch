@@ -132,7 +132,7 @@ def test_first_start_generated_password(tmp_path, monkeypatch, clock):
         for path in ("/login", "/styles.css", "/js/login.js", "/js/texts_v4.js", "/js/i18n.js"):
             assert tc.get(path).status_code == 200, path
         st = tc.get("/api/auth/status").json()
-        assert st == {"mode": "password", "authenticated": False, "version": m.S.version, "user": None}
+        assert st == {"mode": "password", "authenticated": False, "user": None}  # no version without a session
         bad = tc.post("/api/auth/login", json={"user": "admin", "password": "wrong"}, headers=SAME)
         assert bad.status_code == 401 and bad.json()["key"] == "err.login_failed"
         assert tc.post("/api/auth/login", json={"user": "nobody", "password": password}, headers=SAME).json()["key"] == "err.login_failed"
@@ -255,15 +255,30 @@ def test_totp_signin_replay_recovery_and_lockout(tmp_path, monkeypatch, clock):
         assert locked.status_code == 429 and locked.json()["key"] == "err.login_locked"
 
 
-def test_secret_unreadable_after_key_change(tmp_path, monkeypatch, clock):
+def test_secret_unreadable_after_key_change(tmp_path, monkeypatch, capsys, clock):
     m, totp = load(tmp_path, monkeypatch, AUTH_PASSWORD=PW)
     with TestClient(m.app, base_url=BASE) as tc:
-        first_signin(tc, "admin", PW, totp, clock)
+        secret, _ = first_signin(tc, "admin", PW, totp, clock)
+        # the key file changes between the password step and the code: no session, no fallback
+        t = tc.post("/api/auth/login", json={"user": "admin", "password": PW}, headers=SAME).json()["ticket"]
+        m.auth._k_totp = b"y" * 32
+        r = tc.post("/api/auth/totp", json={"ticket": t, "code": code(totp, secret, clock)}, headers=SAME)
+        assert r.status_code == 409 and r.json()["key"] == "err.totp_unreadable" and "set-cookie" not in r.headers
+        assert tc.post("/api/auth/enroll", json={"ticket": t}, headers=SAME).json()["key"] == "err.login_expired"
     (tmp_path / "session.key").write_bytes(b"x" * 32)  # restored without its key: the old secret cannot be decrypted
     m2, totp = load(tmp_path, monkeypatch)
     with TestClient(m2.app, base_url=BASE) as tc:
+        # fail closed: the password alone never sets up a new second factor
         r = tc.post("/api/auth/login", json={"user": "admin", "password": PW}, headers=SAME)
-        assert r.json()["step"] == "enroll"  # set up again; the password was correct
+        assert r.status_code == 409 and r.json()["key"] == "err.totp_unreadable" and "ticket" not in r.json()
+        assert "reset-2fa admin" in r.json()["detail"]
+        assert m2.db.query("SELECT COUNT(*) AS n FROM audit WHERE action='totp_unreadable'")[0]["n"] == 2
+        # the administrator resets it on the command line; then it is set up again at the sign-in
+        from app import admincli
+        assert admincli.main(["reset-2fa", "admin"]) == 0
+        capsys.readouterr()
+        r = tc.post("/api/auth/login", json={"user": "admin", "password": PW}, headers=SAME)
+        assert r.status_code == 200 and r.json()["step"] == "enroll"
         enroll(tc, r.json()["ticket"], totp, clock)
 
 

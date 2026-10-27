@@ -169,7 +169,8 @@ class Auth:
     # --- keys and first start ------------------------------------------------------------------------------------
     def _server_key(self) -> bytes:
         """data/session.key: source of the keys for TOTP secrets and recovery codes. Part of every backup:
-        without it, the second factor has to be set up again (recovery codes stop working)."""
+        without it no second factor can be checked - the sign-in fails closed until an administrator resets the
+        second factor (emberwatch-admin reset-2fa), the password alone never suffices."""
         path = self.s.data_dir / "session.key"
         try:
             data = path.read_bytes()
@@ -315,8 +316,8 @@ class Auth:
             raw = _unb64(sealed.split(".", 1)[1])
             return AESGCM(self._k_totp).decrypt(raw[:12], raw[12:], f"user:{row['id']}".encode()).decode("ascii")
         except (InvalidTag, ValueError, IndexError, UnicodeDecodeError):
-            log.warning("The second factor of %r cannot be decrypted (was session.key replaced?); it must be set up again.",
-                        row.get("name"))
+            log.warning("The second factor of %r cannot be decrypted (was session.key replaced?). Reset it with "
+                        "emberwatch-admin reset-2fa %s.", row.get("name"), row.get("name"))
             return None
 
     def _seal(self, uid: int, secret: str) -> str:
@@ -378,10 +379,20 @@ class Auth:
         with self._lock:
             self._tickets.pop(_sha(token or ""), None)
 
-    def _next_stage(self, row: dict[str, Any]) -> str:
+    def _next_stage(self, row: dict[str, Any], client: str) -> str:
         if row["must_change"]:
             return "password"
-        return "totp" if self._secret(row) else "enroll"
+        if not row.get("totp_secret"):
+            return "enroll"  # new account, or the second factor was reset by an administrator
+        if self._secret(row) is None:
+            self._unreadable(row, client)
+        return "totp"
+
+    def _unreadable(self, row: dict[str, Any], client: str) -> None:
+        """A second factor is set up but cannot be decrypted (session.key replaced or lost). Fail closed: setting up
+        a new one with the password alone would turn a lost key file into a way around the second factor."""
+        self.audit("totp_unreadable", user=row, ip=client)
+        raise AppError("err.totp_unreadable", 409, name=row["name"])
 
     def begin(self, name: str, password: str, client: str) -> dict[str, Any]:
         """Password step (runs scrypt: call in a worker thread). Returns {"step", "ticket"}."""
@@ -398,7 +409,7 @@ class Auth:
         if row["disabled"]:
             self.audit("login_disabled", user=row, ip=client)
             raise AppError("err.acct.disabled", 403)
-        stage = self._next_stage(row)
+        stage = self._next_stage(row, client)
         return {"step": stage, "ticket": self._new_ticket(row["id"], stage, client)}
 
     def first_password(self, ticket: str, new: str, client: str) -> dict[str, Any]:
@@ -409,9 +420,10 @@ class Auth:
         self.db.execute("UPDATE users SET pw_hash=?, pw_changed=?, must_change=0 WHERE id=?", (hash_password(new), utcnow(), row["id"]))
         self.audit("password_changed", user=row, ip=client)
         row["must_change"] = 0
+        stage = self._next_stage(row, client)
         with self._lock:
-            t.stage = self._next_stage(row)
-        return {"step": t.stage, "ticket": ticket}
+            t.stage = stage
+        return {"step": stage, "ticket": ticket}
 
     def _enroll_payload(self, secret: str, name: str) -> dict[str, Any]:
         uri = totp.uri(secret, name)
@@ -459,10 +471,11 @@ class Auth:
         row = self._row(t.user_id)
         self._code_lock(row, client)
         secret = self._secret(row)
-        if secret is None:  # cannot be decrypted any more: set up again (the password was correct)
-            with self._lock:
-                t.stage = "enroll"
-            raise AppError("err.totp_reenroll", 409)
+        if secret is None:  # reset meanwhile, or the key file changed after the password step
+            self._drop(ticket)
+            if not row.get("totp_secret"):
+                raise AppError("err.login_expired", 401)
+            self._unreadable(row, client)
         code = (code or "").strip()
         used_recovery = False
         ok = False
